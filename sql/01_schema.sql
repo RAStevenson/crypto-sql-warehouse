@@ -18,6 +18,16 @@
 -- that the project translates directly if I later port it to dbt.
 -- =============================================================================
 
+-- Pin the database to UTC. date_trunc() on timestamptz buckets by the
+-- SESSION timezone, so without this a server defaulting to, say,
+-- America/Chicago would split "monthly" aggregates at 05:00 UTC. Found by
+-- running the query set against a live instance; the -05 display offsets
+-- were the visible symptom.
+DO $$
+BEGIN
+    EXECUTE format('ALTER DATABASE %I SET timezone = ''UTC''', current_database());
+END $$;
+
 CREATE SCHEMA IF NOT EXISTS raw;
 CREATE SCHEMA IF NOT EXISTS core;
 CREATE SCHEMA IF NOT EXISTS marts;

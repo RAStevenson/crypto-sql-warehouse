@@ -93,6 +93,18 @@ safe; that is the point.
 `sql/04_interview_queries.sql` holds the twenty analytical queries. Each one
 runs standalone against a loaded database.
 
+To smoke-test a load, run the pipeline twice back to back and then:
+
+```
+psql -d crypto_warehouse -v ON_ERROR_STOP=1 -f scripts/verify.sql
+```
+
+Four assertions, each fatal on failure: no hourly gaps except exchange-wide
+outages, daily rollup row counts match the distinct (asset, day) pairs in
+hourly, every core row equals the newest raw copy of its bucket, and the
+rerun upserted zero rows (one is tolerated in case an hour boundary crossed
+between the two runs).
+
 ## Tableau
 
 Connect Tableau to Postgres and point it at `marts.tableau_daily_extract`:
@@ -123,5 +135,6 @@ sql/02_marts.sql             derived layers (rollups, volatility, correlations)
 sql/03_refresh_marts.sql     mart refresh script, dependency-ordered
 sql/04_interview_queries.sql twenty annotated analytical queries
 pipeline/ingest.py           incremental, idempotent loader
+scripts/verify.sql           smoke-test assertions, fatal on failure
 docs/STUDY_GUIDE.md          my interview preparation map for every query
 ```
