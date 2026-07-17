@@ -57,6 +57,13 @@ tuples, and `updated_at` only moves when data actually moved.
 Prices are `numeric`, not floating point. A warehouse where `SUM(volume)`
 drifts by rounding is a warehouse people stop trusting.
 
+The schema pins the database timezone to UTC, and that line exists because
+of a bug. `date_trunc()` on a `timestamptz` buckets by the session timezone,
+so on a server defaulting to America/Chicago the monthly aggregates were
+splitting at 05:00 UTC. I found it by running the full query set against a
+live instance; the `-05` display offsets in the output were the visible
+symptom. The pin and the reasoning are at the top of `sql/01_schema.sql`.
+
 Daily bars are derived from hourly ones in SQL rather than fetched at daily
 granularity. One source of truth: any daily/hourly disagreement can only be
 a rollup bug, which is findable, never a source discrepancy, which isn't.
@@ -81,7 +88,14 @@ psql -d crypto_warehouse -f sql/02_marts.sql
 
 pip install -r requirements.txt
 copy .env.example .env        # edit DATABASE_URL if needed
+```
 
+The example connection string is the stock `postgres:postgres` on localhost.
+That is a deliberate choice for a local demo, not a habit I would carry to a
+shared environment: nothing here listens beyond localhost or holds data
+worth protecting.
+
+```
 python pipeline/ingest.py --backfill-days 365 --refresh-marts
 ```
 
