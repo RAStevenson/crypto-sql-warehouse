@@ -3,5 +3,19 @@
 venv/
 __pycache__/
 *.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Tableau artifacts. The extract is a build output of the \copy command in the
+# README, and the .hyper is whatever Tableau writes beside it. Both rebuild
+# from the database, so neither belongs in history. These are narrow patterns
+# rather than *.csv, so committing a small test fixture stays possible.
 *.hyper
-*.csv
+tableau_extract.csv
+
+# assistant tooling - local only, never published
+CLAUDE.md
+.claude/

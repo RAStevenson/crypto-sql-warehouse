@@ -18,11 +18,20 @@
 -- that the project translates directly if I later port it to dbt.
 -- =============================================================================
 
--- Pin the database to UTC. date_trunc() on timestamptz buckets by the
--- SESSION timezone, so without this a server defaulting to, say,
--- America/Chicago would split "monthly" aggregates at 05:00 UTC. Found by
--- running the query set against a live instance; the -05 display offsets
--- were the visible symptom.
+-- Timezone. date_trunc() on a timestamptz buckets by the SESSION timezone,
+-- so the same "monthly volume" query returns different numbers depending on
+-- who is connected. Found by running the query set against a live instance
+-- under America/Chicago: BTC's April volume moved from 199952.70606718 to
+-- 201147.88052508 because the month boundary slid to 05:00 UTC. The -05
+-- display offsets were the visible symptom.
+--
+-- The ALTER DATABASE below is defence in depth, not a guarantee. It only
+-- sets the default for NEW sessions, and any client can override it with
+-- SET TIME ZONE or PGOPTIONS='-c timezone=...', which is exactly what a
+-- JDBC or Tableau driver does. The real fix lives in the queries: every
+-- date_trunc() over ts_utc is written as
+-- date_trunc('month', ts_utc AT TIME ZONE 'UTC'), which yields a plain
+-- timestamp and is timezone-invariant by construction.
 DO $$
 BEGIN
     EXECUTE format('ALTER DATABASE %I SET timezone = ''UTC''', current_database());
@@ -35,10 +44,12 @@ CREATE SCHEMA IF NOT EXISTS marts;
 -- -----------------------------------------------------------------------------
 -- core.assets: the asset dimension.
 --
--- Surrogate smallint key rather than using the product code as the PK:
--- the fact table stores millions of rows and a 2-byte key beats a text key
--- for index size and join speed. product_code stays UNIQUE so the natural
--- key is still enforced.
+-- Surrogate smallint key rather than using the product code as the PK: as
+-- the fact table grows, a 2-byte key beats a text key for index size and
+-- join speed. At the current ~53k rows/year (see core.ohlcv_hourly below)
+-- the saving is small; the point is that it costs nothing now and the
+-- choice does not have to be revisited later. product_code stays UNIQUE so
+-- the natural key is still enforced.
 -- -----------------------------------------------------------------------------
 CREATE TABLE core.assets (
     asset_id      smallint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -56,7 +67,7 @@ CREATE TABLE core.assets (
 -- This table is the incremental-loading watermark and the audit trail in one.
 -- The pipeline reads MAX(ts_utc) from core to decide where to resume, but
 -- ingest_runs records what was attempted, what succeeded, and how many rows
--- moved -- the first thing I would query when a load looks wrong.
+-- moved. It is the first thing I would query when a load looks wrong.
 -- -----------------------------------------------------------------------------
 CREATE TABLE raw.ingest_runs (
     run_id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -81,7 +92,7 @@ CREATE INDEX ingest_runs_product_started_idx
 -- No uniqueness constraint here on purpose: if the same bucket is fetched
 -- twice (overlap re-fetch, retried run), both copies land. Deduplication is
 -- the core layer's job, and keeping raw dumb makes idempotency reasoning
--- simple -- replaying any run can only ever add rows here, never corrupt.
+-- simple. Replaying any run can only ever add rows here, never corrupt.
 --
 -- numeric, not double precision: prices are exact decimal quantities and
 -- float rounding artifacts in a warehouse invite "why doesn't this sum
@@ -115,12 +126,19 @@ CREATE INDEX candles_run_idx ON raw.candles (run_id);
 -- CHECK constraints encode OHLC invariants. They have caught real API
 -- glitches in similar pipelines; cheap insurance at insert time.
 --
+-- low > 0 is not cosmetic. marts.daily_metrics computes ln(close/lag(close)),
+-- and a single zero close makes that raise "cannot take logarithm of zero",
+-- which aborts the whole matview refresh. Because low <= open, close and
+-- high, one constraint on low makes all four prices positive. The check
+-- lives here rather than on raw.candles on purpose: raw stays dumb and
+-- accepts whatever the API sent, so a bad payload is still inspectable.
+--
 -- Not partitioned: ~6 assets x 24 x 365 is about 53k rows/year. Declarative
 -- range partitioning on ts_utc becomes worth its operational cost somewhere
 -- past tens of millions of rows; below that it only complicates the upsert
 -- and vacuum story. The PK already leads with asset_id, so pruning would
--- buy little here. Documented so I can defend the decision, and reverse it,
--- in an interview.
+-- buy little here. Documented so the decision can be defended, and reversed,
+-- on evidence rather than on habit.
 -- -----------------------------------------------------------------------------
 CREATE TABLE core.ohlcv_hourly (
     asset_id      smallint NOT NULL REFERENCES core.assets (asset_id),
@@ -136,7 +154,8 @@ CREATE TABLE core.ohlcv_hourly (
     PRIMARY KEY (asset_id, ts_utc),
     CHECK (high >= low),
     CHECK (high >= open AND high >= close),
-    CHECK (low  <= open AND low  <= close)
+    CHECK (low  <= open AND low  <= close),
+    CHECK (low  > 0)
 );
 
 -- Cross-asset queries filter on time first ("all assets on 2026-05-01");

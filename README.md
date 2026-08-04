@@ -1,28 +1,107 @@
 # crypto-sql-warehouse
 
-A PostgreSQL warehouse for multi-asset crypto market data: an incremental
-ingestion pipeline, a layered schema, derived analytical marts, and a set of
-twenty annotated queries. I built it to demonstrate the SQL that data science
-roles actually screen for -- window functions, CTEs, aggregation across time
-granularities, idempotent incremental loading, and schema design -- against
-real data rather than a toy dataset.
+A PostgreSQL warehouse for hourly crypto market data. It pulls candles from
+the public Coinbase Exchange API, lands them in a raw/core/marts schema, and
+derives daily rollups, returns, rolling volatility, drawdowns and pairwise
+correlations. Twenty analytical queries run against it in `sql/04_queries.sql`.
 
-I'm a licensed mechanical PE moving into data science. My analytical
-background is real; this project exists to make the SQL depth verifiable.
+I built it because I wanted a market-data layer I could query directly instead
+of re-downloading CSVs every time I had a question. The private research system
+behind my own trading has a much larger pipeline underneath it. This is the
+public, inspectable version of the same habits.
+
+The write-up is in the report, which covers the question, the method, the
+result and the limitations:
+[PDF](reports/crypto_warehouse_report.pdf) (GitHub renders it inline) or
+[HTML](reports/crypto_warehouse_report.html).
+
+Its headline finding is that spreading capital equally across all six assets
+removes only 8.8 percent of the volatility you would carry holding the average
+one. If the six were uncorrelated it would remove 58.4 percent. Measured over
+113 complete trading days, every pair of the six correlates between 0.73 and
+0.90, mean 0.80. Holding six of these is close to holding one, and the report
+explains what that does and does not justify.
+
+## Quick start
+
+Requires git, Python 3.11 or later, and a PostgreSQL server you can connect to.
+Verified on PostgreSQL 17.10 and Python 3.11.3. Nothing in the SQL needs a
+feature newer than PostgreSQL 10.
+
+In a terminal, run the following.
+
+1. Clone the repository:
+
+   ```
+   git clone https://github.com/RAStevenson/crypto-sql-warehouse.git
+   ```
+
+2. Navigate to the root directory:
+
+   ```
+   cd crypto-sql-warehouse
+   ```
+
+3. Create a new environment and activate it (on Mac or Linux the second line
+   is `source .venv/bin/activate`):
+
+   ```
+   python -m venv .venv
+   .venv\Scripts\activate
+   ```
+
+4. Install dependencies:
+
+   ```
+   pip install -r requirements.txt
+   ```
+
+5. Point `DATABASE_URL` at your server:
+
+   ```
+   copy .env.example .env
+   ```
+
+6. Create the schema, load a year of history, and refresh the marts:
+
+   ```
+   python scripts/run_setup.py
+   python scripts/run_ingest.py --refresh-marts
+   ```
+
+The first load fetches six products at hourly grain. A year is 8,760 hours per
+product, the API caps a request at 300 candles, so that is 30 requests per
+product and 180 in total. Later runs resume from the watermark and fetch one
+window per product.
+
+Other entry points:
+
+```
+python scripts/run_verify.py                    # five assertions, nonzero exit on failure
+python scripts/run_refresh_marts.py             # refresh the marts layer only
+python scripts/run_analysis.py                  # recompute reports/metrics.json and figures
+python scripts/run_build_report.py              # rebuild the report from metrics.json
+python scripts/run_ingest.py --backfill-days 30 --products BTC-USD
+pytest                                          # the test suite
+```
+
+Rerunning the loader is safe by construction, and `run_verify.py` asserts it:
+after two back-to-back runs the second must have upserted at most one row per
+product, which is the tolerance for an hour boundary crossing between them.
 
 ## Architecture
 
 ```
 Coinbase Exchange API (public, no key)
         |
-        v  pipeline/ingest.py  (windowed fetch, 300 candles/request)
+        v  scripts/run_ingest.py  (windowed fetch, 300 candles/request)
 +-------------------+
-| raw               |  as-landed candles, append-only + run audit table
+| raw               |  as-landed candles, append-only, plus a run audit table
 |  raw.candles      |
 |  raw.ingest_runs  |
 +-------------------+
         |
-        v  single INSERT ... ON CONFLICT per run
+        v  one INSERT ... ON CONFLICT per run
 +-------------------+
 | core              |  typed, deduplicated, constrained facts
 |  core.assets      |
@@ -34,121 +113,138 @@ Coinbase Exchange API (public, no key)
 | marts             |  daily rollups, returns, rolling volatility,
 |  daily_ohlcv      |  drawdowns, pairwise correlations
 |  daily_metrics    |
-|  pairwise_corr... |
-|  tableau_daily_extract  <- Tableau connects here
+|  pairwise_correlations_90d  |
+|  tableau_daily_extract      |  <- Tableau connects here
 +-------------------+
 ```
 
-The raw/core/marts split follows the standard ELT convention: raw is never
-mutated, so any transform bug downstream is recoverable without touching the
-API again. Core is the layer queries trust. Marts are presentation-shaped
-and rebuilt from core.
+`raw.candles` is append-only, so a transform bug downstream is recoverable
+without calling the API again. `raw.ingest_runs` is the exception that does get
+updated, because it carries run status and row counts. Core is the layer
+queries trust. Marts are presentation-shaped and rebuilt from core.
 
-## Design decisions worth defending
+## Design decisions
 
 Idempotency lives in the database, not the pipeline. The upsert targets the
-natural primary key `(asset_id, ts_utc)`, so replaying any time window is a
-no-op unless the source data changed. The pipeline deliberately re-fetches a
-three-hour overlap on every run to pick up late candle revisions, and that
-costs nothing because of the upsert. The `DO UPDATE` clause carries an
-`IS DISTINCT FROM` guard so unchanged rows are skipped entirely -- no dead
-tuples, and `updated_at` only moves when data actually moved.
+natural primary key `(asset_id, ts_utc)`, so replaying any window is a no-op
+unless the source data changed. The `DO UPDATE` carries an `IS DISTINCT FROM`
+guard, so unchanged rows are skipped entirely. No dead tuples, and `updated_at`
+only moves when the data moved.
 
-Prices are `numeric`, not floating point. A warehouse where `SUM(volume)`
-drifts by rounding is a warehouse people stop trusting.
+The pipeline re-fetches a three-hour overlap on every run to pick up late
+candle revisions. The upsert makes that a no-op in core. It is not free: the
+cost is one extra request per product per run, and three duplicate rows per
+product per run in append-only `raw.candles`. Three hours is a guess at
+Coinbase's revision window, not a measured bound.
 
-The schema pins the database timezone to UTC, and that line exists because
-of a bug. `date_trunc()` on a `timestamptz` buckets by the session timezone,
-so on a server defaulting to America/Chicago the monthly aggregates were
-splitting at 05:00 UTC. I found it by running the full query set against a
-live instance; the `-05` display offsets in the output were the visible
-symptom. The pin and the reasoning are at the top of `sql/01_schema.sql`.
+Prices are stored as `numeric(20,8)`. A warehouse where `SUM(volume)` drifts by
+rounding is a warehouse people stop trusting. The API returns JSON numbers,
+which Python would ordinarily parse as float64, so the client parses them
+straight to `Decimal` instead and psycopg2 adapts that to `numeric`. Exactness
+holds end to end rather than starting at the database boundary.
+
+Queries are written to be independent of the session timezone, and that exists
+because of a bug. `date_trunc()` on a `timestamptz` buckets by the session
+timezone, so on a server defaulting to America/Chicago the monthly aggregate in
+Q02 split its months at 05:00 UTC. I found it running the query set against a
+live instance, and the `-05` display offsets were the visible symptom. My first
+fix was `ALTER DATABASE ... SET timezone = 'UTC'`, which turned out to be
+insufficient: it only sets a default for sessions opened afterwards, and any
+client can override it. `PGOPTIONS='-c timezone=...'` goes straight through it,
+which is exactly what a JDBC driver does when it forwards the JVM default at
+connect time, and that is the Tableau path in this repo. The queries now use
+`ts_utc AT TIME ZONE 'UTC'`, which returns a plain timestamp and cannot move.
+The database pin stays as a second layer.
 
 Daily bars are derived from hourly ones in SQL rather than fetched at daily
-granularity. One source of truth: any daily/hourly disagreement can only be
-a rollup bug, which is findable, never a source discrepancy, which isn't.
+granularity. That gives one source of truth, so a daily against hourly
+disagreement can only be a rollup bug, which is findable, and never a source
+discrepancy, which is not.
+
+Incomplete days are kept as rows and excluded from every derived figure. A day
+with fewer than 24 hourly candles still appears in `marts.daily_ohlcv` with its
+OHLCV and an `is_complete` flag, but its return, moving averages, volatility
+and drawdown are NULL, and it does not enter the correlation matrix. An earlier
+version filtered incomplete days out at the presentation layer instead, which
+hid the rows from the dashboard while leaving their effect baked into every
+rolling metric computed around them. A trailing partial day carries a fraction
+of a full day's volume, which quietly depressed the trailing baseline that the
+volume-anomaly query compares against. Filtering at the end does not undo
+contamination that already happened upstream.
+
+Rolling metrics are NULL until their window is full. A 30-day annualised
+volatility computed from four observations is not a 30-day volatility, so
+`volatility_30d_ann`, `ma_30d` and `ma_7d` return NULL until they have 30, 30
+and 7 observations. Before this guard, roughly half the published volatility
+values were warm-up values, and the first one for BTC read 0.2076 against 0.4043
+for its first genuine 30-observation window.
 
 The fact table is not partitioned. Six assets at hourly grain is roughly 53k
-rows per year; partitioning pays off orders of magnitude later, and until
-then it complicates upserts and maintenance for nothing. The DDL comments
-say where the crossover is.
+rows per year. Partitioning pays off orders of magnitude later, and until then
+it complicates the upsert and the vacuum story for nothing. The DDL comments say
+where the crossover is.
 
-Marts are materialized views with unique indexes so refreshes can run
-`CONCURRENTLY` -- a connected Tableau session never blocks or reads a
-half-refreshed state.
-
-## Running it
-
-Requires PostgreSQL 15+ and Python 3.10+.
-
-```
-createdb crypto_warehouse
-psql -d crypto_warehouse -f sql/01_schema.sql
-psql -d crypto_warehouse -f sql/02_marts.sql
-
-pip install -r requirements.txt
-copy .env.example .env        # edit DATABASE_URL if needed
-```
-
-The example connection string is the stock `postgres:postgres` on localhost.
-That is a deliberate choice for a local demo, not a habit I would carry to a
-shared environment: nothing here listens beyond localhost or holds data
-worth protecting.
-
-```
-python pipeline/ingest.py --backfill-days 365 --refresh-marts
-```
-
-The first run backfills a year of hourly candles for six assets (about 180
-API requests, a couple of minutes with rate-limit pauses). Every later run
-resumes from the watermark and finishes in seconds. Rerunning is always
-safe; that is the point.
-
-`sql/04_interview_queries.sql` holds the twenty analytical queries. Each one
-runs standalone against a loaded database.
-
-To smoke-test a load, run the pipeline twice back to back and then:
-
-```
-psql -d crypto_warehouse -v ON_ERROR_STOP=1 -f scripts/verify.sql
-```
-
-Four assertions, each fatal on failure: no hourly gaps except exchange-wide
-outages, daily rollup row counts match the distinct (asset, day) pairs in
-hourly, every core row equals the newest raw copy of its bucket, and the
-rerun upserted zero rows (one is tolerated in case an hour boundary crossed
-between the two runs).
+The three mart matviews carry unique indexes so refreshes run `CONCURRENTLY`
+and a live Tableau session never blocks. The guarantee is per view, not across
+the layer: each refresh is its own transaction, so a reader can catch
+`daily_ohlcv` refreshed while `daily_metrics` still holds prior data.
+`tableau_daily_extract` is a plain view over `daily_metrics`, so it shows
+whatever that matview last committed.
 
 ## Tableau
 
-Connect Tableau to Postgres and point it at `marts.tableau_daily_extract`:
-one row per asset per day with OHLCV, returns, 7/30-day moving averages,
-annualized 30-day volatility, and drawdown from peak. Long format, since
-that is what Tableau's shelf model wants. For a file-based extract instead
-of a live connection:
+Connect Tableau to Postgres and point it at `marts.tableau_daily_extract`. One
+row per asset per day, long format, which is what Tableau's shelf model wants.
+The columns are `symbol`, `asset_name`, `trade_date`, `open`, `high`, `low`,
+`close`, `volume_base_units`, `dollar_volume_approx`, `simple_return`, `ma_7d`,
+`ma_30d`, `volatility_30d_ann`, `drawdown_from_peak`, `hours_present` and
+`is_complete`.
+
+Incomplete days are present with NULL derived columns rather than dropped, so a
+moving-average line breaks visibly at a gap instead of closing over it silently.
+
+For a file-based extract instead of a live connection:
 
 ```
 psql -d crypto_warehouse -c "\copy (SELECT * FROM marts.tableau_daily_extract ORDER BY symbol, trade_date) TO 'tableau_extract.csv' CSV HEADER"
 ```
 
-Refresh cadence: rerun the pipeline with `--refresh-marts`, or execute
-`sql/03_refresh_marts.sql`.
+## Limitations
+
+One exchange and one quote currency, so there is no cross-venue check on a
+suspicious print. The correlation mart is a fixed trailing 90 days off the
+latest `trade_date`, not a rolling series, and the report computes its own
+figures over the full complete-day panel instead, so the two use different
+windows and are not directly comparable. Drawdown is measured from the start of
+the loaded window, not an all-time high, so it is not comparable to a published
+max-drawdown figure. `dollar_volume_approx` multiplies daily volume by the
+daily close rather than a traded average price; measured against volume times
+`(H+L+C)/3` the error is -0.04 percent on average and ranges from -4.16 to
++3.14 percent. Nothing schedules the pipeline, it runs when I run it.
 
 ## What I would build next
 
-Scheduling (Task Scheduler or cron wrapping the pipeline), a dbt port of the
-marts layer with tests, more granularities, and a data-quality report built
-from `raw.ingest_runs` and the gap-detection query (Q15). The open questions
-section of my study guide tracks the judgment calls I want to revisit.
+Scheduling, either Task Scheduler or cron wrapping the loader. A dbt port of the
+marts layer, which would gain tests and lineage. More granularities. A
+data-quality report built from `raw.ingest_runs` and the gap-detection query,
+since the loader now records short API responses but nothing surfaces them yet.
 
 ## Layout
 
 ```
-sql/01_schema.sql            schema DDL with design rationale in comments
-sql/02_marts.sql             derived layers (rollups, volatility, correlations)
-sql/03_refresh_marts.sql     mart refresh script, dependency-ordered
-sql/04_interview_queries.sql twenty annotated analytical queries
-pipeline/ingest.py           incremental, idempotent loader
-scripts/verify.sql           smoke-test assertions, fatal on failure
-docs/STUDY_GUIDE.md          my interview preparation map for every query
+scripts/run_setup.py          create the database and apply the DDL
+scripts/run_ingest.py         incremental, idempotent loader
+scripts/run_verify.py         run the assertions, nonzero exit on failure
+scripts/run_refresh_marts.py  refresh the marts layer
+scripts/run_analysis.py       compute reports/metrics.json and the figures
+scripts/run_build_report.py   render the report from metrics.json
+src/crypto_warehouse/         the package the scripts import
+sql/01_schema.sql             schema DDL with design rationale in comments
+sql/02_marts.sql              derived layers (rollups, volatility, correlations)
+sql/03_refresh_marts.sql      mart refresh, dependency-ordered
+sql/04_queries.sql            twenty annotated analytical queries
+sql/05_verify.sql             five assertions, fatal on failure
+tests/                        the test suite, no database or network needed
+reports/                      the generated report, its metrics and figures
+requirements.txt              exact pins the reported numbers were produced with
 ```
