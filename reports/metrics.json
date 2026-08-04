@@ -1,0 +1,171 @@
+{
+  "panel": {
+    "first_date": "2026-04-10",
+    "last_date": "2026-08-02",
+    "n_days": 113,
+    "n_assets": 6,
+    "symbols": [
+      "ADA",
+      "BTC",
+      "DOGE",
+      "ETH",
+      "LINK",
+      "SOL"
+    ]
+  },
+  "assets": [
+    {
+      "symbol": "ADA",
+      "annualised_volatility": 0.6836496136686054,
+      "max_drawdown": -0.49203539823008846,
+      "total_log_return": -0.3246166404839698
+    },
+    {
+      "symbol": "BTC",
+      "annualised_volatility": 0.35722926975051594,
+      "max_drawdown": -0.2880299620474407,
+      "total_log_return": -0.1309237044164226
+    },
+    {
+      "symbol": "DOGE",
+      "annualised_volatility": 0.4573085561030542,
+      "max_drawdown": -0.403114998181881,
+      "total_log_return": -0.2771818020433921
+    },
+    {
+      "symbol": "ETH",
+      "annualised_volatility": 0.49996702752197936,
+      "max_drawdown": -0.36300608423790626,
+      "total_log_return": -0.16623130115860885
+    },
+    {
+      "symbol": "LINK",
+      "annualised_volatility": 0.498789592873905,
+      "max_drawdown": -0.3291340052258306,
+      "total_log_return": -0.11779939862585656
+    },
+    {
+      "symbol": "SOL",
+      "annualised_volatility": 0.5155995502252123,
+      "max_drawdown": -0.36164749383730477,
+      "total_log_return": -0.17700877037802196
+    }
+  ],
+  "correlation": {
+    "symbols": [
+      "ADA",
+      "BTC",
+      "DOGE",
+      "ETH",
+      "LINK",
+      "SOL"
+    ],
+    "matrix": [
+      [
+        1.0,
+        0.7258064697606097,
+        0.761644242415742,
+        0.734889700707218,
+        0.8054809452781742,
+        0.7747032655867657
+      ],
+      [
+        0.7258064697606097,
+        1.0,
+        0.7419665064876095,
+        0.8914667097265759,
+        0.8391612438999627,
+        0.829967557488871
+      ],
+      [
+        0.7616442424157421,
+        0.7419665064876095,
+        1.0,
+        0.752208768150149,
+        0.8098791663884354,
+        0.7266999904309673
+      ],
+      [
+        0.734889700707218,
+        0.8914667097265758,
+        0.752208768150149,
+        1.0,
+        0.8953125350393539,
+        0.8412727914737739
+      ],
+      [
+        0.805480945278174,
+        0.8391612438999627,
+        0.8098791663884353,
+        0.8953125350393538,
+        0.9999999999999999,
+        0.8703879610691287
+      ],
+      [
+        0.7747032655867656,
+        0.8299675574888711,
+        0.7266999904309673,
+        0.8412727914737739,
+        0.8703879610691286,
+        1.0
+      ]
+    ],
+    "off_diagonal_min": 0.7258064697606097,
+    "off_diagonal_max": 0.8953125350393539,
+    "off_diagonal_mean": 0.8000565235935557,
+    "mean_ci95_low": 0.7220401135784853,
+    "mean_ci95_high": 0.8579815623098643,
+    "heatmap_scale_low": 0.7000000000000001,
+    "heatmap_scale_high": 0.9,
+    "loosest_pair": [
+      "ADA",
+      "BTC"
+    ],
+    "tightest_pair": [
+      "ETH",
+      "LINK"
+    ],
+    "n_pairs": 15
+  },
+  "diversification": {
+    "weight_per_asset": 0.16666666666666666,
+    "equal_weight_portfolio_vol": 0.4578653833144495,
+    "average_single_asset_vol": 0.5020906016905454,
+    "zero_correlation_vol": 0.20874769750438113,
+    "risk_removed_actual": 0.08808214737975395,
+    "risk_removed_if_uncorrelated": 0.5842429696920735,
+    "diversification_captured": 0.15076287084152307,
+    "equicorrelation_limit_vol": 0.4490993511001004
+  },
+  "provenance": {
+    "ohlcv_hourly_rows": 16878,
+    "daily_ohlcv_rows": 708,
+    "incomplete_asset_days": 18,
+    "observed_dates": 118,
+    "dates_dropped_from_panel": 5,
+    "incomplete_dates": [
+      "2026-04-08",
+      "2026-05-08",
+      "2026-08-03"
+    ],
+    "excluded_dates": [
+      "2026-04-08",
+      "2026-04-09",
+      "2026-05-08",
+      "2026-05-09",
+      "2026-08-03"
+    ],
+    "assets_loaded": 6,
+    "server_version": "17.10",
+    "mart_correlations_90d": {
+      "note": "trailing 90-day window from marts.pairwise_correlations_90d, not the complete-day panel this report is built on",
+      "min": 0.7385414453274194,
+      "max": 0.927855242539712,
+      "mean": 0.8148850936672518,
+      "n_pairs": 15,
+      "n_days_min": 87,
+      "n_days_max": 87
+    }
+  },
+  "generated_at_utc": "2026-08-03T21:44:40Z"
+}
