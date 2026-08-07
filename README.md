@@ -70,9 +70,9 @@ In a terminal, run the following.
    ```
 
 The first load fetches six products at hourly grain. A year is 8,760 hours per
-product, the API caps a request at 300 candles, so that is 30 requests per
-product and 180 in total. Later runs resume from the watermark and fetch one
-window per product.
+product and the API caps a request at 300 candles, so that is 30 requests per
+product and 180 in total. Later runs resume from the last loaded hour (the
+watermark) and fetch one window per product.
 
 Other entry points:
 
@@ -85,8 +85,8 @@ python scripts/run_ingest.py --backfill-days 30 --products BTC-USD
 pytest                                          # the test suite
 ```
 
-Rerunning the loader is safe by construction, and `run_verify.py` asserts it:
-after two back-to-back runs the second must have upserted at most one row per
+Rerunning the loader is safe by construction, and `run_verify.py` asserts it.
+After two back-to-back runs the second must have upserted at most one row per
 product, which is the tolerance for an hour boundary crossing between them.
 
 ## Architecture
@@ -128,11 +128,11 @@ queries trust. Marts are presentation-shaped and rebuilt from core.
 Idempotency lives in the database, not the pipeline. The upsert targets the
 natural primary key `(asset_id, ts_utc)`, so replaying any window is a no-op
 unless the source data changed. The `DO UPDATE` carries an `IS DISTINCT FROM`
-guard, so unchanged rows are skipped entirely. No dead tuples, and `updated_at`
-only moves when the data moved.
+guard, so unchanged rows are skipped entirely. That leaves no dead tuples, and
+`updated_at` only moves when the data moved.
 
 The pipeline re-fetches a three-hour overlap on every run to pick up late
-candle revisions. The upsert makes that a no-op in core. It is not free: the
+candle revisions. The upsert makes that a no-op in core. It is not free. The
 cost is one extra request per product per run, and three duplicate rows per
 product per run in append-only `raw.candles`. Three hours is a guess at
 Coinbase's revision window, not a measured bound.
@@ -149,8 +149,8 @@ timezone, so on a server defaulting to America/Chicago the monthly aggregate in
 Q02 split its months at 05:00 UTC. I found it running the query set against a
 live instance, and the `-05` display offsets were the visible symptom. My first
 fix was `ALTER DATABASE ... SET timezone = 'UTC'`, which turned out to be
-insufficient: it only sets a default for sessions opened afterwards, and any
-client can override it. `PGOPTIONS='-c timezone=...'` goes straight through it,
+insufficient, because it only sets a default for sessions opened afterwards
+and any client can override it. `PGOPTIONS='-c timezone=...'` goes straight through it,
 which is exactly what a JDBC driver does when it forwards the JVM default at
 connect time, and that is the Tableau path in this repo. The queries now use
 `ts_utc AT TIME ZONE 'UTC'`, which returns a plain timestamp and cannot move.
@@ -163,7 +163,7 @@ discrepancy, which is not.
 
 Incomplete days are kept as rows and excluded from every derived figure. A day
 with fewer than 24 hourly candles still appears in `marts.daily_ohlcv` with its
-OHLCV and an `is_complete` flag, but its return, moving averages, volatility
+open, high, low, close and volume and an `is_complete` flag, but its return, moving averages, volatility
 and drawdown are NULL, and it does not enter the correlation matrix. An earlier
 version filtered incomplete days out at the presentation layer instead, which
 hid the rows from the dashboard while leaving their effect baked into every
@@ -184,17 +184,19 @@ rows per year. Partitioning pays off orders of magnitude later, and until then
 it complicates the upsert and the vacuum story for nothing. The DDL comments say
 where the crossover is.
 
-The three mart matviews carry unique indexes so refreshes run `CONCURRENTLY`
-and a live Tableau session never blocks. The guarantee is per view, not across
-the layer: each refresh is its own transaction, so a reader can catch
+The three mart materialized views (matviews) carry unique indexes so refreshes
+run `CONCURRENTLY` and a live Tableau session never blocks. The guarantee is
+per view, not across the layer. Each refresh is its own transaction, so a
+reader can catch
 `daily_ohlcv` refreshed while `daily_metrics` still holds prior data.
 `tableau_daily_extract` is a plain view over `daily_metrics`, so it shows
 whatever that matview last committed.
 
 ## Tableau
 
-Connect Tableau to Postgres and point it at `marts.tableau_daily_extract`. One
-row per asset per day, long format, which is what Tableau's shelf model wants.
+Connect Tableau to Postgres and point it at `marts.tableau_daily_extract`. It
+holds one row per asset per day in long format, which is what Tableau's shelf
+model wants.
 The columns are `symbol`, `asset_name`, `trade_date`, `open`, `high`, `low`,
 `close`, `volume_base_units`, `dollar_volume_approx`, `simple_return`, `ma_7d`,
 `ma_30d`, `volatility_30d_ann`, `drawdown_from_peak`, `hours_present` and
@@ -220,14 +222,15 @@ the loaded window, not an all-time high, so it is not comparable to a published
 max-drawdown figure. `dollar_volume_approx` multiplies daily volume by the
 daily close rather than a traded average price; measured against volume times
 `(H+L+C)/3` the error is -0.04 percent on average and ranges from -4.16 to
-+3.14 percent. Nothing schedules the pipeline, it runs when I run it.
++3.14 percent. Nothing schedules the pipeline, so it runs when I run it.
 
 ## What I would build next
 
-Scheduling, either Task Scheduler or cron wrapping the loader. A dbt port of the
-marts layer, which would gain tests and lineage. More granularities. A
-data-quality report built from `raw.ingest_runs` and the gap-detection query,
-since the loader now records short API responses but nothing surfaces them yet.
+Scheduling comes first, either Task Scheduler or cron wrapping the loader. A
+dbt port of the marts layer would add tests and lineage. After that I would
+add more granularities, and a data-quality report built from `raw.ingest_runs`
+and the gap-detection query, since the loader now records short API responses
+but nothing surfaces them yet.
 
 ## Layout
 
