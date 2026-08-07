@@ -324,6 +324,18 @@ def build_report() -> None:
         else f"{n_down} of the {n_assets} assets"
     )
 
+    # Three captions assert qualitative facts as literals ("one block", "the
+    # troughs line up in time", "no asset in this set was rising while the
+    # others fell"). They hold for the recorded run because every
+    # total_log_return is negative; a reload that breaks that condition must
+    # reword them by hand, since no placeholder will update them.
+
+    shared_days_phrase = (
+        f"{mart['n_days_min']} to {mart['n_days_max']}"
+        if mart["n_days_min"] != mart["n_days_max"]
+        else f"{mart['n_days_min']}"
+    )
+
     # How the uncertainty on one correlation compares with the whole spread
     # across pairs. Computed rather than asserted, because which of the two is
     # larger decides whether the heatmap's ordering means anything.
@@ -422,7 +434,8 @@ is not.</p>
 <p>The day boundary is pinned to UTC in the rollup expression rather than left
 to the session timezone. A plain cast would rebucket the whole mart for a
 client connecting from another zone, which is a bug this warehouse has already
-had once and now has a regression test for.</p>
+had once. The rollup expression now pins the boundary itself, and the database
+default is set to UTC as a second layer.</p>
 
 <h3>2.2 The completeness rule, and why partial days are excluded</h3>
 
@@ -480,7 +493,8 @@ is.</p>
 
 <p>The covariance matrix is the sample covariance of the same daily log
 returns, also with the n minus 1 divisor, scaled by 365. Portfolio volatility
-is the square root of w'Cw with w set to {div["weight_per_asset"]:.4f} in every
+is the square root of w'Cw, the weight vector times the covariance matrix
+times the weight vector, with w set to {div["weight_per_asset"]:.4f} in every
 position. The zero-correlation counterfactual replaces C with its own diagonal.
 Every asset keeps its variance exactly, and every covariance is set to zero.
 Independence is a benchmark, not a floor. Negative covariances put a portfolio
@@ -494,7 +508,7 @@ independent portfolio is the reference the real number is measured against.</p>
 <p>The warehouse also publishes <code>marts.pairwise_correlations_90d</code>,
 which reports {mart["min"]:.3f} to {mart["max"]:.3f} across its
 {mart["n_pairs"]} pairs. That mart runs on a trailing 90-day window and lands
-{mart["n_days_min"]} to {mart["n_days_max"]} shared days per pair, so it is a
+{shared_days_phrase} shared days per pair, so it is a
 different window on the same data
 and its numbers are not interchangeable with the ones below. Nothing in this
 report uses them.</p>
@@ -546,7 +560,7 @@ investor holding one of these names at random would have carried.</p>
   <img src="{img("asset_volatility.png")}" alt="Annualised volatility by asset, sorted">
   <figcaption><strong>Figure 2.</strong> Annualised volatility per asset,
   sorted, with the {div["average_single_asset_vol"]:.3f} average marked. The
-  conclusion to draw is that the assets are not interchangeable in risk terms.
+  assets are not interchangeable in risk terms.
   {loudest["symbol"]} carries roughly {vol_ratio:.1f} times the volatility of
   {quietest["symbol"]}, so equal weight is not the same thing as equal risk
   contribution.</figcaption>
@@ -572,8 +586,7 @@ than timing.</p>
 <figure>
   <img src="{img("drawdown_curves.png")}" alt="Drawdown from running peak for all six assets">
   <figcaption><strong>Figure 3.</strong> Each asset's drawdown from its own
-  running peak, all on one axis. The conclusion to draw is that the troughs
-  line up in time.
+  running peak, all on one axis. The troughs line up in time.
   The deepest reading is {pct(worst_dd["max_drawdown"])} for
   {worst_dd["symbol"]}, and no asset in this set was rising while the others
   fell, which is what would have to happen for the basket to be meaningfully
@@ -747,7 +760,7 @@ result here can drift from the analysis that produced it. The fixed conventions
 the method rests on, the 365-day year and the 24-hour day, are written into the
 template and stated in section 2.</p>
 
-<p>Three things stand behind the pipeline underneath. <code>python
+<p>The pipeline underneath is checked three ways. <code>python
 scripts/run_verify.py</code> runs {n_checks} checks against a loaded warehouse,
 each fatal on failure, covering hourly gaps, rollup coverage, raw-to-core
 agreement, upsert idempotency and run status. <code>python -m pytest</code>
