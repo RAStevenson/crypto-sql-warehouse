@@ -399,7 +399,7 @@ below where it started for most of these assets, so the
 {pct(div["risk_removed_actual"])} is measured partly through a joint selloff,
 which is when correlations run highest. Section 5 gives both in full.</p>
 
-<p class="callout">Every correlation in this report is computed on one basis:
+<p class="callout">Every correlation in this report is computed on one basis,
 the {n_days}-day panel of days where all {n_assets} assets have a clean daily
 return. Section 2 states how that panel is built and section 5 states what it
 cannot support.</p>
@@ -436,7 +436,8 @@ whatever the last observed hour printed rather than the 23:00 candle, and its
 volume is the sum of however many hours happened to land. Whether it reads as
 an up day or a down day depends on when the loader ran rather than on the
 market. Any variance or correlation computed over such a bar inherits that
-distortion. The mart therefore reports the observed OHLCV on those days and
+distortion. The mart therefore keeps the observed open, high, low, close and
+volume on those days and
 sets every derived column, including <code>log_return</code>, to NULL. It does
 the same on any day that is not adjacent to the previous observation, because a
 return computed across a gap covers more than one day while carrying a daily
@@ -480,8 +481,8 @@ is.</p>
 <p>The covariance matrix is the sample covariance of the same daily log
 returns, also with the n minus 1 divisor, scaled by 365. Portfolio volatility
 is the square root of w'Cw with w set to {div["weight_per_asset"]:.4f} in every
-position. The zero-correlation counterfactual replaces C with its own diagonal:
-every asset keeps its variance exactly, and every covariance is set to zero.
+position. The zero-correlation counterfactual replaces C with its own diagonal.
+Every asset keeps its variance exactly, and every covariance is set to zero.
 Independence is a benchmark, not a floor. Negative covariances put a portfolio
 below it, which is what a hedge is for, and <code>tests/test_analysis.py</code>
 checks that the arithmetic behaves that way. Six long spot positions in the
@@ -521,7 +522,7 @@ pair in this set that a portfolio could lean on for independence.</p>
   would render in nearly the same tone; read the colours as differences within
   a tight band, not as a general correlation scale. The diagonal is blanked,
   since a variable's correlation with itself is 1 by construction. The assets
-  form one block: the visible variation runs from
+  form one block, and the visible variation runs from
   {corr["off_diagonal_min"]:.3f} to {corr["off_diagonal_max"]:.3f}, which is a
   band inside the high end rather than a range from low to high.</figcaption>
 </figure>
@@ -544,8 +545,8 @@ investor holding one of these names at random would have carried.</p>
 <figure>
   <img src="{img("asset_volatility.png")}" alt="Annualised volatility by asset, sorted">
   <figcaption><strong>Figure 2.</strong> Annualised volatility per asset,
-  sorted, with the {div["average_single_asset_vol"]:.3f} average marked. What
-  to conclude: the assets are not interchangeable in risk terms.
+  sorted, with the {div["average_single_asset_vol"]:.3f} average marked. The
+  conclusion to draw is that the assets are not interchangeable in risk terms.
   {loudest["symbol"]} carries roughly {vol_ratio:.1f} times the volatility of
   {quietest["symbol"]}, so equal weight is not the same thing as equal risk
   contribution.</figcaption>
@@ -564,14 +565,15 @@ investor holding one of these names at random would have carried.</p>
 <h3>3.3 What the co-movement looks like over time</h3>
 
 <p>The correlation matrix states the co-movement as {corr["n_pairs"]} numbers.
-The drawdown paths show the same fact as a picture: the assets fall together
+The drawdown paths show the same fact as a picture. The assets fall together
 and recover together, and the differences between them are mostly depth rather
 than timing.</p>
 
 <figure>
   <img src="{img("drawdown_curves.png")}" alt="Drawdown from running peak for all six assets">
   <figcaption><strong>Figure 3.</strong> Each asset's drawdown from its own
-  running peak, all on one axis. What to conclude: the troughs line up in time.
+  running peak, all on one axis. The conclusion to draw is that the troughs
+  line up in time.
   The deepest reading is {pct(worst_dd["max_drawdown"])} for
   {worst_dd["symbol"]}, and no asset in this set was rising while the others
   fell, which is what would have to happen for the basket to be meaningfully
@@ -597,8 +599,8 @@ diversification these assets actually delivered.</p>
   left the average of holding one of these assets, in the middle the
   equal-weight portfolio, on the right the same {n_assets} variances with zero
   correlation. The left-to-middle gap is the benefit received and the
-  middle-to-right gap is what the correlations consumed. Read the position of
-  the middle bar: it sits close to the left one and far from the
+  middle-to-right gap is what the correlations consumed. Read the position
+  of the middle bar. It sits close to the left one and far from the
   right one.</figcaption>
 </figure>
 
@@ -649,8 +651,8 @@ brought with them. Equal weight assumes the assets are interchangeable, and on
 this evidence they are not.</p>
 
 <p>Two consequences follow for anyone using this warehouse. First, position
-size and hedging do the work that name count does not: at a mean correlation of
-{corr["off_diagonal_mean"]:.3f}, total exposure is the variable that moves
+size and hedging do the work that name count does not. At a mean correlation
+of {corr["off_diagonal_mean"]:.3f}, total exposure is the variable that moves
 portfolio risk. Second, the quantity worth monitoring is the correlation level
 itself, which is what <code>marts.pairwise_correlations_90d</code> exists to
 track on a rolling basis. Only a fall in that correlation would change the
@@ -674,7 +676,7 @@ heatmap is showing. The ordering of pairs in that figure is therefore not
 established by this sample. What survives is that the whole block sits high,
 not that any particular pair sits above any other.</p>
 
-<p>One exchange and one quote currency. All candles come from
+<p>The data covers one exchange and one quote currency. All candles come from
 Coinbase and every pair is quoted in USD. There is no second venue to check the
 prices against, so a venue-specific outage or a stale feed enters the
 covariance matrix as if it were market structure. Common exposure to the dollar
@@ -720,7 +722,8 @@ general would be reading it too widely.</p>
 <section>
 <h2>6. How to reproduce</h2>
 
-<p>Python 3.11 or later and a PostgreSQL server. This run used PostgreSQL
+<p>Reproduction needs Python 3.11 or later and a PostgreSQL server you can
+connect to. This run used PostgreSQL
 {prov["server_version"]}; nothing in the SQL needs a feature newer than
 PostgreSQL 10. From the repository root:</p>
 
