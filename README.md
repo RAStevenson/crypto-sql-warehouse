@@ -150,9 +150,9 @@ Q02 split its months at 05:00 UTC. I found it running the query set against a
 live instance, and the `-05` display offsets were the visible symptom. My first
 fix was `ALTER DATABASE ... SET timezone = 'UTC'`, which turned out to be
 insufficient, because it only sets a default for sessions opened afterwards
-and any client can override it. `PGOPTIONS='-c timezone=...'` goes straight through it,
-which is exactly what a JDBC driver does when it forwards the JVM default at
-connect time, and that is the Tableau path in this repo. The queries now use
+and any client can override it. `PGOPTIONS='-c timezone=...'` goes straight
+through it, and any client that sets its own session timezone at connect
+time, as JDBC drivers commonly do, gets through it the same way. The queries now use
 `ts_utc AT TIME ZONE 'UTC'`, which returns a plain timestamp and cannot move.
 The database pin stays as a second layer.
 
