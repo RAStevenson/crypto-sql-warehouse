@@ -228,3 +228,63 @@ BEGIN
     END IF;
     RAISE NOTICE 'freshness check passed: newest run per product succeeded';
 END $$;
+
+-- Check 6: the daily rollup buckets identically under any session timezone.
+--
+-- Regression test for a bug this warehouse actually had: bucketing a
+-- timestamptz with a plain ::date cast (or date_trunc()) uses the SESSION
+-- timezone, so a client connecting from America/Chicago got day boundaries at
+-- 05:00/06:00 UTC and different daily volumes. The fix pins the boundary in
+-- the rollup expression itself, (ts_utc AT TIME ZONE 'UTC')::date in
+-- 02_marts.sql, with the database default of UTC set in 01_schema.sql only as
+-- a second layer, since any client can override it with SET timezone.
+--
+-- The check reads the mart's defining query live from the catalog with
+-- pg_get_viewdef, so a drifted definition cannot dodge it, then runs that
+-- query once under America/Chicago and once under UTC and requires the two
+-- results to be identical row for row. Failure case constructed per the
+-- design rule above: with marts.daily_ohlcv redefined to bucket by ts_utc::date
+-- inside a rolled-back transaction, this check reported all 708 rows differing
+-- on each side (moving the boundary by 5 hours touches nearly every day's
+-- hours_present and volume) while checks 1 through 5 still passed, because the
+-- buggy mart had been materialized under a UTC session and its stored rows
+-- looked fine.
+DO $$
+DECLARE
+    rollup_sql text := pg_get_viewdef('marts.daily_ohlcv'::regclass);
+    tz_before text := current_setting('timezone');
+    only_chicago bigint;
+    only_utc bigint;
+    total_rows bigint;
+    example text;
+BEGIN
+    -- set_config(..., is_local => true): both overrides die with the enclosing
+    -- transaction, so a failure cannot leak a Chicago timezone into anything
+    -- that runs after this block.
+    PERFORM set_config('timezone', 'America/Chicago', true);
+    EXECUTE format('CREATE TEMP TABLE rollup_run_chicago ON COMMIT DROP AS %s', rollup_sql);
+
+    PERFORM set_config('timezone', 'UTC', true);
+    EXECUTE format('CREATE TEMP TABLE rollup_run_utc ON COMMIT DROP AS %s', rollup_sql);
+
+    PERFORM set_config('timezone', tz_before, true);
+
+    WITH only_c AS (SELECT * FROM rollup_run_chicago EXCEPT SELECT * FROM rollup_run_utc),
+         only_u AS (SELECT * FROM rollup_run_utc     EXCEPT SELECT * FROM rollup_run_chicago)
+    SELECT
+        (SELECT count(*) FROM only_c),
+        (SELECT count(*) FROM only_u),
+        (SELECT count(*) FROM rollup_run_utc),
+        coalesce(
+            (SELECT format('asset %s on %s has %s hour(s) under America/Chicago', asset_id, trade_date, hours_present)
+             FROM only_c ORDER BY asset_id, trade_date LIMIT 1),
+            (SELECT format('asset %s on %s exists only under UTC', asset_id, trade_date)
+             FROM only_u ORDER BY asset_id, trade_date LIMIT 1))
+    INTO only_chicago, only_utc, total_rows, example;
+
+    IF only_chicago > 0 OR only_utc > 0 THEN
+        RAISE EXCEPTION 'timezone check failed: rollup depends on session timezone, % row(s) only under America/Chicago and % only under UTC (e.g. %)',
+            only_chicago, only_utc, example;
+    END IF;
+    RAISE NOTICE 'timezone check passed: % rollup rows identical under America/Chicago and UTC', total_rows;
+END $$;

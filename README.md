@@ -77,7 +77,7 @@ watermark) and fetch one window per product.
 Other entry points:
 
 ```
-python scripts/run_verify.py                    # five assertions, nonzero exit on failure
+python scripts/run_verify.py                    # six assertions, nonzero exit on failure
 python scripts/run_refresh_marts.py             # refresh the marts layer only
 python scripts/run_analysis.py                  # recompute reports/metrics.json and figures
 python scripts/run_build_report.py              # rebuild the report from metrics.json
@@ -154,7 +154,10 @@ and any client can override it. `PGOPTIONS='-c timezone=...'` goes straight
 through it, and any client that sets its own session timezone at connect
 time, as JDBC drivers commonly do, gets through it the same way. The queries now use
 `ts_utc AT TIME ZONE 'UTC'`, which returns a plain timestamp and cannot move.
-The database pin stays as a second layer.
+The database pin stays as a second layer, and the verify suite carries a
+regression test. It re-runs the daily rollup's own defining query, read live
+from the catalog, once under America/Chicago and once under UTC, and fails if
+any row differs.
 
 Daily bars are derived from hourly ones in SQL rather than fetched at daily
 granularity. That gives one source of truth, so a daily against hourly
@@ -246,7 +249,7 @@ sql/01_schema.sql             schema DDL with design rationale in comments
 sql/02_marts.sql              derived layers (rollups, volatility, correlations)
 sql/03_refresh_marts.sql      mart refresh, dependency-ordered
 sql/04_queries.sql            twenty annotated analytical queries
-sql/05_verify.sql             five assertions, fatal on failure
+sql/05_verify.sql             six assertions, fatal on failure
 tests/                        the test suite, no database or network needed
 reports/                      the generated report, its metrics and figures
 requirements.txt              exact pins the reported numbers were produced with

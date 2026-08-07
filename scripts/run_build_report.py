@@ -434,8 +434,9 @@ is not.</p>
 <p>The day boundary is pinned to UTC in the rollup expression rather than left
 to the session timezone. A plain cast would rebucket the whole mart for a
 client connecting from another zone, which is a bug this warehouse has already
-had once. The rollup expression now pins the boundary itself, and the database
-default is set to UTC as a second layer.</p>
+had once and now has a regression test for. The verify suite re-runs the
+mart's own defining query under America/Chicago and again under UTC and fails
+if any row differs, and the database default of UTC stays as a second layer.</p>
 
 <h3>2.2 The completeness rule, and why partial days are excluded</h3>
 
@@ -763,7 +764,8 @@ template and stated in section 2.</p>
 <p>The pipeline underneath is checked three ways. <code>python
 scripts/run_verify.py</code> runs {n_checks} checks against a loaded warehouse,
 each fatal on failure, covering hourly gaps, rollup coverage, raw-to-core
-agreement, upsert idempotency and run status. <code>python -m pytest</code>
+agreement, upsert idempotency, run status and session-timezone invariance of
+the daily rollup. <code>python -m pytest</code>
 runs {n_tests} test functions, none of which need a database or a network,
 covering the ingestion windowing, the API client and the diversification math
 in this report. The
