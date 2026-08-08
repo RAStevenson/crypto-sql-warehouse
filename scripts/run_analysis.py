@@ -1,14 +1,17 @@
-"""Measure cross-asset diversification and write reports/metrics.json.
+"""Measure cross-asset diversification, write reports/metrics.json, and
+render the report.
 
-    python scripts/run_ingest.py --refresh-marts
+    python scripts/run_ingest.py
     python scripts/run_analysis.py
-    python scripts/run_build_report.py
 
 Reads marts.daily_metrics, keeps the dates where every asset has a non-null
 log return, and writes the panel description, per-asset volatility, the
 correlation matrix and the equal-weight diversification result to
-reports/metrics.json, plus four figures under reports/figures/. The report
-builder reads that file; nothing is transcribed by hand between the two.
+reports/metrics.json, plus four figures under reports/figures/. It then runs
+scripts/run_build_report.py, which reads that file at render time; nothing is
+transcribed by hand between the two. --no-report skips the render, and the
+builder also runs standalone for iterating on the report's prose without
+touching the database.
 """
 
 import sys
@@ -18,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import argparse
 import logging
+import subprocess
 
 import psycopg2
 
@@ -38,6 +42,9 @@ def main() -> int:
     parser.add_argument(
         "--figures", default=str(FIGURES_DIR), help="output directory for the PNG figures"
     )
+    parser.add_argument(
+        "--no-report", action="store_true", help="skip rendering the HTML/PDF report"
+    )
     parser.add_argument("--verbose", action="store_true", help="Debug-level logging")
     args = parser.parse_args()
 
@@ -49,7 +56,7 @@ def main() -> int:
         return 2
     except psycopg2.Error as exc:
         log.error("database error: %s", str(exc).strip())
-        log.error("run scripts/run_setup.py and scripts/run_ingest.py --refresh-marts first")
+        log.error("run scripts/run_setup.py and scripts/run_ingest.py first")
         return 1
     except ValueError as exc:
         log.error("%s", exc)
@@ -67,6 +74,21 @@ def main() -> int:
         100 * div["risk_removed_if_uncorrelated"],
         100 * div["diversification_captured"],
     )
+
+    if args.no_report:
+        log.info("report skipped; render it with: python scripts/run_build_report.py")
+    elif Path(args.metrics).resolve() != METRICS_PATH.resolve():
+        log.info(
+            "report not built: run_build_report.py reads %s and this run wrote %s",
+            METRICS_PATH,
+            args.metrics,
+        )
+    else:
+        # Separate process on purpose: the report builder is its own entry
+        # script, and a report-build failure should not read as an analysis
+        # failure.
+        report_script = Path(__file__).resolve().parent / "run_build_report.py"
+        subprocess.run([sys.executable, str(report_script)], check=True)
     return 0
 
 

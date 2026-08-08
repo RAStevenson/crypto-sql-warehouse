@@ -2,9 +2,9 @@
 
     python scripts/run_refresh_marts.py
 
-Same three statements that run_ingest.py --refresh-marts issues, for when the
-marts need rebuilding without a load. They refresh CONCURRENTLY, so readers
-are never blocked and the connection runs with autocommit.
+The same mart refresh statements that run_ingest.py issues after a load, for
+when the marts need rebuilding without a load. They refresh CONCURRENTLY, so
+readers are never blocked and the connection runs with autocommit.
 """
 
 import sys

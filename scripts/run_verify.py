@@ -1,6 +1,6 @@
 """Run the warehouse smoke tests in sql/05_verify.sql.
 
-    python scripts/run_ingest.py --refresh-marts
+    python scripts/run_ingest.py
     python scripts/run_ingest.py
     python scripts/run_verify.py
 

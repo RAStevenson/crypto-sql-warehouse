@@ -1,4 +1,4 @@
-﻿"""Render the stakeholder report from reports/metrics.json and its figures.
+"""Render the stakeholder report from reports/metrics.json and its figures.
 
     python scripts/run_analysis.py
     python scripts/run_build_report.py

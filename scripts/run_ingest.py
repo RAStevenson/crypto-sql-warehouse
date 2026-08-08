@@ -1,8 +1,11 @@
 """Load Coinbase hourly candles into the warehouse, incrementally.
 
-    python scripts/run_ingest.py                       # every active asset
-    python scripts/run_ingest.py --refresh-marts       # and rebuild the marts
+    python scripts/run_ingest.py                       # every active asset, then the marts
+    python scripts/run_ingest.py --no-refresh-marts    # load only, leave the marts alone
     python scripts/run_ingest.py --products BTC-USD ETH-USD
+
+A load ends with the mart refresh in sql/03_refresh_marts.sql unless
+--no-refresh-marts says otherwise, so the default run leaves nothing stale.
 
 Each product resumes from MAX(ts_utc) in core.ohlcv_hourly minus a few hours
 of deliberate overlap, so running it twice in a row is a no-op in core. One
@@ -63,10 +66,14 @@ def main() -> int:
         ),
     )
     parser.add_argument(
-        "--refresh-marts",
+        "--no-refresh-marts",
         action="store_true",
-        help="Run sql/03_refresh_marts.sql after loading",
+        help="Skip the mart refresh that otherwise runs after loading",
     )
+    # The old opt-in spelling, kept as an accepted no-op because the published
+    # report's reproduce section names it. Refreshing is the default now, so
+    # passing it changes nothing.
+    parser.add_argument("--refresh-marts", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--verbose", action="store_true", help="Debug-level logging")
     args = parser.parse_args()
 
@@ -78,7 +85,7 @@ def main() -> int:
             products=args.products,
             backfill_days=backfill_days,
             apply_floor=args.backfill_days is not None,
-            refresh=args.refresh_marts,
+            refresh=not args.no_refresh_marts,
         )
     except (ConfigError, FileNotFoundError) as exc:
         log.error("%s", exc)

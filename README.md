@@ -3,7 +3,7 @@
 A PostgreSQL warehouse for hourly crypto market data. It pulls candles from
 the public Coinbase Exchange API, lands them in a raw/core/marts schema, and
 derives daily rollups, returns, rolling volatility, drawdowns and pairwise
-correlations. Twenty analytical queries run against it in `sql/04_queries.sql`.
+correlations. Annotated analytical queries run against it in `sql/04_queries.sql`.
 
 I built it because I wanted a market-data layer I could query directly instead
 of re-downloading CSVs every time I had a question. The private research system
@@ -15,12 +15,14 @@ result and the limitations:
 [PDF](reports/crypto_warehouse_report.pdf) (GitHub renders it inline) or
 [HTML](reports/crypto_warehouse_report.html).
 
-Its headline finding is that spreading capital equally across all six assets
-removes only 8.8 percent of the volatility you would carry holding the average
-one. If the six were uncorrelated it would remove 58.4 percent. Measured over
-113 complete trading days, every pair of the six correlates between 0.73 and
-0.90, mean 0.80. Holding six of these is close to holding one, and the report
-explains what that does and does not justify.
+Its headline finding, on the panel ending 2026-08-02, is that spreading
+capital equally across all six assets removes only 8.8 percent of the
+volatility you would carry holding the average one. If the six were
+uncorrelated it would remove 58.4 percent. Measured over 113 complete trading
+days, every pair of the six correlates between 0.73 and 0.90, mean 0.80. A
+reload moves these figures, and the generated report is their live copy.
+Holding six of these is close to holding one, and the report explains what
+that does and does not justify.
 
 ## Quick start
 
@@ -66,21 +68,22 @@ In a terminal, run the following.
 
    ```
    python scripts/run_setup.py
-   python scripts/run_ingest.py --refresh-marts
+   python scripts/run_ingest.py
    ```
 
-The first load fetches six products at hourly grain. A year is 8,760 hours per
-product and the API caps a request at 300 candles, so that is 30 requests per
-product and 180 in total. Later runs resume from the last loaded hour (the
-watermark) and fetch one window per product.
+The first load fetches each active product at hourly grain. A year is 8,760
+hours per product and the API caps a request at 300 candles, so the default
+backfill is about 30 requests per product. Later runs resume from the last
+loaded hour (the watermark) and fetch one window per product. The loader
+refreshes the marts when it finishes; `--no-refresh-marts` skips that.
 
 Other entry points:
 
 ```
-python scripts/run_verify.py                    # six assertions, nonzero exit on failure
+python scripts/run_verify.py                    # warehouse assertions, nonzero exit on failure
 python scripts/run_refresh_marts.py             # refresh the marts layer only
-python scripts/run_analysis.py                  # recompute reports/metrics.json and figures
-python scripts/run_build_report.py              # rebuild the report from metrics.json
+python scripts/run_analysis.py                  # recompute metrics and figures, then the report
+python scripts/run_build_report.py              # rebuild the report alone, without recomputing
 python scripts/run_ingest.py --backfill-days 30 --products BTC-USD
 pytest                                          # the test suite
 ```
@@ -218,14 +221,14 @@ psql -d crypto_warehouse -c "\copy (SELECT * FROM marts.tableau_daily_extract OR
 
 One exchange and one quote currency, so there is no cross-venue check on a
 suspicious print. The correlation mart is a fixed trailing 90 days off the
-latest `trade_date`, not a rolling series, and the report computes its own
-figures over the full complete-day panel instead, so the two use different
-windows and are not directly comparable. Drawdown is measured from the start of
-the loaded window, not an all-time high, so it is not comparable to a published
-max-drawdown figure. `dollar_volume_approx` multiplies daily volume by the
-daily close rather than a traded average price; measured against volume times
-`(H+L+C)/3` the error is -0.04 percent on average and ranges from -4.16 to
-+3.14 percent. Nothing schedules the pipeline, so it runs when I run it.
+latest `trade_date`, not a rolling series. `dollar_volume_approx` multiplies
+daily volume by the daily close rather than a traded average price; measured
+against volume times `(H+L+C)/3` over the data loaded as of 2026-08-04, the
+error is -0.04 percent on average and ranges from -4.16 to +3.14 percent (the
+column comment in `sql/02_marts.sql` is the source). Nothing schedules the
+pipeline, so it runs when I run it. The analytical caveats, including how the
+report's correlation window differs from the mart's and how drawdown is
+measured, are in the report's limitations section.
 
 ## What I would build next
 
@@ -239,17 +242,17 @@ but nothing surfaces them yet.
 
 ```
 scripts/run_setup.py          create the database and apply the DDL
-scripts/run_ingest.py         incremental, idempotent loader
+scripts/run_ingest.py         incremental, idempotent loader; refreshes the marts
 scripts/run_verify.py         run the assertions, nonzero exit on failure
 scripts/run_refresh_marts.py  refresh the marts layer
-scripts/run_analysis.py       compute reports/metrics.json and the figures
+scripts/run_analysis.py       compute reports/metrics.json, figures and the report
 scripts/run_build_report.py   render the report from metrics.json
 src/crypto_warehouse/         the package the scripts import
 sql/01_schema.sql             schema DDL with design rationale in comments
 sql/02_marts.sql              derived layers (rollups, volatility, correlations)
 sql/03_refresh_marts.sql      mart refresh, dependency-ordered
-sql/04_queries.sql            twenty annotated analytical queries
-sql/05_verify.sql             six assertions, fatal on failure
+sql/04_queries.sql            annotated analytical queries, each standalone
+sql/05_verify.sql             the assertion battery, fatal on failure
 tests/                        the test suite, no database or network needed
 reports/                      the generated report, its metrics and figures
 requirements.txt              exact pins the reported numbers were produced with
