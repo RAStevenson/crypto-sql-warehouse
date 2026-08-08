@@ -1,5 +1,5 @@
 -- Refresh the marts layer in dependency order. Run after each ingestion
--- (pipeline/ingest.py --refresh-marts runs these same three statements).
+-- (scripts/run_ingest.py runs the same mart refresh statements by default).
 --
 -- CONCURRENTLY so a connected Tableau session never reads a half-refreshed
 -- view; it requires the unique indexes created in 02_marts.sql and cannot
