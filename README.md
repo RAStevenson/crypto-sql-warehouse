@@ -85,12 +85,40 @@ python scripts/run_refresh_marts.py             # refresh the marts layer only
 python scripts/run_analysis.py                  # recompute metrics and figures, then the report
 python scripts/run_build_report.py              # rebuild the report alone, without recomputing
 python scripts/run_ingest.py --backfill-days 30 --products BTC-USD
+python scripts/run_add_asset.py XRP-USD --name Ripple   # register and backfill a new asset
 pytest                                          # the test suite
 ```
 
 Rerunning the loader is safe by construction, and `run_verify.py` asserts it.
 After two back-to-back runs the second must have upserted at most one row per
 product, which is the tolerance for an hour boundary crossing between them.
+
+The six seeded assets are a starting set, not a limit. `run_add_asset.py`
+registers any Coinbase product after proving it answers with at least one
+candle in the trailing three days, then backfills it and refreshes the marts,
+so it appears in `marts.tableau_daily_extract` in the same run. Deactivating
+one is a single statement, `UPDATE core.assets SET is_active = false`, which
+stops ingestion without deleting history.
+
+## Scheduling
+
+On my machine the loader runs daily through Windows Task Scheduler. The task
+`crypto-warehouse-ingest` calls `scripts/scheduled_ingest.cmd` at 07:10 local
+time, which runs the default ingest from the repo root and appends its log to
+`logs/`. Because every run resumes from the watermark, a day the machine was
+off is made up in full by the next run, and `raw.ingest_runs` records what
+each run did. To register the same task, with the repo path substituted:
+
+```
+$repo = "C:\path\to\crypto-sql-warehouse"
+Register-ScheduledTask -TaskName 'crypto-warehouse-ingest' `
+  -Action (New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c `"$repo\scripts\scheduled_ingest.cmd`"") `
+  -Trigger (New-ScheduledTaskTrigger -Daily -At 07:10) `
+  -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 1))
+```
+
+On Mac or Linux the equivalent is one cron line calling
+`scripts/run_ingest.py`.
 
 ## Architecture
 
@@ -225,15 +253,13 @@ latest `trade_date`, not a rolling series. `dollar_volume_approx` multiplies
 daily volume by the daily close rather than a traded average price; measured
 against volume times `(H+L+C)/3` over the data loaded as of 2026-08-04, the
 error is -0.04 percent on average and ranges from -4.16 to +3.14 percent (the
-column comment in `sql/02_marts.sql` is the source). Nothing schedules the
-pipeline, so it runs when I run it. The analytical caveats, including how the
+column comment in `sql/02_marts.sql` is the source). The analytical caveats, including how the
 report's correlation window differs from the mart's and how drawdown is
 measured, are in the report's limitations section.
 
 ## What I would build next
 
-Scheduling comes first, either Task Scheduler or cron wrapping the loader. A
-dbt port of the marts layer would add tests and lineage. After that I would
+A dbt port of the marts layer would add tests and lineage. After that I would
 add more granularities, and a data-quality report built from `raw.ingest_runs`
 and the gap-detection query, since the loader now records short API responses
 but nothing surfaces them yet.
@@ -243,6 +269,8 @@ but nothing surfaces them yet.
 ```
 scripts/run_setup.py          create the database and apply the DDL
 scripts/run_ingest.py         incremental, idempotent loader; refreshes the marts
+scripts/run_add_asset.py      validate, register and backfill a new asset
+scripts/scheduled_ingest.cmd  the Task Scheduler entry point, logs to logs/
 scripts/run_verify.py         run the assertions, nonzero exit on failure
 scripts/run_refresh_marts.py  refresh the marts layer
 scripts/run_analysis.py       compute reports/metrics.json, figures and the report
