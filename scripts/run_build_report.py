@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import base64
 import json
+import re
 import subprocess
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -263,7 +264,7 @@ def listing(items: list[str], conjunction: str = "and") -> str:
         return items[0]
     if len(items) == 2:
         return f"{items[0]} {conjunction} {items[1]}"
-    return ", ".join(items[:-1]) + f" {conjunction} {items[-1]}"
+    return ", ".join(items[:-1]) + f", {conjunction} {items[-1]}"
 
 
 def emit_pdf(html_path: Path = OUT, pdf_path: Path = OUT_PDF) -> bool:
@@ -328,7 +329,11 @@ def build_report() -> None:
     # troughs line up in time", "no asset in this set was rising while the
     # others fell"). They hold for the recorded run because every
     # total_log_return is negative; a reload that breaks that condition must
-    # reword them by hand, since no placeholder will update them.
+    # reword them by hand, since no placeholder will update them. The same
+    # run-dependence sits in two body sentences: section 4's claim that the
+    # quietest asset's volatility is below the equal-weight basket's, and
+    # section 5's "one joint decline and no calm stretch". A reload must
+    # re-check those by hand too.
 
     shared_days_phrase = (
         f"{mart['n_days_min']} to {mart['n_days_max']}"
@@ -447,10 +452,10 @@ candles. {prov["incomplete_asset_days"]} of the
 
 <p>A partial day is a different measurement, not a smaller one. Its close is
 whatever the last observed hour printed rather than the 23:00 candle, and its
-volume is the sum of however many hours happened to land. Whether it reads as
-an up day or a down day depends on when the loader ran rather than on the
+volume is the sum of however many hours happened to land. Whether it is an up
+day or a down day depends on when the loader ran rather than on the
 market. Any variance or correlation computed over such a bar inherits that
-distortion. The mart therefore keeps the observed open, high, low, close and
+distortion. The mart therefore keeps the observed open, high, low, close, and
 volume on those days and
 sets every derived column, including <code>log_return</code>, to NULL. It does
 the same on any day that is not adjacent to the previous observation, because a
@@ -464,8 +469,7 @@ the panel keeps only dates where all {n_assets} assets carry a non-null log
 return. Of {prov["observed_dates"]} observed dates,
 {prov["dates_dropped_from_panel"]} are excluded:
 {len(incomplete_dates)} carry at least one partial bar
-({listing(incomplete_dates)}), which disqualifies the date for all
-{n_assets} assets at once, and {n_adjacency} are the first observation
+({listing(incomplete_dates)}), and {n_adjacency} are the first observation
 after one of those, where the adjacency guard applies. Each exclusion removes
 the date for all {n_assets} assets at once, so the panel is not lopsided toward
 any name. What remains is {n_days} days from {panel["first_date"]} to
@@ -500,8 +504,8 @@ position. The zero-correlation counterfactual replaces C with its own diagonal.
 Every asset keeps its variance exactly, and every covariance is set to zero.
 Independence is a benchmark, not a floor. Negative covariances put a portfolio
 below it, which is what a hedge is for, and <code>tests/test_analysis.py</code>
-checks that the arithmetic behaves that way. Six long spot positions in the
-same sector will not supply negative covariance, so for the case at hand the
+checks that the arithmetic behaves that way. {spell(n_assets)} long spot
+positions in the same sector will not supply negative covariance, so for the case at hand the
 independent portfolio is the reference the real number is measured against.</p>
 
 <h3>2.5 One basis, stated once</h3>
@@ -534,7 +538,7 @@ pair in this set that a portfolio could lean on for independence.</p>
   returns over the {n_days}-day panel. The colour axis runs from
   {corr["heatmap_scale_low"]:.2f} to {corr["heatmap_scale_high"]:.2f}
   rather than the full -1 to 1 range, because on a full scale every cell here
-  would render in nearly the same tone; read the colours as differences within
+  would render in nearly the same tone. Read the colours as differences within
   a tight band, not as a general correlation scale. The diagonal is blanked,
   since a variable's correlation with itself is 1 by construction. The assets
   form one block, and the visible variation runs from
@@ -553,9 +557,10 @@ pair in this set that a portfolio could lean on for independence.</p>
 
 <p>Annualised volatility ranges from {quietest["annualised_volatility"]:.3f}
 for {quietest["symbol"]} to {loudest["annualised_volatility"]:.3f} for
-{loudest["symbol"]}, averaging {div["average_single_asset_vol"]:.3f}. That
-average is the reference the portfolio has to beat, because it is what an
-investor holding one of these names at random would have carried.</p>
+{loudest["symbol"]}, averaging {div["average_single_asset_vol"]:.3f}. Figure 2
+shows each asset against that average. The average is the reference the
+portfolio has to beat, because it is what an investor holding one of these
+names at random would have carried.</p>
 
 <figure>
   <img src="{img("asset_volatility.png")}" alt="Annualised volatility by asset, sorted">
@@ -604,7 +609,8 @@ removed {pct(div["risk_removed_actual"])} of the volatility. Holding the same
 {div["zero_correlation_vol"]:.4f}, a reduction of
 {pct(div["risk_removed_if_uncorrelated"])}. The ratio of the two,
 {pct(div["diversification_captured"])}, is the share of the available
-diversification these assets actually delivered.</p>
+diversification these assets actually delivered. Figure 4 puts the three
+volatilities side by side.</p>
 
 <figure>
   <img src="{img("diversification.png")}"
@@ -648,11 +654,12 @@ therefore close to useless as a risk control here. Independence between the
 same {n_assets} variances would have removed
 {pct(div["risk_removed_if_uncorrelated"])}, so the shortfall sits in the
 correlations and not in the number or the size of the positions. The
-correlations that hold deliver {pct(div["diversification_captured"])} of it.
+correlations that hold deliver {pct(div["diversification_captured"])} of that
+available reduction.
 An equal-weight basket of equally correlated assets converges toward the
-average volatility times the square root of the mean correlation, which is
+average volatility times the square root of the mean correlation. That limit is
 {div["equicorrelation_limit_vol"]:.3f} here against today's
-{div["equal_weight_portfolio_vol"]:.3f}, so a seventh name from the same group
+{div["equal_weight_portfolio_vol"]:.3f}, so another name from the same group
 would buy very little.</p>
 
 <p>The sharper version of the same point is in Table 2.
@@ -722,7 +729,7 @@ given the {vol_ratio:.1f} to 1 spread in single-asset volatility it would
 probably produce a lower one.
 The w'Cw calculation also assumes the weights stay at
 {div["weight_per_asset"]:.4f}, which in practice needs rebalancing, and no
-transaction costs, funding, borrow or slippage are modelled anywhere in this
+transaction costs, funding, borrow, or slippage are modelled anywhere in this
 report.</p>
 
 <p>{spell(n_assets)} assets is not the market. These are large-cap
@@ -738,19 +745,19 @@ general would be reading it too widely.</p>
 
 <p>Reproduction needs Python 3.11 or later and a PostgreSQL server you can
 connect to. This run used PostgreSQL
-{prov["server_version"]}; nothing in the SQL needs a feature newer than
+{prov["server_version"]}. Nothing in the SQL needs a feature newer than
 PostgreSQL 10. From the repository root:</p>
 
 <pre><code>pip install -r requirements.txt
 copy .env.example .env
 python scripts/run_setup.py
-python scripts/run_ingest.py --backfill-days 365 --refresh-marts
+python scripts/run_ingest.py --backfill-days 365
 python scripts/run_analysis.py
 python scripts/run_build_report.py</code></pre>
 
 <p><code>run_setup.py</code> creates the database and applies the schema and
 the marts. <code>run_ingest.py</code> backfills hourly candles and refreshes
-the marts; the first run pulls the full backfill and every later run resumes
+the marts. The first run pulls the full backfill and every later run resumes
 from the watermark. <code>run_analysis.py</code> builds the panel, writes
 <code>reports/metrics.json</code> and the four figures under
 <code>reports/figures/</code>, and prints the headline numbers to the log.
@@ -764,10 +771,10 @@ template and stated in section 2.</p>
 <p>The pipeline underneath is checked three ways. <code>python
 scripts/run_verify.py</code> runs {n_checks} checks against a loaded warehouse,
 each fatal on failure, covering hourly gaps, rollup coverage, raw-to-core
-agreement, upsert idempotency, run status and session-timezone invariance of
+agreement, upsert idempotency, run status, and session-timezone invariance of
 the daily rollup. <code>python -m pytest</code>
 runs {n_tests} test functions, none of which need a database or a network,
-covering the ingestion windowing, the API client and the diversification math
+covering the ingestion windowing, the API client, and the diversification math
 in this report. The
 {n_queries} annotated queries in <code>sql/04_queries.sql</code> each run
 standalone against a loaded database.</p>
@@ -789,6 +796,21 @@ PostgreSQL {prov["server_version"]}.</p>
 
 {REPORT_CSS}
 """
+
+    # A figure that no body prose points at ships without saying what it is
+    # evidence for, so an uncited figure fails the build instead of waiting
+    # for a reviewer. Each caption is one "Figure N" occurrence; a citation
+    # anywhere else is the second.
+    uncited = [
+        n
+        for n in re.findall(r"<strong>Figure (\d+)\.</strong>", html)
+        if len(re.findall(rf"\bFigure {n}\b", html)) < 2
+    ]
+    if uncited:
+        raise SystemExit(
+            "not cited outside its own caption: "
+            + ", ".join(f"Figure {n}" for n in uncited)
+        )
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(html, encoding="utf-8")

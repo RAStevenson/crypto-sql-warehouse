@@ -2,7 +2,7 @@
 
 A PostgreSQL warehouse for hourly crypto market data. It pulls candles from
 the public Coinbase Exchange API, lands them in a raw/core/marts schema, and
-derives daily rollups, returns, rolling volatility, drawdowns and pairwise
+derives daily rollups, returns, rolling volatility, drawdowns, and pairwise
 correlations. Annotated analytical queries run against it in `sql/04_queries.sql`.
 
 I built it because I wanted a market-data layer I could query directly instead
@@ -11,7 +11,7 @@ behind my own trading has a much larger pipeline underneath it. This is the
 public, inspectable version of the same habits.
 
 The write-up is in the report, which covers the question, the method, the
-result and the limitations:
+result, and the limitations:
 [PDF](reports/crypto_warehouse_report.pdf) (GitHub renders it inline) or
 [HTML](reports/crypto_warehouse_report.html).
 
@@ -58,7 +58,8 @@ In a terminal, run the following.
    pip install -r requirements.txt
    ```
 
-5. Point `DATABASE_URL` at your server:
+5. Copy the example config, then edit `DATABASE_URL` in `.env` to point at
+   your server:
 
    ```
    copy .env.example .env
@@ -74,8 +75,9 @@ In a terminal, run the following.
 The first load fetches each active product at hourly grain. A year is 8,760
 hours per product and the API caps a request at 300 candles, so the default
 backfill is about 30 requests per product. Later runs resume from the last
-loaded hour (the watermark) and fetch one window per product. The loader
-refreshes the marts when it finishes; `--no-refresh-marts` skips that.
+loaded hour (the watermark). At a daily cadence that is one window per
+product. The loader
+refreshes the marts when it finishes, and `--no-refresh-marts` skips that.
 
 Other entry points:
 
@@ -89,6 +91,41 @@ python scripts/run_add_asset.py XRP-USD --name Ripple   # register and backfill 
 pytest                                          # the test suite
 ```
 
+Every argument of every script, mirroring `--help`:
+
+- `run_setup.py --reset` drops the raw, core, and marts schemas before
+  applying the DDL. It deletes all stored data.
+- `run_ingest.py --backfill-days N` sets how far back to reach, in days
+  (default 365). For a product with no rows yet it is the depth of the first
+  load. Passing it explicitly also makes it a floor on an existing product's
+  resume point, so `--backfill-days 365` against a 90-day warehouse extends it
+  back to a year. Omitting it leaves the run purely incremental.
+- `run_ingest.py --products PRODUCT [PRODUCT ...]` names the product codes to
+  load (default: every asset with `is_active` in `core.assets`). Naming a
+  product explicitly loads it even when `is_active` is false, and the override
+  is logged.
+- `run_ingest.py --no-refresh-marts` skips the mart refresh that otherwise
+  runs after loading.
+- `run_add_asset.py PRODUCT` takes the Coinbase product code as its one
+  required argument, e.g. `XRP-USD`.
+- `run_add_asset.py --symbol SYMBOL` sets the ticker symbol to store
+  (default: the part of the product code before the dash).
+- `run_add_asset.py --name NAME` sets the human-readable asset name
+  (default: the symbol).
+- `run_add_asset.py --backfill-days N` sets the depth of the initial load in
+  days (default 365).
+- `run_add_asset.py --no-backfill` registers the asset only, and the next
+  ingest run loads it.
+- `run_analysis.py --metrics PATH` sets the output path for the metrics file
+  (default `reports/metrics.json`).
+- `run_analysis.py --figures DIR` sets the output directory for the PNG
+  figures (default `reports/figures`).
+- `run_analysis.py --no-report` skips rendering the HTML and PDF report after
+  the metrics and figures.
+- Every script except `run_build_report.py` accepts `--verbose` for
+  debug-level logging. `run_refresh_marts.py` and `run_verify.py` take no
+  other arguments, and `run_build_report.py` takes none at all.
+
 Rerunning the loader is safe by construction, and `run_verify.py` asserts it.
 After two back-to-back runs the second must have upserted at most one row per
 product, which is the tolerance for an hour boundary crossing between them.
@@ -97,7 +134,7 @@ The six seeded assets are a starting set, not a limit. `run_add_asset.py`
 registers any Coinbase product after proving it answers with at least one
 candle in the trailing three days, then backfills it and refreshes the marts,
 so it appears in `marts.tableau_daily_extract` in the same run. Deactivating
-one is a single statement, `UPDATE core.assets SET is_active = false`, which
+one is a single statement, `UPDATE core.assets SET is_active = false WHERE product_code = 'XRP-USD'`, which
 stops ingestion without deleting history.
 
 ## Scheduling
@@ -164,8 +201,9 @@ guard, so unchanged rows are skipped entirely. That leaves no dead tuples, and
 
 The pipeline re-fetches a three-hour overlap on every run to pick up late
 candle revisions. The upsert makes that a no-op in core. It is not free. The
-cost is one extra request per product per run, and three duplicate rows per
-product per run in append-only `raw.candles`. Three hours is a guess at
+cost is at most one extra request per product per run, and up to four
+duplicate rows per product per run in append-only `raw.candles`, three from
+the overlap and one from re-fetching the watermark hour itself. Three hours is a guess at
 Coinbase's revision window, not a measured bound.
 
 Prices are stored as `numeric(20,8)`. A warehouse where `SUM(volume)` drifts by
@@ -197,8 +235,9 @@ discrepancy, which is not.
 
 Incomplete days are kept as rows and excluded from every derived figure. A day
 with fewer than 24 hourly candles still appears in `marts.daily_ohlcv` with its
-open, high, low, close and volume and an `is_complete` flag, but its return, moving averages, volatility
-and drawdown are NULL, and it does not enter the correlation matrix. An earlier
+open, high, low, close, volume, and an `is_complete` flag. Its return, moving
+averages, volatility, and drawdown are NULL, and it does not enter the
+correlation matrix. An earlier
 version filtered incomplete days out at the presentation layer instead, which
 hid the rows from the dashboard while leaving their effect baked into every
 rolling metric computed around them. A trailing partial day carries a fraction
@@ -208,9 +247,9 @@ contamination that already happened upstream.
 
 Rolling metrics are NULL until their window is full. A 30-day annualised
 volatility computed from four observations is not a 30-day volatility, so
-`volatility_30d_ann`, `ma_30d` and `ma_7d` return NULL until they have 30, 30
-and 7 observations. Before this guard, roughly half the published volatility
-values were warm-up values, and the first one for BTC read 0.2076 against 0.4043
+`volatility_30d_ann`, `ma_30d`, and `ma_7d` return NULL until they have 30,
+30, and 7 observations. Before this guard, roughly half the published volatility
+values were warm-up values, and the first one for BTC was 0.2076 against 0.4043
 for its first genuine 30-observation window.
 
 The fact table is not partitioned. Six assets at hourly grain is roughly 53k
@@ -233,7 +272,7 @@ holds one row per asset per day in long format, which is what Tableau's shelf
 model wants.
 The columns are `symbol`, `asset_name`, `trade_date`, `open`, `high`, `low`,
 `close`, `volume_base_units`, `dollar_volume_approx`, `simple_return`, `ma_7d`,
-`ma_30d`, `volatility_30d_ann`, `drawdown_from_peak`, `hours_present` and
+`ma_30d`, `volatility_30d_ann`, `drawdown_from_peak`, `hours_present`, and
 `is_complete`.
 
 Incomplete days are present with NULL derived columns rather than dropped, so a
@@ -250,18 +289,18 @@ psql -d crypto_warehouse -c "\copy (SELECT * FROM marts.tableau_daily_extract OR
 One exchange and one quote currency, so there is no cross-venue check on a
 suspicious print. The correlation mart is a fixed trailing 90 days off the
 latest `trade_date`, not a rolling series. `dollar_volume_approx` multiplies
-daily volume by the daily close rather than a traded average price; measured
+daily volume by the daily close rather than a traded average price. Measured
 against volume times `(H+L+C)/3` over the data loaded as of 2026-08-04, the
-error is -0.04 percent on average and ranges from -4.16 to +3.14 percent (the
-column comment in `sql/02_marts.sql` is the source). The analytical caveats, including how the
+error is -0.04 percent on average and ranges from -4.16 to +3.14 percent. The
+column comment in `sql/02_marts.sql` is the source. The analytical caveats, including how the
 report's correlation window differs from the mart's and how drawdown is
-measured, are in the report's limitations section.
+measured, are in the report.
 
 ## What I would build next
 
 A dbt port of the marts layer would add tests and lineage. After that I would
 add more granularities, and a data-quality report built from `raw.ingest_runs`
-and the gap-detection query, since the loader now records short API responses
+and the gap-detection query, since the loader now logs short API responses
 but nothing surfaces them yet.
 
 ## Layout
@@ -269,11 +308,11 @@ but nothing surfaces them yet.
 ```
 scripts/run_setup.py          create the database and apply the DDL
 scripts/run_ingest.py         incremental, idempotent loader; refreshes the marts
-scripts/run_add_asset.py      validate, register and backfill a new asset
+scripts/run_add_asset.py      validate, register, and backfill a new asset
 scripts/scheduled_ingest.cmd  the Task Scheduler entry point, logs to logs/
 scripts/run_verify.py         run the assertions, nonzero exit on failure
 scripts/run_refresh_marts.py  refresh the marts layer
-scripts/run_analysis.py       compute reports/metrics.json, figures and the report
+scripts/run_analysis.py       compute reports/metrics.json, figures, and the report
 scripts/run_build_report.py   render the report from metrics.json
 src/crypto_warehouse/         the package the scripts import
 sql/01_schema.sql             schema DDL with design rationale in comments
