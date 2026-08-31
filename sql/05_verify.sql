@@ -1,6 +1,6 @@
 -- Smoke test: structural invariants the warehouse must satisfy after any load.
 --
--- Usage (checks 4 and 5 assume the loader just ran twice back to back):
+-- Usage (check 4 assumes the loader just ran twice back to back):
 --   psql -d crypto_warehouse -v ON_ERROR_STOP=1 -f sql/05_verify.sql
 --
 -- Each check is a DO block that raises an exception on failure, so a failing

@@ -171,11 +171,11 @@ SELECT
     m.drawdown_from_peak,
     -- Notional traded, approximated as base volume x closing price. The
     -- exact figure would need per-trade prices, which the candle API does
-    -- not return. Measured against volume x (high+low+close)/3 over the
-    -- loaded data set, the error is -0.04% on average with a per-day range
-    -- of -4.16% to +3.14%: fine for ranking and anomaly detection, wrong
-    -- for anything needing an accounting-grade notional. NULL on
-    -- incomplete days, like every other derived column here.
+    -- not return. Measured 2026-08-04 against volume x (high+low+close)/3
+    -- over the loaded data set, the error is -0.04% on average with a
+    -- per-day range of -4.16% to +3.14%: fine for ranking and anomaly
+    -- detection, wrong for anything needing an accounting-grade notional.
+    -- NULL on incomplete days, like every other derived column here.
     CASE WHEN d.is_complete THEN d.volume * d.close END AS dollar_volume_approx
 -- LEFT JOIN, not a filter: incomplete days keep their row and their OHLCV,
 -- with every derived column NULL. No day disappears without explanation.

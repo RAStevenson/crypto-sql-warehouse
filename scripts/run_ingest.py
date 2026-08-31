@@ -70,9 +70,10 @@ def main() -> int:
         action="store_true",
         help="Skip the mart refresh that otherwise runs after loading",
     )
-    # The old opt-in spelling, kept as an accepted no-op because the published
-    # report's reproduce section names it. Refreshing is the default now, so
-    # passing it changes nothing.
+    # The old opt-in spelling, kept as an accepted no-op because report copies
+    # rendered before 2026-08-24 name it in their reproduce section. Refreshing
+    # is the default now, so passing it changes nothing. It can retire once no
+    # published report names it.
     parser.add_argument("--refresh-marts", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--verbose", action="store_true", help="Debug-level logging")
     args = parser.parse_args()
