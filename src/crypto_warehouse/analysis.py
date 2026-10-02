@@ -39,7 +39,7 @@ FIGURES_DIR = REPORTS_DIR / "figures"
 METRICS_PATH = REPORTS_DIR / "metrics.json"
 
 # Crypto trades every calendar day, so a year is 365 observations rather than
-# the 252 exchange sessions an equity volatility is annualised with.
+# the 252 exchange sessions an equity volatility is annualized with.
 DAYS_PER_YEAR = 365
 
 RETURNS_QUERY = """
@@ -120,12 +120,12 @@ def build_panel(rows: list[tuple[dt.date, str, float]]) -> Panel:
     return Panel(dates=dates, symbols=symbols, returns=returns)
 
 
-def annualised_volatility(returns: np.ndarray) -> np.ndarray:
-    """Per-column sample standard deviation of daily log returns, annualised."""
+def annualized_volatility(returns: np.ndarray) -> np.ndarray:
+    """Per-column sample standard deviation of daily log returns, annualized."""
     return returns.std(axis=0, ddof=1) * np.sqrt(DAYS_PER_YEAR)
 
 
-def annualised_covariance(returns: np.ndarray) -> np.ndarray:
+def annualized_covariance(returns: np.ndarray) -> np.ndarray:
     """Sample covariance of daily log returns, scaled to a one-year horizon."""
     return np.cov(returns, rowvar=False, ddof=1) * DAYS_PER_YEAR
 
@@ -143,7 +143,7 @@ def off_diagonal(matrix: np.ndarray) -> np.ndarray:
 def scale_bounds(values: np.ndarray, step: float = 0.05) -> tuple[float, float]:
     """Round a data range outward to the nearest step.
 
-    Lives here rather than in plots.py because the heatmap's colour axis is
+    Lives here rather than in plots.py because the heatmap's color axis is
     quoted in the report's caption, and a caption that says one range while the
     image shows another is worse than no caption.
     """
@@ -162,8 +162,8 @@ def fisher_interval(r: float, n: int, z: float = 1.959963984540054) -> tuple[flo
     if n <= 3:
         raise ValueError("a Fisher interval needs more than 3 observations")
     half_width = z / np.sqrt(n - 3)
-    centre = np.arctanh(r)
-    return float(np.tanh(centre - half_width)), float(np.tanh(centre + half_width))
+    center = np.arctanh(r)
+    return float(np.tanh(center - half_width)), float(np.tanh(center + half_width))
 
 
 def max_drawdown(returns: np.ndarray) -> np.ndarray:
@@ -244,18 +244,18 @@ def diversification(covariance: np.ndarray) -> dict[str, float]:
 def panel_metrics(panel: Panel) -> dict:
     """Everything the report needs that comes out of the return matrix alone."""
     returns = panel.returns
-    vols = annualised_volatility(returns)
+    vols = annualized_volatility(returns)
     drawdowns = max_drawdown(returns)
     totals = returns.sum(axis=0)
     corr = correlation_matrix(returns)
     off = off_diagonal(corr)
 
-    # Which pair is loosest and which is tightest, named rather than left as
+    # Which pair is least and which is most correlated, named rather than left as
     # bare numbers the reader has to hunt for in the matrix.
     upper = np.triu_indices(panel.n_assets, k=1)
     pair_values = corr[upper]
-    loosest = int(np.argmin(pair_values))
-    tightest = int(np.argmax(pair_values))
+    least_correlated = int(np.argmin(pair_values))
+    most_correlated = int(np.argmax(pair_values))
 
     def pair_name(index: int) -> list[str]:
         return [panel.symbols[upper[0][index]], panel.symbols[upper[1][index]]]
@@ -274,7 +274,7 @@ def panel_metrics(panel: Panel) -> dict:
         "assets": [
             {
                 "symbol": symbol,
-                "annualised_volatility": float(vols[i]),
+                "annualized_volatility": float(vols[i]),
                 "max_drawdown": float(drawdowns[i]),
                 "total_log_return": float(totals[i]),
             }
@@ -290,11 +290,11 @@ def panel_metrics(panel: Panel) -> dict:
             "mean_ci95_high": mean_high,
             "heatmap_scale_low": scale_low,
             "heatmap_scale_high": scale_high,
-            "loosest_pair": pair_name(loosest),
-            "tightest_pair": pair_name(tightest),
+            "least_correlated_pair": pair_name(least_correlated),
+            "most_correlated_pair": pair_name(most_correlated),
             "n_pairs": len(pair_values),
         },
-        "diversification": diversification(annualised_covariance(returns)),
+        "diversification": diversification(annualized_covariance(returns)),
     }
 
 

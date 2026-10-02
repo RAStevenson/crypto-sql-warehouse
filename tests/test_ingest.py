@@ -67,7 +67,7 @@ def test_get_watermark_ignores_backfill_days_on_an_ordinary_run(backfill_days):
     )
 
 
-def test_get_watermark_honours_the_backfill_floor():
+def test_get_watermark_honors_the_backfill_floor():
     """Regression: --backfill-days used to be consulted only when a product had
     no rows at all, so --backfill-days 365 against a 90-day warehouse fetched
     nothing extra and exited 0."""

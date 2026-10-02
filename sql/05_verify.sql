@@ -202,7 +202,7 @@ END $$;
 -- Split out from check 4 rather than folded into it. Check 4 filters to
 -- status = 'succeeded' INSIDE its DISTINCT ON, which means that if the most
 -- recent run for a product failed, check 4 quietly validates the last run
--- that worked and reports a pass. That is the worst possible behaviour for a
+-- that worked and reports a pass. That is the worst possible behavior for a
 -- pipeline gate: it goes green precisely when the pipeline is broken. This
 -- check looks at the newest run per product with no status filter at all.
 DO $$

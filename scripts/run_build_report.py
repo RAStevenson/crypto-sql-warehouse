@@ -1,14 +1,16 @@
 """Render the stakeholder report from reports/metrics.json and its figures.
 
-    python scripts/run_analysis.py
     python scripts/run_build_report.py
 
+scripts/run_analysis.py runs this script itself after writing the metrics, so
+a standalone run is only needed to re-render after a wording change.
+
 Every number in the report is read from metrics.json at render time rather than
-transcribed into the prose, so the report cannot drift from the analysis that
-produced it. Figures are embedded as base64 data URIs, so the HTML is one file
-that opens anywhere with nothing alongside it. When Chrome is installed the
-same HTML is printed headlessly to PDF; when it is not, the HTML is still
-written and the script says so.
+transcribed into the prose, so no number in the report can drift from the
+analysis that produced it. Figures are embedded as base64 data URIs, so the
+HTML is one file that opens anywhere with nothing alongside it. When Chrome is
+installed at its default Windows location the same HTML is printed headlessly
+to PDF; when it is not, the HTML is still written and the script says so.
 """
 
 import sys
@@ -62,10 +64,9 @@ def count_checks() -> int:
     """Count the DO blocks in sql/05_verify.sql.
 
     Each block is one check that aborts the script on failure. Counting them
-    rather than writing "five" keeps the report honest the next time one is
-    added, which already happened once: the file had four until a freshness
-    check was added. Note a block can raise on more than one condition, so this
-    counts checks, not RAISE statements.
+    rather than writing the number keeps the report accurate the next time one
+    is added. Note a block can raise on more than one condition, so this counts
+    checks, not RAISE statements.
     """
     path = SQL_DIR / "05_verify.sql"
     if not path.is_file():
@@ -260,6 +261,8 @@ def spell(n: int, capital: bool = True) -> str:
 
 def listing(items: list[str], conjunction: str = "and") -> str:
     """Comma-separated list with a conjunction before the last item."""
+    if not items:
+        return ""
     if len(items) == 1:
         return items[0]
     if len(items) == 2:
@@ -313,10 +316,12 @@ def build_report() -> None:
     # The least volatile single asset, for the practical comparison in
     # section 4. Read from the metrics rather than named in the prose, because
     # a reload could change which asset it is.
-    quietest = min(assets, key=lambda a: a["annualised_volatility"])
-    loudest = max(assets, key=lambda a: a["annualised_volatility"])
+    least_volatile = min(assets, key=lambda a: a["annualized_volatility"])
+    most_volatile = max(assets, key=lambda a: a["annualized_volatility"])
     worst_dd = min(assets, key=lambda a: a["max_drawdown"])
-    vol_ratio = loudest["annualised_volatility"] / quietest["annualised_volatility"]
+    vol_ratio = (
+        most_volatile["annualized_volatility"] / least_volatile["annualized_volatility"]
+    )
 
     n_down = sum(a["total_log_return"] < 0 for a in assets)
     down_phrase = (
@@ -325,15 +330,66 @@ def build_report() -> None:
         else f"{n_down} of the {n_assets} assets"
     )
 
-    # Three captions assert qualitative facts as literals ("one block", "the
-    # troughs line up in time", "no asset in this set was rising while the
-    # others fell"). They hold for the recorded run because every
-    # total_log_return is negative; a reload that breaks that condition must
-    # reword them by hand, since no placeholder will update them. The same
-    # run-dependence sits in two body sentences: section 4's claim that the
-    # quietest asset's volatility is below the equal-weight basket's, and
-    # section 5's "one joint decline and no calm stretch". A reload must
-    # re-check those by hand too.
+    # Some sentences state qualitative facts as literals that no placeholder
+    # can update. They hold for the recorded run. Each one computable from the
+    # metrics has a condition below, and a reload that breaks one prints a
+    # warning naming the sentence to reword. The thresholds are rough lines,
+    # not tests. A warning rather than a failed build, because this builder
+    # also renders other people's loads; the cost is that a reload which
+    # breaks a condition still writes a report with the false sentence in it,
+    # body prose included, until someone rewords it. Four literals describe
+    # the shape of Figure 3 and cannot be computed from the metrics ("the
+    # troughs line up in time", "rebound together", "mostly depth rather than
+    # timing", "no asset in this set was rising while the others fell"); after
+    # a reload, check them against the figure by eye.
+    limit_gap = (
+        div["equal_weight_portfolio_vol"] - div["equicorrelation_limit_vol"]
+    ) / div["equal_weight_portfolio_vol"]
+    literal_conditions = {
+        "every asset ended the window down (section 1 joint selloff, "
+        "section 5 one joint decline)": n_down == n_assets,
+        "every correlation is positive (section 2.4, Table 1 positive)":
+            corr["off_diagonal_min"] > 0,
+        "correlations sit in one high block (section 3.1 no pair to lean on, "
+        "Figure 1 caption one block)": corr["off_diagonal_min"] >= 0.5,
+        "the basket captured under a quarter of the available reduction "
+        "(section 4 close to useless, Figure 4 close to the left bar)":
+            div["diversification_captured"] < 0.25,
+        "the most volatile asset has at least 1.5 times the least volatile's "
+        "volatility (Figure 2 not interchangeable, section 5 risk parity "
+        "probably lower)": vol_ratio >= 1.5,
+        "the equicorrelation limit is within 5% of the basket (section 4 "
+        "another name would buy very little)": limit_gap < 0.05,
+    }
+
+    # Section 4 compares the least volatile asset with the basket. Compare at
+    # the precision printed, adding places until the two values differ, so the
+    # sentence never prints two equal numbers as one above the other.
+    lv, ew = least_volatile["annualized_volatility"], div["equal_weight_portfolio_vol"]
+    places = 3
+    while round(lv, places) == round(ew, places) and places < 6:
+        places += 1
+    if round(lv, places) < round(ew, places):
+        least_volatile_paragraph = f"""<p>The sharper version of the same point is in Table 2.
+{least_volatile["symbol"]} alone had a volatility of {lv:.{places}f},
+which is below the equal-weight basket's {ew:.{places}f}. Over this window,
+spreading into the other {n_assets - 1} names raised volatility rather than
+lowering it, because the diversification benefit was smaller than the extra
+variance those names brought with them. Equal weight assumes the assets are
+interchangeable, and on this evidence they are not.</p>"""
+    elif round(lv, places) > round(ew, places):
+        least_volatile_paragraph = f"""<p>Table 2 gives the per-asset figures. The least
+volatile asset, {least_volatile["symbol"]}, had a volatility of
+{lv:.{places}f}, above the equal-weight basket's {ew:.{places}f}. Over this
+window, spreading into the other {n_assets - 1} names lowered volatility below
+even the least volatile asset, by
+{round(lv, places) - round(ew, places):.{places}f}.</p>"""
+    else:
+        least_volatile_paragraph = f"""<p>Table 2 gives the per-asset figures. The least
+volatile asset, {least_volatile["symbol"]}, had a volatility of
+{lv:.{places}f}, the same as the equal-weight basket to {places} decimal
+places. Over this window, spreading into the other {n_assets - 1} names
+neither raised nor lowered volatility relative to it.</p>"""
 
     shared_days_phrase = (
         f"{mart['n_days_min']} to {mart['n_days_max']}"
@@ -347,11 +403,29 @@ def build_report() -> None:
     ci_width = corr["mean_ci95_high"] - corr["mean_ci95_low"]
     pair_spread = corr["off_diagonal_max"] - corr["off_diagonal_min"]
     ci_vs_spread = ci_width / pair_spread
+    if ci_vs_spread >= 1:
+        ordering_caveat = """the ordering of individual pairs in the
+correlation matrix is not established by this sample"""
+        ordering_finding = """The ordering of pairs in that figure is therefore not
+established by this sample. What survives is that the whole block sits high,
+not that any particular pair sits above any other."""
+    else:
+        ordering_caveat = """the ordering of individual pairs in the
+correlation matrix is supported only between pairs that sit far apart"""
+        ordering_finding = f"""Two pairs' intervals stop overlapping only when
+their correlations differ by more than about {ci_width:.3f}, so this check
+supports the figure's ordering only between pairs that far apart. Beyond that, what survives is
+that the whole block sits high."""
+
+    def verb(n: int, singular: str, plural: str) -> str:
+        return singular if n == 1 else plural
+
+    incomplete_list = f" ({listing(incomplete_dates)})" if incomplete_dates else ""
 
     asset_rows = "\n".join(
-        f"<tr><td>{a['symbol']}</td><td>{a['annualised_volatility']:.3f}</td>"
+        f"<tr><td>{a['symbol']}</td><td>{a['annualized_volatility']:.3f}</td>"
         f"<td>{pct(a['max_drawdown'])}</td><td>{a['total_log_return']:+.3f}</td></tr>"
-        for a in sorted(assets, key=lambda a: -a["annualised_volatility"])
+        for a in sorted(assets, key=lambda a: -a["annualized_volatility"])
     )
 
     corr_header = "".join(f"<th>{s}</th>" for s in corr["symbols"])
@@ -370,7 +444,7 @@ def build_report() -> None:
   <p class="doctype">Analytical Report</p>
   <h1>Diversification Across {spell(n_assets)} Major Crypto Assets</h1>
   <p class="subtitle">How much volatility an equal-weight holding actually
-  removes, measured on a {n_days}-day complete-day panel</p>
+  removes, measured over {n_days} complete trading days</p>
   <table class="meta">
     <tr><th>Author</th><td>Robert Stevenson</td></tr>
     <tr><th>Repository</th><td>crypto-sql-warehouse</td></tr>
@@ -389,8 +463,9 @@ def build_report() -> None:
 <p>Holding several assets instead of one reduces risk only to the extent that
 those assets move independently. This report measures how much of that
 reduction {spell(n_assets, capital=False)} major crypto assets actually
-deliver. The assets are {symbols}, all USD spot pairs from a single exchange,
-held in equal weight at {pct(div["weight_per_asset"], 2)} each.</p>
+deliver. The assets are {symbols}, all USD spot pairs from a single exchange.
+The portfolio holds them in equal weight, {pct(div["weight_per_asset"], 2)}
+each.</p>
 
 <p>The reason to measure it rather than assume it is that the usual case for
 holding several coins rests on them being different assets with different
@@ -398,28 +473,28 @@ drivers. If their daily returns move together, an equal-weight basket is close
 to a single position spread across {n_assets} tickers, and the extra fees and
 operational surface of {n_assets} holdings buy very little risk reduction.</p>
 
-<p>On this panel the equal-weight portfolio carries an annualised volatility of
+<p class="callout">Every result in this report is computed on one basis, the
+{n_days}-day panel of days where all {n_assets} assets have a clean daily
+return. Section 2 states how that panel is built and section 5 states what it
+cannot support.</p>
+
+<p>On this panel the equal-weight portfolio has an annualized volatility of
 {div["equal_weight_portfolio_vol"]:.4f}, against
 {div["average_single_asset_vol"]:.4f} for the average single asset. That is
-{pct(div["risk_removed_actual"])} of the volatility removed. Had the same
-{n_assets} assets carried the same variances with zero correlation between
+{pct(div["risk_removed_actual"])} of the volatility removed. If the same
+{n_assets} assets had kept their variances with zero correlation between
 them, the portfolio would have come out at
 {div["zero_correlation_vol"]:.4f}, removing
 {pct(div["risk_removed_if_uncorrelated"])}. The portfolio captures
 {pct(div["diversification_captured"])} of the reduction that independence
-between the same {n_assets} variances would have given.</p>
+between the same {n_assets} assets would have given.</p>
 
 <p>Two caveats belong with that number rather than after it. The panel is
-{n_days} days, short enough that the ordering of individual pairs in the
-correlation matrix is not established by this sample. And the window ends
-below where it started for most of these assets, so the
+{n_days} days, short enough that {ordering_caveat}. And {down_phrase} ended
+the window down, so the
 {pct(div["risk_removed_actual"])} is measured partly through a joint selloff,
-which is when correlations run highest. Section 5 gives both in full.</p>
-
-<p class="callout">Every correlation in this report is computed on one basis,
-the {n_days}-day panel of days where all {n_assets} assets have a clean daily
-return. Section 2 states how that panel is built and section 5 states what it
-cannot support.</p>
+which is when correlations are widely reported to run highest. Section 5
+gives both in full.</p>
 </section>
 
 <section>
@@ -429,8 +504,9 @@ cannot support.</p>
 
 <p>Every number comes from <code>marts.daily_metrics</code> in the warehouse
 this repository builds. That mart holds one row per asset per UTC trading day,
-rolled up in SQL from {prov["ohlcv_hourly_rows"]:,} hourly candles in
-<code>core.ohlcv_hourly</code> into {prov["daily_ohlcv_rows"]:,} daily bars in
+rolled up in SQL from {prov["ohlcv_hourly_rows"]:,} hourly candles (the open,
+high, low, close, and volume for each hour) in <code>core.ohlcv_hourly</code>
+into {prov["daily_ohlcv_rows"]:,} daily bars in
 <code>marts.daily_ohlcv</code>. Daily bars are derived from hourly ones rather
 than fetched separately, so any disagreement between the two granularities can
 only be a rollup bug, which is findable, and never a source discrepancy, which
@@ -445,7 +521,7 @@ if any row differs, and the database default of UTC stays as a second layer.</p>
 
 <h3>2.2 The completeness rule, and why partial days are excluded</h3>
 
-<p>The loaded window starts and ends part-way through a day, and the exchange
+<p>The loaded window starts and ends partway through a day, and the exchange
 has real outages, so some asset-days are built from fewer than 24 hourly
 candles. {prov["incomplete_asset_days"]} of the
 {prov["daily_ohlcv_rows"]:,} daily rows are partial in that way.</p>
@@ -459,18 +535,21 @@ distortion. The mart therefore keeps the observed open, high, low, close, and
 volume on those days and
 sets every derived column, including <code>log_return</code>, to NULL. It does
 the same on any day that is not adjacent to the previous observation, because a
-return computed across a gap covers more than one day while carrying a daily
-label.</p>
+return computed across a gap covers more than one day while still labeled as
+one day.</p>
 
 <h3>2.3 Building one panel</h3>
 
 <p>A covariance matrix has to describe one portfolio over one set of dates, so
-the panel keeps only dates where all {n_assets} assets carry a non-null log
+the panel keeps only dates where all {n_assets} assets have a non-null log
 return. Of {prov["observed_dates"]} observed dates,
-{prov["dates_dropped_from_panel"]} are excluded:
-{len(incomplete_dates)} carry at least one partial bar
-({listing(incomplete_dates)}), and {n_adjacency} are the first observation
-after one of those, where the adjacency guard applies. Each exclusion removes
+{prov["dates_dropped_from_panel"]}
+{verb(prov["dates_dropped_from_panel"], "is", "are")} excluded:
+{len(incomplete_dates)} {verb(len(incomplete_dates), "has", "have")} at least
+one partial bar{incomplete_list}, and {n_adjacency}
+{verb(n_adjacency, "is the first observation after one of those, whose return",
+        "are the first observations after those, whose returns")} would span an
+excluded day (section 2.2). Each exclusion removes
 the date for all {n_assets} assets at once, so the panel is not lopsided toward
 any name. What remains is {n_days} days from {panel["first_date"]} to
 {panel["last_date"]}, {n_days * n_assets:,} asset-days with no holes.</p>
@@ -482,17 +561,19 @@ positive semidefinite, and the portfolio variance it produces can come out
 negative. Dropping {prov["dates_dropped_from_panel"]} dates for everyone is the
 cheaper problem.</p>
 
-<h3>2.4 Returns, annualisation and covariance</h3>
+<h3>2.4 Returns, annualization, and covariance</h3>
 
 <p>Returns are logarithmic, ln(close today / close yesterday), because they add
 across periods and are the standard input to a variance estimate. Volatility is
 the sample standard deviation of those daily returns with the n minus 1
-divisor, multiplied by the square root of 365.</p>
+divisor, multiplied by the square root of 365. Volatility is stated per year
+because that is how it is conventionally quoted, which lets these figures be
+compared with published ones.</p>
 
 <p>The 365 is deliberate. Crypto trades every calendar day including weekends
 and holidays, so a year holds 365 return observations. The square root of 252
 that equity work uses counts exchange sessions, and a market with no sessions
-off does not have 252 of them. Annualising this data on 252 would report every
+off does not have 252 of them. Annualizing this data on 252 would report every
 volatility in this report about {pct(equity_understatement, 0)} lower than it
 is.</p>
 
@@ -504,15 +585,15 @@ position. The zero-correlation counterfactual replaces C with its own diagonal.
 Every asset keeps its variance exactly, and every covariance is set to zero.
 Independence is a benchmark, not a floor. Negative covariances put a portfolio
 below it, which is what a hedge is for, and <code>tests/test_analysis.py</code>
-checks that the arithmetic behaves that way. {spell(n_assets)} long spot
-positions in the same sector will not supply negative covariance, so for the case at hand the
-independent portfolio is the reference the real number is measured against.</p>
+checks that the arithmetic behaves that way. Every correlation in Table 1 is
+positive, so for the case at hand the independent portfolio is the reference
+the real number is measured against.</p>
 
 <h3>2.5 One basis, stated once</h3>
 
 <p>The warehouse also publishes <code>marts.pairwise_correlations_90d</code>,
 which reports {mart["min"]:.3f} to {mart["max"]:.3f} across its
-{mart["n_pairs"]} pairs. That mart runs on a trailing 90-day window and lands
+{mart["n_pairs"]} pairs. That mart runs on a trailing 90-day window and has
 {shared_days_phrase} shared days per pair, so it is a
 different window on the same data
 and its numbers are not interchangeable with the ones below. Nothing in this
@@ -526,21 +607,23 @@ report uses them.</p>
 
 <p>All {corr["n_pairs"]} pairs sit between {corr["off_diagonal_min"]:.3f} and
 {corr["off_diagonal_max"]:.3f}, averaging {corr["off_diagonal_mean"]:.3f}. The
-loosest pair is {listing(corr["loosest_pair"])} at
-{corr["off_diagonal_min"]:.3f} and the tightest is
-{listing(corr["tightest_pair"])} at {corr["off_diagonal_max"]:.3f}. There is no
-pair in this set that a portfolio could lean on for independence.</p>
+least correlated pair is {listing(corr["least_correlated_pair"])} at
+{corr["off_diagonal_min"]:.3f} and the most correlated is
+{listing(corr["most_correlated_pair"])} at {corr["off_diagonal_max"]:.3f}. There is no
+pair in this set that a portfolio could lean on for independence. Figure 1
+shows the matrix as a heatmap, and Table 1 gives its values.</p>
 
 <figure>
   <img src="{img("correlation_heatmap.png")}"
        alt="Pairwise correlation heatmap for the {n_assets} assets">
   <figcaption><strong>Figure 1.</strong> Pairwise correlation of daily log
-  returns over the {n_days}-day panel. The colour axis runs from
+  returns over the {n_days}-day panel. The color axis runs from
   {corr["heatmap_scale_low"]:.2f} to {corr["heatmap_scale_high"]:.2f}
   rather than the full -1 to 1 range, because on a full scale every cell here
-  would render in nearly the same tone. Read the colours as differences within
-  a tight band, not as a general correlation scale. The diagonal is blanked,
-  since a variable's correlation with itself is 1 by construction. The assets
+  would render in nearly the same tone. Read the colors as differences within
+  a tight band, not as a general correlation scale. The diagonal is grayed out
+  and left off the color scale, since a variable's correlation with itself is 1
+  by construction. The assets
   form one block, and the visible variation runs from
   {corr["off_diagonal_min"]:.3f} to {corr["off_diagonal_max"]:.3f}, which is a
   band inside the high end rather than a range from low to high.</figcaption>
@@ -555,29 +638,29 @@ pair in this set that a portfolio could lean on for independence.</p>
 
 <h3>3.2 How volatile the assets are individually</h3>
 
-<p>Annualised volatility ranges from {quietest["annualised_volatility"]:.3f}
-for {quietest["symbol"]} to {loudest["annualised_volatility"]:.3f} for
-{loudest["symbol"]}, averaging {div["average_single_asset_vol"]:.3f}. Figure 2
+<p>Annualized volatility ranges from {least_volatile["annualized_volatility"]:.3f}
+for {least_volatile["symbol"]} to {most_volatile["annualized_volatility"]:.3f} for
+{most_volatile["symbol"]}, averaging {div["average_single_asset_vol"]:.3f}. Figure 2
 shows each asset against that average. The average is the reference the
 portfolio has to beat, because it is what an investor holding one of these
-names at random would have carried.</p>
+names at random would have had.</p>
 
 <figure>
-  <img src="{img("asset_volatility.png")}" alt="Annualised volatility by asset, sorted">
-  <figcaption><strong>Figure 2.</strong> Annualised volatility per asset,
+  <img src="{img("asset_volatility.png")}" alt="Annualized volatility by asset, sorted">
+  <figcaption><strong>Figure 2.</strong> Annualized volatility per asset,
   sorted, with the {div["average_single_asset_vol"]:.3f} average marked. The
   assets are not interchangeable in risk terms.
-  {loudest["symbol"]} carries roughly {vol_ratio:.1f} times the volatility of
-  {quietest["symbol"]}, so equal weight is not the same thing as equal risk
+  {most_volatile["symbol"]} has roughly {vol_ratio:.1f} times the volatility of
+  {least_volatile["symbol"]}, so equal weight is not the same thing as equal risk
   contribution.</figcaption>
 </figure>
 
 <table class="data">
   <caption><strong>Table 2.</strong> Per-asset figures over the panel. Drawdown
-  is measured from the running peak within the loaded window, not from an
+  is measured from the running peak within the panel, not from an
   all-time high. Total log return is the sum of the panel's daily log
   returns.</caption>
-  <thead><tr><th>Asset</th><th>Annualised volatility</th><th>Max drawdown</th>
+  <thead><tr><th>Asset</th><th>Annualized volatility</th><th>Max drawdown</th>
     <th>Total log return</th></tr></thead>
   <tbody>{asset_rows}</tbody>
 </table>
@@ -585,25 +668,25 @@ names at random would have carried.</p>
 <h3>3.3 What the co-movement looks like over time</h3>
 
 <p>The correlation matrix states the co-movement as {corr["n_pairs"]} numbers.
-The drawdown paths show the same fact as a picture. The assets fall together
-and recover together, and the differences between them are mostly depth rather
+The drawdown paths in Figure 3 are consistent with it. The assets fall
+together and rebound together, and the differences between them are mostly depth rather
 than timing.</p>
 
 <figure>
-  <img src="{img("drawdown_curves.png")}" alt="Drawdown from running peak for all six assets">
+  <img src="{img("drawdown_curves.png")}"
+       alt="Drawdown from running peak for all {n_assets} assets">
   <figcaption><strong>Figure 3.</strong> Each asset's drawdown from its own
   running peak, all on one axis. The troughs line up in time.
-  The deepest reading is {pct(worst_dd["max_drawdown"])} for
-  {worst_dd["symbol"]}, and no asset in this set was rising while the others
-  fell, which is what would have to happen for the basket to be meaningfully
-  safer than its members.</figcaption>
+  The deepest drawdown is {pct(worst_dd["max_drawdown"])}, for
+  {worst_dd["symbol"]}. No asset in this set was rising while the others
+  fell.</figcaption>
 </figure>
 
 <h3>3.4 The diversification result</h3>
 
-<p>Equal weights on the {n_days}-day covariance matrix give an annualised
+<p>Equal weights on the {n_days}-day covariance matrix give an annualized
 portfolio volatility of {div["equal_weight_portfolio_vol"]:.4f}. The average
-single asset carried {div["average_single_asset_vol"]:.4f}, so the basket
+single asset had {div["average_single_asset_vol"]:.4f}, so the basket
 removed {pct(div["risk_removed_actual"])} of the volatility. Holding the same
 {n_assets} variances with every correlation set to zero would have given
 {div["zero_correlation_vol"]:.4f}, a reduction of
@@ -614,8 +697,8 @@ volatilities side by side.</p>
 
 <figure>
   <img src="{img("diversification.png")}"
-       alt="Average single-asset, equal-weight portfolio and zero-correlation volatility">
-  <figcaption><strong>Figure 4.</strong> Three annualised volatilities: on the
+       alt="Average single-asset, equal-weight portfolio, and zero-correlation volatility">
+  <figcaption><strong>Figure 4.</strong> Three annualized volatilities: on the
   left the average of holding one of these assets, in the middle the
   equal-weight portfolio, on the right the same {n_assets} variances with zero
   correlation. The left-to-middle gap is the benefit received and the
@@ -626,7 +709,7 @@ volatilities side by side.</p>
 
 <table class="data">
   <caption><strong>Table 3.</strong> The four volatility figures and the
-  ratios derived from them, all annualised.</caption>
+  ratios derived from them, all annualized.</caption>
   <thead><tr><th>Quantity</th><th>Value</th></tr></thead>
   <tbody>
     <tr><td>Average single-asset volatility</td>
@@ -651,32 +734,26 @@ volatilities side by side.</p>
 <p>Spreading a holding across these {n_assets} names removed
 {pct(div["risk_removed_actual"])} of its volatility. Counting names is
 therefore close to useless as a risk control here. Independence between the
-same {n_assets} variances would have removed
+same {n_assets} assets would have removed
 {pct(div["risk_removed_if_uncorrelated"])}, so the shortfall sits in the
 correlations and not in the number or the size of the positions. The
-correlations that hold deliver {pct(div["diversification_captured"])} of that
+actual correlations deliver {pct(div["diversification_captured"])} of that
 available reduction.
 An equal-weight basket of equally correlated assets converges toward the
 average volatility times the square root of the mean correlation. That limit is
-{div["equicorrelation_limit_vol"]:.3f} here against today's
+{div["equicorrelation_limit_vol"]:.3f} here against the portfolio's
 {div["equal_weight_portfolio_vol"]:.3f}, so another name from the same group
 would buy very little.</p>
 
-<p>The sharper version of the same point is in Table 2.
-{quietest["symbol"]} alone carried {quietest["annualised_volatility"]:.3f},
-which is below the equal-weight basket's
-{div["equal_weight_portfolio_vol"]:.3f}. Over this window, spreading into the
-other {n_assets - 1} names raised volatility rather than lowering it, because
-the diversification benefit was smaller than the extra variance those names
-brought with them. Equal weight assumes the assets are interchangeable, and on
-this evidence they are not.</p>
+{least_volatile_paragraph}
 
 <p>Two consequences follow for anyone using this warehouse. First, position
 size and hedging do the work that name count does not. At a mean correlation
 of {corr["off_diagonal_mean"]:.3f}, total exposure is the variable that moves
 portfolio risk. Second, the quantity worth monitoring is the correlation level
-itself, which is what <code>marts.pairwise_correlations_90d</code> exists to
-track on a rolling basis. Only a fall in that correlation would change the
+itself. <code>marts.pairwise_correlations_90d</code> recomputes it over the
+trailing 90 days at every refresh and keeps no history, so following it over
+time means saving a copy after each refresh. Only a fall in that correlation would change the
 conclusion here.</p>
 
 <p>None of this is an argument about which assets to hold. It measures what the
@@ -690,12 +767,11 @@ window does not cover.</p>
 <p>The panel is {n_days} days. A single pair at the average
 correlation of {corr["off_diagonal_mean"]:.3f} has a 95% Fisher interval of
 {corr["mean_ci95_low"]:.3f} to {corr["mean_ci95_high"]:.3f} on this many
-observations, a width of {ci_width:.3f}. The entire spread between the loosest
-and tightest pair in Figure 1 is {pair_spread:.3f}, so the uncertainty on any
-one correlation is about {pct(ci_vs_spread, 0)} as wide as the range the
-heatmap is showing. The ordering of pairs in that figure is therefore not
-established by this sample. What survives is that the whole block sits high,
-not that any particular pair sits above any other.</p>
+observations, a width of {ci_width:.3f}. Fisher's method keeps the interval
+inside -1 to 1 and accurate for correlations as high as these. The entire spread between the
+least and most correlated pair in Figure 1 is {pair_spread:.3f}, so the
+uncertainty on any one correlation is about {pct(ci_vs_spread, 0)} as wide as
+the range the heatmap is showing. {ordering_finding}</p>
 
 <p>The data covers one exchange and one quote currency. All candles come from
 Coinbase and every pair is quoted in USD. There is no second venue to check the
@@ -704,32 +780,33 @@ covariance matrix as if it were market structure. Common exposure to the dollar
 sits inside every one of these correlations, and with no second quote currency
 loaded there is no way to separate it out.</p>
 
-<p>Correlations are not stable, and they rise in selloffs.
-This is the limitation that matters most for how the headline number should be
-read. Correlation between risk assets rises when they fall together, which is
-when diversification is being asked to do something. This panel cannot test
-that on its own, because it holds one joint decline and no calm stretch to
+<p>Correlations are not stable, and they are widely reported to rise in
+selloffs. This is the limitation that matters most for how the diversification
+result should be read, because a selloff is when diversification is being
+asked to do something. This panel cannot test that pattern on its own,
+because it holds one joint decline and no calm stretch to
 compare it against. That decline is visible in Figure 3, and
 {down_phrase} ended the window down. The
 {pct(div["risk_removed_actual"])} is therefore a reading taken partly through a
 stressed market, and it is more likely to be optimistic than conservative as a
-forecast of the next one.</p>
+forecast for the next selloff.</p>
 
-<p>Drawdown is measured from the start of the loaded window.
+<p>Drawdown is measured from the start of the panel.
 The peak in Table 2 and Figure 3 is the highest cumulative level since
 {panel["first_date"]}, not an all-time high. Backfilling earlier history would
 change every drawdown figure in this report. These are not the numbers a
 trading desk means by maximum drawdown.</p>
 
-<p>Equal weight is not an optimised portfolio. The weights are
+<p>Equal weight is not an optimized portfolio. The weights are
 {div["weight_per_asset"]:.4f} each because that is the simplest allocation to
-state, not because anything here selected them. A minimum-variance or
-risk-parity allocation would produce a different portfolio volatility, and
-given the {vol_ratio:.1f} to 1 spread in single-asset volatility it would
-probably produce a lower one.
+state, not because anything here selected them. A minimum-variance allocation
+cannot have a higher portfolio volatility than equal weight on this panel,
+because it is chosen to minimize exactly that. Given the {vol_ratio:.1f} to 1
+spread in single-asset volatility, a risk-parity allocation would probably
+have a lower one too.
 The w'Cw calculation also assumes the weights stay at
 {div["weight_per_asset"]:.4f}, which in practice needs rebalancing, and no
-transaction costs, funding, borrow, or slippage are modelled anywhere in this
+transaction costs, funding, borrow, or slippage are modeled anywhere in this
 report.</p>
 
 <p>{spell(n_assets)} assets is not the market. These are large-cap
@@ -743,28 +820,32 @@ general would be reading it too widely.</p>
 <section>
 <h2>6. How to reproduce</h2>
 
-<p>Reproduction needs Python 3.11 or later and a PostgreSQL server you can
+<p>Reproduction needs Python 3.11 or 3.12 and a PostgreSQL server you can
 connect to. This run used PostgreSQL
 {prov["server_version"]}. Nothing in the SQL needs a feature newer than
-PostgreSQL 10. From the repository root:</p>
+PostgreSQL 10. From the repository root (on Mac or Linux, use
+<code>cp</code> in place of <code>copy</code>):</p>
 
 <pre><code>pip install -r requirements.txt
 copy .env.example .env
 python scripts/run_setup.py
 python scripts/run_ingest.py --backfill-days 365
-python scripts/run_analysis.py
-python scripts/run_build_report.py</code></pre>
+python scripts/run_analysis.py</code></pre>
 
-<p><code>run_setup.py</code> creates the database and applies the schema and
+<p>Between the copy and <code>run_setup.py</code>, edit <code>DATABASE_URL</code>
+in <code>.env</code> to point at your server. <code>run_setup.py</code> creates
+the database and applies the schema and
 the marts. <code>run_ingest.py</code> backfills hourly candles and refreshes
 the marts. The first run pulls the full backfill and every later run resumes
-from the watermark. <code>run_analysis.py</code> builds the panel, writes
-<code>reports/metrics.json</code> and the four figures under
-<code>reports/figures/</code>, and prints the headline numbers to the log.
-<code>run_build_report.py</code> renders this document from that metrics file
-and prints it to PDF when Chrome is installed. Every measured quantity in the
-prose above is read from <code>reports/metrics.json</code> at render time, so no
-result here can drift from the analysis that produced it. The fixed conventions
+from the watermark, the last hour already loaded. <code>run_analysis.py</code>
+builds the panel, writes <code>reports/metrics.json</code> and the four figures
+under <code>reports/figures/</code>, prints the main results to the log, and
+then renders this document. When Chrome is installed at its default Windows
+location, the render also prints the document to PDF.
+<code>run_build_report.py</code> repeats only the render, for a wording change
+that needs no new numbers. Every measured quantity in the prose above is read
+from <code>reports/metrics.json</code> at render time, so no number here can
+drift from the analysis that produced it. The fixed conventions
 the method rests on, the 365-day year and the 24-hour day, are written into the
 template and stated in section 2.</p>
 
@@ -774,8 +855,8 @@ each fatal on failure, covering hourly gaps, rollup coverage, raw-to-core
 agreement, upsert idempotency, run status, and session-timezone invariance of
 the daily rollup. <code>python -m pytest</code>
 runs {n_tests} test functions, none of which need a database or a network,
-covering the ingestion windowing, the API client, and the diversification math
-in this report. The
+covering the ingestion windowing and watermark, the API client, asset
+registration, and the diversification math in this report. The
 {n_queries} annotated queries in <code>sql/04_queries.sql</code> each run
 standalone against a loaded database.</p>
 
@@ -799,18 +880,22 @@ PostgreSQL {prov["server_version"]}.</p>
 
     # A figure that no body prose points at ships without saying what it is
     # evidence for, so an uncited figure fails the build instead of waiting
-    # for a reviewer. Each caption is one "Figure N" occurrence; a citation
-    # anywhere else is the second.
+    # for a reviewer. Figure and table captions are stripped before counting,
+    # so a mention in a caption does not count as a citation.
+    body = re.sub(r"<(fig)?caption>.*?</(fig)?caption>", "", html, flags=re.S)
     uncited = [
         n
         for n in re.findall(r"<strong>Figure (\d+)\.</strong>", html)
-        if len(re.findall(rf"\bFigure {n}\b", html)) < 2
+        if not re.search(rf"\bFigure {n}\b", body)
     ]
     if uncited:
         raise SystemExit(
-            "not cited outside its own caption: "
-            + ", ".join(f"Figure {n}" for n in uncited)
+            "not cited from body prose: " + ", ".join(f"Figure {n}" for n in uncited)
         )
+
+    for condition, holds in literal_conditions.items():
+        if not holds:
+            print(f"warning: no longer true on this data, reword by hand: {condition}")
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(html, encoding="utf-8")
