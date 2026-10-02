@@ -1,10 +1,10 @@
-# Exact versions this project was last verified against. Python 3.11+.
+# Exact versions this project was last verified against. Python 3.11 or 3.12,
+# because numpy 1.26.3 publishes no wheels for 3.13 or later.
 #
 #   pip install -r requirements.txt
 #   python scripts/run_setup.py
 #   python scripts/run_ingest.py
 #   python scripts/run_analysis.py
-#   python scripts/run_build_report.py
 #
 # 2026-08-03: verified against PostgreSQL 17 on Windows, full test suite green
 # with no database and no network.

@@ -16,37 +16,37 @@
   "assets": [
     {
       "symbol": "ADA",
-      "annualised_volatility": 0.6836496136686054,
+      "annualized_volatility": 0.6836496136686054,
       "max_drawdown": -0.49203539823008846,
       "total_log_return": -0.3246166404839698
     },
     {
       "symbol": "BTC",
-      "annualised_volatility": 0.35722926975051594,
+      "annualized_volatility": 0.35722926975051594,
       "max_drawdown": -0.2880299620474407,
       "total_log_return": -0.1309237044164226
     },
     {
       "symbol": "DOGE",
-      "annualised_volatility": 0.4573085561030542,
+      "annualized_volatility": 0.4573085561030542,
       "max_drawdown": -0.403114998181881,
       "total_log_return": -0.2771818020433921
     },
     {
       "symbol": "ETH",
-      "annualised_volatility": 0.49996702752197936,
+      "annualized_volatility": 0.49996702752197936,
       "max_drawdown": -0.36300608423790626,
       "total_log_return": -0.16623130115860885
     },
     {
       "symbol": "LINK",
-      "annualised_volatility": 0.498789592873905,
+      "annualized_volatility": 0.498789592873905,
       "max_drawdown": -0.3291340052258306,
       "total_log_return": -0.11779939862585656
     },
     {
       "symbol": "SOL",
-      "annualised_volatility": 0.5155995502252123,
+      "annualized_volatility": 0.5155995502252123,
       "max_drawdown": -0.36164749383730477,
       "total_log_return": -0.17700877037802196
     }
@@ -117,11 +117,11 @@
     "mean_ci95_high": 0.8579815623098643,
     "heatmap_scale_low": 0.7000000000000001,
     "heatmap_scale_high": 0.9,
-    "loosest_pair": [
+    "least_correlated_pair": [
       "ADA",
       "BTC"
     ],
-    "tightest_pair": [
+    "most_correlated_pair": [
       "ETH",
       "LINK"
     ],

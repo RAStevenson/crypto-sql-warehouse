@@ -135,7 +135,7 @@ def _backoff_seconds(attempt: int) -> float:
 def _retry_after_seconds(response: requests.Response) -> float | None:
     """The server's own Retry-After, in seconds, when it gave a usable one.
 
-    Only the delta-seconds form is honoured. The HTTP-date form is legal but
+    Only the delta-seconds form is honored. The HTTP-date form is legal but
     Coinbase does not send it, and parsing it to save a request is not worth
     the code."""
     header = response.headers.get("Retry-After")

@@ -33,7 +33,7 @@ def parse_product_code(product_code: str) -> tuple[str, str]:
 
     The API would reject a malformed code too, but with a 404 that reads as
     "no such product", and the operator's actual mistake (wrong separator, a
-    stray space) deserves a message that names it. Lowercase is normalised
+    stray space) deserves a message that names it. Lowercase is normalized
     rather than rejected because Coinbase treats codes case-insensitively and
     the schema seeds are upper.
     """

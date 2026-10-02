@@ -30,7 +30,7 @@ class NoticeLogger(list):
     arrives.
 
     psycopg2 otherwise buffers notices in a plain list capped at 50 entries,
-    which is exactly the wrong behaviour for a verify script whose whole job
+    which is exactly the wrong behavior for a verify script whose whole job
     is to show the RAISE NOTICE lines. Nothing is retained, so a long run
     cannot grow the list without bound.
     """

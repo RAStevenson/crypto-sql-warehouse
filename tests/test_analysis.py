@@ -133,7 +133,7 @@ def test_perfectly_correlated_panel_captures_no_diversification():
     """Columns that are scalar multiples of one another correlate at 1, so the
     equal-weight portfolio volatility equals the weighted average of the single
     asset volatilities and nothing is removed."""
-    cov = analysis.annualised_covariance(collinear_panel())
+    cov = analysis.annualized_covariance(collinear_panel())
     result = analysis.diversification(cov)
     assert result["equal_weight_portfolio_vol"] == pytest.approx(
         result["average_single_asset_vol"]
@@ -146,7 +146,7 @@ def test_perfectly_correlated_panel_captures_no_diversification():
 
 
 def test_uncorrelated_panel_captures_all_available_diversification():
-    cov = analysis.annualised_covariance(orthogonal_panel())
+    cov = analysis.annualized_covariance(orthogonal_panel())
     off = analysis.off_diagonal(cov)
     assert np.allclose(off, 0.0)
     result = analysis.diversification(cov)
@@ -157,7 +157,7 @@ def test_uncorrelated_panel_captures_all_available_diversification():
 def test_diversification_captured_sits_between_the_two_extremes():
     """A panel that is neither collinear nor orthogonal lands strictly inside."""
     returns = orthogonal_panel() + collinear_panel(scales=(0.01, 0.01, 0.01))
-    result = analysis.diversification(analysis.annualised_covariance(returns))
+    result = analysis.diversification(analysis.annualized_covariance(returns))
     assert 0.0 < result["diversification_captured"] < 1.0
     assert (
         result["zero_correlation_vol"]
@@ -167,7 +167,7 @@ def test_diversification_captured_sits_between_the_two_extremes():
 
 
 def test_diversification_reports_equal_weights():
-    cov = analysis.annualised_covariance(orthogonal_panel())
+    cov = analysis.annualized_covariance(orthogonal_panel())
     assert analysis.diversification(cov)["weight_per_asset"] == pytest.approx(1 / 3)
 
 
@@ -192,22 +192,22 @@ def test_identical_assets_leave_the_portfolio_where_it_started():
 # --------------------------------------------------------------------------
 
 
-def test_annualised_volatility_is_sample_stdev_times_root_365():
+def test_annualized_volatility_is_sample_stdev_times_root_365():
     returns = orthogonal_panel()
     expected = returns.std(axis=0, ddof=1) * np.sqrt(365)
-    assert np.allclose(analysis.annualised_volatility(returns), expected)
+    assert np.allclose(analysis.annualized_volatility(returns), expected)
 
 
-def test_annualised_volatility_uses_the_n_minus_one_divisor():
+def test_annualized_volatility_uses_the_n_minus_one_divisor():
     returns = np.array([[0.01], [-0.01], [0.01], [-0.01]])
     # Population stdev is 0.01; the sample stdev over 4 points is larger.
-    assert analysis.annualised_volatility(returns)[0] > 0.01 * np.sqrt(365)
+    assert analysis.annualized_volatility(returns)[0] > 0.01 * np.sqrt(365)
 
 
-def test_annualised_covariance_diagonal_matches_annualised_variance():
+def test_annualized_covariance_diagonal_matches_annualized_variance():
     returns = orthogonal_panel() + collinear_panel(scales=(0.01, 0.02, 0.005))
-    cov = analysis.annualised_covariance(returns)
-    vols = analysis.annualised_volatility(returns)
+    cov = analysis.annualized_covariance(returns)
+    vols = analysis.annualized_volatility(returns)
     assert np.allclose(np.sqrt(np.diag(cov)), vols)
 
 
@@ -325,7 +325,7 @@ def test_panel_metrics_reports_the_panel_it_was_given():
     assert metrics["diversification"]["diversification_captured"] == pytest.approx(1.0, abs=1e-12)
 
 
-def test_panel_metrics_output_is_json_serialisable():
+def test_panel_metrics_output_is_json_serializable():
     """metrics.json is the contract with the report builder, so nothing in it
     may be a numpy scalar that json refuses to write."""
     import json

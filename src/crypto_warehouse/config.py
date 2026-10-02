@@ -1,7 +1,7 @@
 """Connection settings and logging setup.
 
 One place that knows how to turn DATABASE_URL into a psycopg2 connection, so
-every entry point in scripts/ gets the same behaviour and the same error
+every entry point in scripts/ gets the same behavior and the same error
 message when it is missing.
 """
 

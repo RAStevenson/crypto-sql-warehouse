@@ -484,7 +484,7 @@ ORDER BY correlation DESC, asset_a, asset_b;
 -- Technique: a frame that excludes the current row. The baseline runs
 -- ROWS BETWEEN 30 PRECEDING AND 1 PRECEDING so today's spike does not
 -- inflate the average it is being measured against, a window-function
--- analogue of avoiding data leakage.
+-- analog of avoiding data leakage.
 --
 -- The CTE reads complete days only. A partial day's volume is whatever
 -- fraction of the session happened to be loaded, so letting one into the

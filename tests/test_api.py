@@ -1,4 +1,4 @@
-"""Payload mapping and retry behaviour, with no network."""
+"""Payload mapping and retry behavior, with no network."""
 
 from __future__ import annotations
 
@@ -182,7 +182,7 @@ def test_fetch_window_retries_429_then_succeeds(no_sleep):
     assert no_sleep == [1.0, 2.0]
 
 
-def test_fetch_window_honours_retry_after_on_429(no_sleep):
+def test_fetch_window_honors_retry_after_on_429(no_sleep):
     session = FakeSession(
         [
             FakeResponse(429, headers={"Retry-After": "7"}),

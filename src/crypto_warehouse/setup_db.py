@@ -20,7 +20,7 @@ from .config import ConfigError
 
 log = logging.getLogger(__name__)
 
-SCHEMAS = ("marts", "core", "raw")  # drop order: dependants first
+SCHEMAS = ("marts", "core", "raw")  # drop order: dependents first
 
 
 def database_exists(dsn: str) -> bool:

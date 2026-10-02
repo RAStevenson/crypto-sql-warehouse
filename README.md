@@ -1,33 +1,34 @@
 # crypto-sql-warehouse
 
-A PostgreSQL warehouse for hourly crypto market data. It pulls candles from
-the public Coinbase Exchange API, lands them in a raw/core/marts schema, and
-derives daily rollups, returns, rolling volatility, drawdowns, and pairwise
-correlations. Annotated analytical queries run against it in `sql/04_queries.sql`.
+A PostgreSQL warehouse for hourly crypto market data. It pulls hourly candles
+from the public Coinbase Exchange API. A candle is the open, high, low, close,
+and volume for one hour. The warehouse stores them in three schemas named raw,
+core, and marts, laid out under Architecture. The marts hold daily rollups,
+returns, rolling volatility, drawdowns, and pairwise correlations. Annotated
+analytical queries run against the warehouse in `sql/04_queries.sql`.
 
 I built it because I wanted a market-data layer I could query directly instead
 of re-downloading CSVs every time I had a question. The private research system
 behind my own trading has a much larger pipeline underneath it. This is the
 public, inspectable version of the same habits.
 
-The write-up is in the report, which covers the question, the method, the
-result, and the limitations:
-[PDF](reports/crypto_warehouse_report.pdf) (GitHub renders it inline) or
-[HTML](reports/crypto_warehouse_report.html).
+The [report](reports/crypto_warehouse_report.pdf) asks how much volatility an
+equal-weight holding of the six assets the warehouse loads actually removes.
+It covers the method, the result, and the limitations. GitHub renders the PDF
+inline.
 
-Its headline finding, on the panel ending 2026-08-02, is that spreading
-capital equally across all six assets removes only 8.8 percent of the
-volatility you would carry holding the average one. If the six were
-uncorrelated it would remove 58.4 percent. Measured over 113 complete trading
-days, every pair of the six correlates between 0.73 and 0.90, mean 0.80. A
-reload moves these figures, and the generated report is their live copy.
-Holding six of these is close to holding one, and the report explains what
+Its main finding, over the 113 complete trading days ending 2026-08-02, is that
+spreading capital equally across all six assets removes only 8.8 percent of
+the volatility of holding the average one. If the six were uncorrelated it
+would remove 58.4 percent. Every pair of the six correlates between 0.73 and
+0.90, mean 0.80. A reload moves these figures, and the generated report is
+their live copy. Holding six of these is close to holding one, and the report explains what
 that does and does not justify.
 
 ## Quick start
 
-Requires git, Python 3.11 or later, and a PostgreSQL server you can connect to.
-Verified on PostgreSQL 17.10 and Python 3.11.3. Nothing in the SQL needs a
+Requires git, Python 3.11 or 3.12, and a PostgreSQL server you can connect to.
+Verified on PostgreSQL 17.10 and Python 3.11. Nothing in the SQL needs a
 feature newer than PostgreSQL 10.
 
 In a terminal, run the following.
@@ -58,8 +59,9 @@ In a terminal, run the following.
    pip install -r requirements.txt
    ```
 
-5. Copy the example config, then edit `DATABASE_URL` in `.env` to point at
-   your server:
+5. Copy the example config (on Mac or Linux the command is
+   `cp .env.example .env`), then edit `DATABASE_URL` in `.env` to point at your
+   server:
 
    ```
    copy .env.example .env
@@ -72,19 +74,28 @@ In a terminal, run the following.
    python scripts/run_ingest.py
    ```
 
-The first load fetches each active product at hourly grain. A year is 8,760
-hours per product and the API caps a request at 300 candles, so the default
-backfill is about 30 requests per product. Later runs resume from the last
-loaded hour (the watermark). At a daily cadence that is one window per
-product. The loader
-refreshes the marts when it finishes, and `--no-refresh-marts` skips that.
+7. Compute the metrics and figures from the loaded data, and render the
+   report:
+
+   ```
+   python scripts/run_analysis.py
+   ```
+
+The first run of `run_ingest.py` fetches every active product at hourly grain.
+A product is a Coinbase trading pair such as BTC-USD. The six seeded products
+start out active. A year is 8,760 hours per product and the API caps a request
+at 300 candles, so the default backfill is about 30 requests per product.
+Later runs resume from the last loaded hour, called the watermark. Each run
+also re-fetches the three hours before it, for the reason given under Design
+decisions. At a daily cadence, a later run needs one request per product. The
+loader refreshes the marts when it finishes, and `--no-refresh-marts` skips
+that.
 
 Other entry points:
 
 ```
 python scripts/run_verify.py                    # warehouse assertions, nonzero exit on failure
 python scripts/run_refresh_marts.py             # refresh the marts layer only
-python scripts/run_analysis.py                  # recompute metrics and figures, then the report
 python scripts/run_build_report.py              # rebuild the report alone, without recomputing
 python scripts/run_ingest.py --backfill-days 30 --products BTC-USD
 python scripts/run_add_asset.py XRP-USD --name Ripple   # register and backfill a new asset
@@ -117,9 +128,12 @@ Every argument of every script, mirroring `--help`:
 - `run_add_asset.py --no-backfill` registers the asset only, and the next
   ingest run loads it.
 - `run_analysis.py --metrics PATH` sets the output path for the metrics file
-  (default `reports/metrics.json`).
+  (default `reports/metrics.json`). Any other path skips the report, because
+  the report builder reads only the default.
 - `run_analysis.py --figures DIR` sets the output directory for the PNG
-  figures (default `reports/figures`).
+  figures (default `reports/figures`). The report always embeds the figures in
+  `reports/figures`, so with another directory it shows the older figures
+  there beside the new numbers.
 - `run_analysis.py --no-report` skips rendering the HTML and PDF report after
   the metrics and figures.
 - Every script except `run_build_report.py` accepts `--verbose` for
@@ -127,8 +141,11 @@ Every argument of every script, mirroring `--help`:
   other arguments, and `run_build_report.py` takes none at all.
 
 Rerunning the loader is safe by construction, and `run_verify.py` asserts it.
-After two back-to-back runs the second must have upserted at most one row per
-product, which is the tolerance for an hour boundary crossing between them.
+After two back-to-back runs the second must have upserted (inserted or
+updated) at most one row per product, which is the tolerance for an hour
+boundary crossing between them. That check holds only straight after such a
+pair of runs. After an ordinary daily load, the latest run has upserted a
+day of new candles and the check fails.
 
 The six seeded assets are a starting set, not a limit. `run_add_asset.py`
 registers any Coinbase product after proving it answers with at least one
@@ -188,49 +205,50 @@ Coinbase Exchange API (public, no key)
 
 `raw.candles` is append-only, so a transform bug downstream is recoverable
 without calling the API again. `raw.ingest_runs` is the exception that does get
-updated, because it carries run status and row counts. Core is the layer
+updated, because it holds run status and row counts. Core is the layer
 queries trust. Marts are presentation-shaped and rebuilt from core.
 
 ## Design decisions
 
 Idempotency lives in the database, not the pipeline. The upsert targets the
-natural primary key `(asset_id, ts_utc)`, so replaying any window is a no-op
-unless the source data changed. The `DO UPDATE` carries an `IS DISTINCT FROM`
+natural primary key `(asset_id, ts_utc)`, so replaying any window changes
+nothing unless the source data changed. The `DO UPDATE` has an `IS DISTINCT FROM`
 guard, so unchanged rows are skipped entirely. That leaves no dead tuples, and
 `updated_at` only moves when the data moved.
 
 The pipeline re-fetches a three-hour overlap on every run to pick up late
-candle revisions. The upsert makes that a no-op in core. It is not free. The
+candle revisions. For candles that were not revised, the upsert leaves core
+unchanged. The overlap is not free. The
 cost is at most one extra request per product per run, and up to four
 duplicate rows per product per run in append-only `raw.candles`, three from
 the overlap and one from re-fetching the watermark hour itself. Three hours is a guess at
 Coinbase's revision window, not a measured bound.
 
-Prices are stored as `numeric(20,8)`. A warehouse where `SUM(volume)` drifts by
+Prices are stored as `numeric(20,8)` and volumes as `numeric(30,8)`. A warehouse where `SUM(volume)` drifts by
 rounding is a warehouse people stop trusting. The API returns JSON numbers,
 which Python would ordinarily parse as float64, so the client parses them
 straight to `Decimal` instead and psycopg2 adapts that to `numeric`. Exactness
 holds end to end rather than starting at the database boundary.
 
-Queries are written to be independent of the session timezone, and that exists
-because of a bug. `date_trunc()` on a `timestamptz` buckets by the session
-timezone, so on a server defaulting to America/Chicago the monthly aggregate in
-Q02 split its months at 05:00 UTC. I found it running the query set against a
+Queries are written to be independent of the session timezone, and the reason
+is a bug. `date_trunc()` on a `timestamptz` buckets by the session
+timezone, so on a server defaulting to America/Chicago the monthly aggregate query
+(Q02 in `sql/04_queries.sql`) split its months at 05:00 UTC. I found it running the query set against a
 live instance, and the `-05` display offsets were the visible symptom. My first
 fix was `ALTER DATABASE ... SET timezone = 'UTC'`, which turned out to be
-insufficient, because it only sets a default for sessions opened afterwards
+insufficient, because it only sets a default for sessions opened afterward
 and any client can override it. `PGOPTIONS='-c timezone=...'` goes straight
 through it, and any client that sets its own session timezone at connect
 time, as JDBC drivers commonly do, gets through it the same way. The queries now use
 `ts_utc AT TIME ZONE 'UTC'`, which returns a plain timestamp and cannot move.
-The database pin stays as a second layer, and the verify suite carries a
+The database pin stays as a second layer, and the verify suite has a
 regression test. It re-runs the daily rollup's own defining query, read live
 from the catalog, once under America/Chicago and once under UTC, and fails if
 any row differs.
 
 Daily bars are derived from hourly ones in SQL rather than fetched at daily
-granularity. That gives one source of truth, so a daily against hourly
-disagreement can only be a rollup bug, which is findable, and never a source
+granularity. Both granularities then come from one source, so a disagreement
+between daily and hourly bars can only be a rollup bug, which is findable, and never a source
 discrepancy, which is not.
 
 Incomplete days are kept as rows and excluded from every derived figure. A day
@@ -240,12 +258,12 @@ averages, volatility, and drawdown are NULL, and it does not enter the
 correlation matrix. An earlier
 version filtered incomplete days out at the presentation layer instead, which
 hid the rows from the dashboard while leaving their effect baked into every
-rolling metric computed around them. A trailing partial day carries a fraction
+rolling metric computed around them. A trailing partial day has only a fraction
 of a full day's volume, which quietly depressed the trailing baseline that the
 volume-anomaly query compares against. Filtering at the end does not undo
 contamination that already happened upstream.
 
-Rolling metrics are NULL until their window is full. A 30-day annualised
+Rolling metrics are NULL until their window is full. A 30-day annualized
 volatility computed from four observations is not a 30-day volatility, so
 `volatility_30d_ann`, `ma_30d`, and `ma_7d` return NULL until they have 30,
 30, and 7 observations. Before this guard, roughly half the published volatility
@@ -257,7 +275,7 @@ rows per year. Partitioning pays off orders of magnitude later, and until then
 it complicates the upsert and the vacuum story for nothing. The DDL comments say
 where the crossover is.
 
-The three mart materialized views (matviews) carry unique indexes so refreshes
+The three mart materialized views (matviews) have unique indexes so refreshes
 run `CONCURRENTLY` and a live Tableau session never blocks. The guarantee is
 per view, not across the layer. Each refresh is its own transaction, so a
 reader can catch

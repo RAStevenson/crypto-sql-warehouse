@@ -1,6 +1,7 @@
 -- =============================================================================
 -- crypto-sql-warehouse: core schema DDL
--- Target: PostgreSQL 15+
+-- Verified on PostgreSQL 17. The newest feature used is identity columns,
+-- so nothing here needs a version newer than PostgreSQL 10.
 --
 -- Layering rationale
 -- ------------------
@@ -25,7 +26,7 @@
 -- 201147.88052508 because the month boundary slid to 05:00 UTC. The -05
 -- display offsets were the visible symptom.
 --
--- The ALTER DATABASE below is defence in depth, not a guarantee. It only
+-- The ALTER DATABASE below is defense in depth, not a guarantee. It only
 -- sets the default for NEW sessions, and any client can override it with
 -- SET TIME ZONE or PGOPTIONS='-c timezone=...', which is exactly what a
 -- JDBC or Tableau driver does. The real fix lives in the queries: every

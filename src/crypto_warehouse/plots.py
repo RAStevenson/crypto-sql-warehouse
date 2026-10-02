@@ -2,7 +2,7 @@
 
 Four plots, all on a light surface at print-legible sizes. The categorical
 palette is Okabe-Ito, which stays distinguishable under the common forms of
-colour vision deficiency, and every bar carries its own value as text so a
+color vision deficiency, and every bar carries its own value as text so a
 reader who cannot separate two hues can still read the number.
 """
 
@@ -18,7 +18,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-# Okabe-Ito, in a fixed order so an asset keeps its colour across regenerations.
+# Okabe-Ito, in a fixed order so an asset keeps its color across regenerations.
 SERIES = ["#0072b2", "#d55e00", "#009e73", "#e69f00", "#cc79a7", "#56b4e9"]
 INK = "#0b0b0b"
 SECONDARY = "#52514e"
@@ -77,7 +77,7 @@ def correlation_heatmap(
     """Annotated heatmap on a scale fitted to the observed range.
 
     A -1 to 1 scale would render every cell here in nearly the same tone, so
-    the colour axis runs over the observed off-diagonal range rounded outward.
+    the color axis runs over the observed off-diagonal range rounded outward.
     The bounds arrive from metrics.json rather than being recomputed here, so
     the report's caption and the image cannot disagree about the scale. The
     diagonal is blanked because a variable's correlation with itself is 1 by
@@ -124,7 +124,7 @@ def correlation_heatmap(
 
 
 def volatility_bars(symbols: list[str], vols: np.ndarray, average: float, path: Path) -> Path:
-    """Annualised volatility per asset, sorted, with the average marked."""
+    """Annualized volatility per asset, sorted, with the average marked."""
     apply_style()
     order = np.argsort(vols)
     labels = [symbols[i] for i in order]
@@ -144,7 +144,7 @@ def volatility_bars(symbols: list[str], vols: np.ndarray, average: float, path: 
         )
     ax.axvline(average, color=SERIES[1], linewidth=1.4, linestyle=(0, (4, 3)), zorder=4)
     # Headroom above the top bar so the average label has clear background
-    # instead of sitting on a filled bar in a second colour.
+    # instead of sitting on a filled bar in a second color.
     ax.set_ylim(-0.6, len(labels) - 0.05)
     ax.annotate(
         f"average {average:.3f}",
@@ -156,7 +156,7 @@ def volatility_bars(symbols: list[str], vols: np.ndarray, average: float, path: 
         color=SERIES[1],
         va="top",
     )
-    ax.set_xlabel("annualised volatility (sample stdev of daily log returns x sqrt(365))")
+    ax.set_xlabel("annualized volatility (sample stdev of daily log returns x sqrt(365))")
     ax.grid(axis="x")
     ax.grid(axis="y", visible=False)
     ax.margins(x=0.14)
@@ -245,7 +245,7 @@ def diversification_bars(div: dict, path: Path) -> Path:
         fontsize=9.5,
         color=SERIES[2],
     )
-    ax.set_ylabel("annualised volatility")
+    ax.set_ylabel("annualized volatility")
     ax.set_ylim(0, max(values) * 1.28)
     ax.grid(axis="y")
     ax.grid(axis="x", visible=False)
@@ -257,7 +257,7 @@ def write_all(panel, metrics: dict, figures_dir: Path) -> list[Path]:
     from .analysis import drawdown_paths
 
     corr = np.array(metrics["correlation"]["matrix"], dtype=float)
-    vols = np.array([a["annualised_volatility"] for a in metrics["assets"]], dtype=float)
+    vols = np.array([a["annualized_volatility"] for a in metrics["assets"]], dtype=float)
     div = metrics["diversification"]
     return [
         correlation_heatmap(
