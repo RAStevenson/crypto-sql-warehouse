@@ -1,16 +1,20 @@
 """Cross-asset diversification analysis over marts.daily_metrics.
 
-The question is how much of an equal-weight holder's volatility the six loaded
+The question is how much of an equal-weight holder's volatility the active
 assets actually remove, measured against two references: the average volatility
-of holding one name, and the volatility the same six variances would produce if
+of holding one name, and the volatility the same variances would produce if
 the assets were uncorrelated.
 
 Everything here splits into two halves. The functions that touch the database
-pull one long table of (date, symbol, log_return) and count rows for
-provenance. The functions that do arithmetic take arrays and return arrays, so
-the math is tested without a server.
+pull one long table of (date, symbol, log_return), one of daily closes, and
+count rows for provenance. The functions that do arithmetic take arrays and
+return arrays, so the math is tested without a server.
 
-Panel rule: only dates where all six assets carry a non-null log_return enter
+Only active assets enter. A deactivated asset keeps its history in the
+warehouse but stops gaining dates, and one stopped asset would otherwise
+freeze the panel's end date for all of them.
+
+Panel rule: only dates where every active asset has a non-null log_return enter
 the matrix. marts.daily_metrics already nulls log_return on incomplete days and
 on days that are not adjacent to the previous observation, so this step drops
 whole dates rather than filtering rows asset by asset. A covariance matrix
@@ -47,29 +51,46 @@ SELECT m.trade_date, a.symbol, m.log_return
 FROM marts.daily_metrics m
 JOIN core.assets a USING (asset_id)
 WHERE m.log_return IS NOT NULL
+  AND a.is_active
+ORDER BY m.trade_date, a.symbol
+"""
+
+# Closes on complete days, for the drawdown and total-return path. That path
+# has to follow every close the assets printed, including the days whose
+# returns the panel excludes, or it describes a price history that never
+# happened.
+CLOSES_QUERY = """
+SELECT m.trade_date, a.symbol, m.close
+FROM marts.daily_metrics m
+JOIN core.assets a USING (asset_id)
+WHERE m.is_complete
+  AND a.is_active
 ORDER BY m.trade_date, a.symbol
 """
 
 PROVENANCE_QUERY = """
+WITH active AS (SELECT asset_id FROM core.assets WHERE is_active)
 SELECT
-    (SELECT count(*) FROM core.ohlcv_hourly)                             AS hourly_rows,
-    (SELECT count(*) FROM marts.daily_ohlcv)                             AS daily_rows,
-    (SELECT count(*) FROM marts.daily_ohlcv WHERE NOT is_complete)       AS incomplete_asset_days,
-    (SELECT count(DISTINCT trade_date) FROM marts.daily_ohlcv)           AS observed_dates,
-    (SELECT count(*) FROM core.assets)                                   AS assets_loaded,
-    current_setting('server_version')                                    AS server_version
+    (SELECT count(*) FROM core.ohlcv_hourly JOIN active USING (asset_id)) AS hourly_rows,
+    (SELECT count(*) FROM marts.daily_ohlcv JOIN active USING (asset_id)) AS daily_rows,
+    (SELECT count(*) FROM marts.daily_ohlcv JOIN active USING (asset_id)
+      WHERE NOT is_complete)                                              AS incomplete_asset_days,
+    (SELECT count(*) FROM active)                                         AS assets_loaded,
+    current_setting('server_version')                                     AS server_version
 """
 
-# Dates carrying at least one partial bar, and every date the rollup observed.
-# Both are needed to account for the gap between the observed calendar and the
-# panel: an excluded date is either incomplete itself or the first observation
-# after one, which the mart's adjacency guard nulls.
-INCOMPLETE_DATES_QUERY = """
-SELECT DISTINCT trade_date FROM marts.daily_ohlcv WHERE NOT is_complete ORDER BY trade_date
-"""
-
+# One row per date on which any active asset has a daily bar: how many assets
+# have a bar that day, and how many of those bars are partial. This is what
+# accounts for the gap between the observed calendar and the panel.
 OBSERVED_DATES_QUERY = """
-SELECT DISTINCT trade_date FROM marts.daily_ohlcv ORDER BY trade_date
+SELECT d.trade_date,
+       count(*)                                  AS assets_present,
+       count(*) FILTER (WHERE NOT d.is_complete) AS partial_bars
+FROM marts.daily_ohlcv d
+JOIN core.assets a USING (asset_id)
+WHERE a.is_active
+GROUP BY d.trade_date
+ORDER BY d.trade_date
 """
 
 # The mart's own correlation figures, kept for one comparison sentence in the
@@ -100,6 +121,16 @@ class Panel:
         return len(self.symbols)
 
 
+@dataclass(frozen=True)
+class ClosePath:
+    """Daily closes on every complete day of the panel's window: one row per
+    date, one column per panel symbol. The first row is the close the panel's
+    first return is measured from."""
+
+    dates: list[dt.date]
+    closes: np.ndarray
+
+
 def build_panel(rows: list[tuple[dt.date, str, float]]) -> Panel:
     """Turn the long (date, symbol, log_return) table into a complete panel.
 
@@ -113,11 +144,87 @@ def build_panel(rows: list[tuple[dt.date, str, float]]) -> Panel:
     symbols = sorted({symbol for _, symbol, _ in rows})
     if not symbols:
         raise ValueError("no non-null log returns found; load the warehouse first")
+    if len(symbols) < 2:
+        raise ValueError(
+            f"only {symbols[0]} has returns; a diversification analysis needs at "
+            "least two active assets"
+        )
     dates = sorted(d for d, obs in by_date.items() if len(obs) == len(symbols))
     if not dates:
         raise ValueError(f"no date carries all {len(symbols)} symbols; the panel would be empty")
+
+    # The panel is the intersection of every asset's dates, so one asset with
+    # a shorter history shortens it for all. Say so when that happens.
+    starts = {s: min(d for d, obs in by_date.items() if s in obs) for s in symbols}
+    ends = {s: max(d for d, obs in by_date.items() if s in obs) for s in symbols}
+    if len(set(starts.values())) > 1 or len(set(ends.values())) > 1:
+        latest_start = max(starts, key=lambda s: starts[s])
+        earliest_end = min(ends, key=lambda s: ends[s])
+        log.warning(
+            "assets do not share one history: returns start as late as %s (%s) and "
+            "end as early as %s (%s); the panel keeps only the dates all %d share",
+            starts[latest_start],
+            latest_start,
+            ends[earliest_end],
+            earliest_end,
+            len(symbols),
+        )
+
     returns = np.array([[by_date[d][s] for s in symbols] for d in dates], dtype=float)
     return Panel(dates=dates, symbols=symbols, returns=returns)
+
+
+def build_close_path(rows: list[tuple[dt.date, str, float]], panel: Panel) -> ClosePath:
+    """Turn the long (date, symbol, close) table into the panel window's close path.
+
+    Keeps every date on which all panel symbols have a complete close, from
+    the last such date before the panel's first return through the panel's
+    last date. That includes complete days the panel excludes, such as the
+    first day after a gap, whose return is undefined but whose close is real.
+    """
+    by_date: dict[dt.date, dict[str, float]] = defaultdict(dict)
+    for trade_date, symbol, value in rows:
+        by_date[trade_date][symbol] = float(value)
+    shared = sorted(
+        d
+        for d, obs in by_date.items()
+        if d <= panel.dates[-1] and all(s in obs for s in panel.symbols)
+    )
+    before = [d for d in shared if d < panel.dates[0]]
+    if not before:
+        raise ValueError("no complete close precedes the panel's first return")
+    dates = [before[-1], *(d for d in shared if d >= panel.dates[0])]
+    closes = np.array([[by_date[d][s] for s in panel.symbols] for d in dates], dtype=float)
+    return ClosePath(dates=dates, closes=closes)
+
+
+def classify_excluded_dates(
+    observed: list[tuple[dt.date, int, int]], panel: Panel
+) -> dict[str, list[dt.date]]:
+    """Sort every observed date the panel leaves out into the reason it is out.
+
+    observed holds one (date, assets_present, partial_bars) row per date. A
+    date with a partial bar is listed under partial_bar. A date on which not
+    every panel asset has a bar is listed under not_every_asset. Whatever is
+    left has every bar complete and still lacks a return for some asset, which
+    happens on the first observation after an excluded day.
+    """
+    in_panel = set(panel.dates)
+    reasons: dict[str, list[dt.date]] = {
+        "partial_bar": [],
+        "not_every_asset": [],
+        "after_excluded_day": [],
+    }
+    for trade_date, assets_present, partial_bars in observed:
+        if trade_date in in_panel:
+            continue
+        if partial_bars > 0:
+            reasons["partial_bar"].append(trade_date)
+        elif assets_present < panel.n_assets:
+            reasons["not_every_asset"].append(trade_date)
+        else:
+            reasons["after_excluded_day"].append(trade_date)
+    return reasons
 
 
 def annualized_volatility(returns: np.ndarray) -> np.ndarray:
@@ -171,7 +278,7 @@ def max_drawdown(returns: np.ndarray) -> np.ndarray:
 
     The path starts at 1.0 on the day before the first return, so an asset that
     falls from the first observation onward records that fall. The peak is the
-    running maximum within the panel, not an all-time high.
+    running maximum within the path it is given, not an all-time high.
     """
     level = np.exp(np.vstack([np.zeros(returns.shape[1]), np.cumsum(returns, axis=0)]))
     return (level / np.maximum.accumulate(level, axis=0) - 1.0).min(axis=0)
@@ -201,11 +308,11 @@ def diversification(covariance: np.ndarray) -> dict[str, float]:
 
     The first reference is the average volatility of the individual assets,
     which is what an investor gives up single-name risk to improve on. The
-    second holds every variance fixed and sets all correlations to zero. That
-    is a benchmark, not a floor: negative covariances put a portfolio below it,
-    which is what a hedge is for, and test_analysis.py checks that the
-    arithmetic behaves that way. Six long spot positions in one sector will not
-    supply negative covariance, so independence is the right reference here.
+    second holds every variance fixed and sets all correlations to zero.
+    Negative covariances put a portfolio below that second reference, which is
+    what a hedge is for, and test_analysis.py checks that the arithmetic
+    behaves that way. Long spot positions in one sector do not supply negative
+    covariance, so zero correlation is the right reference here.
     Reporting the ratio of the two says how much of the available benefit the
     real correlations leave on the table.
     """
@@ -241,12 +348,22 @@ def diversification(covariance: np.ndarray) -> dict[str, float]:
     }
 
 
-def panel_metrics(panel: Panel) -> dict:
-    """Everything the report needs that comes out of the return matrix alone."""
+def panel_metrics(panel: Panel, close_path: ClosePath) -> dict:
+    """Everything the report needs that comes out of the returns and closes alone."""
     returns = panel.returns
     vols = annualized_volatility(returns)
-    drawdowns = max_drawdown(returns)
-    totals = returns.sum(axis=0)
+    constant = [s for s, v in zip(panel.symbols, vols, strict=True) if v == 0.0]
+    if constant:
+        raise ValueError(
+            f"{', '.join(constant)} did not move over the panel; a correlation with "
+            "a constant price is undefined"
+        )
+    # Drawdown and total return follow the closes, not the panel's returns.
+    # Summing panel returns would cut the move across every excluded date out
+    # of the path.
+    close_changes = np.diff(np.log(close_path.closes), axis=0)
+    drawdowns = max_drawdown(close_changes)
+    totals = close_changes.sum(axis=0)
     corr = correlation_matrix(returns)
     off = off_diagonal(corr)
 
@@ -270,6 +387,11 @@ def panel_metrics(panel: Panel) -> dict:
             "n_days": panel.n_days,
             "n_assets": panel.n_assets,
             "symbols": list(panel.symbols),
+        },
+        "close_path": {
+            "first_date": close_path.dates[0].isoformat(),
+            "last_date": close_path.dates[-1].isoformat(),
+            "n_closes": len(close_path.dates),
         },
         "assets": [
             {
@@ -299,30 +421,39 @@ def panel_metrics(panel: Panel) -> dict:
 
 
 def fetch_returns(conn) -> list[tuple[dt.date, str, float]]:
+    """Every non-null daily log return of every active asset, as (date, symbol, value)."""
     with conn.cursor() as cur:
         cur.execute(RETURNS_QUERY)
         return [(row[0], row[1], float(row[2])) for row in cur.fetchall()]
 
 
+def fetch_closes(conn) -> list[tuple[dt.date, str, float]]:
+    """Every complete-day close of every active asset, as (date, symbol, value)."""
+    with conn.cursor() as cur:
+        cur.execute(CLOSES_QUERY)
+        return [(row[0], row[1], float(row[2])) for row in cur.fetchall()]
+
+
 def fetch_provenance(conn, panel: Panel) -> dict:
+    """Row counts, the excluded dates with their reasons, and the mart's own correlations."""
     with conn.cursor() as cur:
         cur.execute(PROVENANCE_QUERY)
-        hourly, daily, incomplete, observed_dates, assets, server_version = cur.fetchone()
-        cur.execute(INCOMPLETE_DATES_QUERY)
-        incomplete_dates = [row[0] for row in cur.fetchall()]
+        hourly, daily, incomplete, assets, server_version = cur.fetchone()
         cur.execute(OBSERVED_DATES_QUERY)
-        all_dates = [row[0] for row in cur.fetchall()]
+        observed = [(row[0], int(row[1]), int(row[2])) for row in cur.fetchall()]
         cur.execute(MART_CORRELATION_QUERY)
         c_min, c_max, c_mean, n_pairs, days_min, days_max = cur.fetchone()
-    in_panel = set(panel.dates)
-    excluded = [d for d in all_dates if d not in in_panel]
+    reasons = classify_excluded_dates(observed, panel)
+    excluded = sorted(d for dates in reasons.values() for d in dates)
     return {
         "ohlcv_hourly_rows": int(hourly),
         "daily_ohlcv_rows": int(daily),
         "incomplete_asset_days": int(incomplete),
-        "observed_dates": int(observed_dates),
-        "dates_dropped_from_panel": int(observed_dates) - panel.n_days,
-        "incomplete_dates": [d.isoformat() for d in incomplete_dates],
+        "observed_dates": len(observed),
+        "dates_dropped_from_panel": len(excluded),
+        "incomplete_dates": [d.isoformat() for d in reasons["partial_bar"]],
+        "dates_without_every_asset": [d.isoformat() for d in reasons["not_every_asset"]],
+        "dates_after_an_excluded_day": [d.isoformat() for d in reasons["after_excluded_day"]],
         "excluded_dates": [d.isoformat() for d in excluded],
         "assets_loaded": int(assets),
         "server_version": str(server_version),
@@ -344,9 +475,9 @@ def run_analysis(metrics_path: Path = METRICS_PATH, figures_dir: Path = FIGURES_
     from . import plots
 
     with closing(connect()) as conn:
-        rows = fetch_returns(conn)
-        panel = build_panel(rows)
-        metrics = panel_metrics(panel)
+        panel = build_panel(fetch_returns(conn))
+        close_path = build_close_path(fetch_closes(conn), panel)
+        metrics = panel_metrics(panel, close_path)
         metrics["provenance"] = fetch_provenance(conn, panel)
 
     metrics["generated_at_utc"] = (
@@ -361,7 +492,7 @@ def run_analysis(metrics_path: Path = METRICS_PATH, figures_dir: Path = FIGURES_
     )
 
     figures_dir.mkdir(parents=True, exist_ok=True)
-    written = plots.write_all(panel, metrics, figures_dir)
+    written = plots.write_all(panel, close_path, metrics, figures_dir)
     for path in written:
         log.info("wrote %s", path)
 

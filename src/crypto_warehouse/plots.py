@@ -17,6 +17,7 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.figure import Figure
 
 # Okabe-Ito, in a fixed order so an asset keeps its color across regenerations.
 SERIES = ["#0072b2", "#d55e00", "#009e73", "#e69f00", "#cc79a7", "#56b4e9"]
@@ -63,7 +64,7 @@ def apply_style() -> None:
     )
 
 
-def _save(fig: plt.Figure, path: Path) -> Path:
+def _save(fig: Figure, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
     fig.savefig(path, bbox_inches="tight")
@@ -141,6 +142,10 @@ def volatility_bars(symbols: list[str], vols: np.ndarray, average: float, path: 
             va="center",
             fontsize=9,
             color=SECONDARY,
+            # An opaque patch above the average line, so the line passes
+            # behind a label it would otherwise cut through.
+            bbox={"facecolor": SURFACE, "edgecolor": "none", "pad": 1.5},
+            zorder=5,
         )
     ax.axvline(average, color=SERIES[1], linewidth=1.4, linestyle=(0, (4, 3)), zorder=4)
     # Headroom above the top bar so the average label has clear background
@@ -168,13 +173,14 @@ def drawdown_curves(
 ) -> Path:
     """Every asset's drawdown from its running peak, on one axis.
 
-    The point of one axis is the co-movement: the troughs line up in time,
-    which is the same fact the correlation matrix states numerically.
+    The point of one axis is the co-movement: the assets fall together and
+    rebound together, which is consistent with what the correlation matrix
+    states numerically.
     """
     apply_style()
-    # The drawdown path carries its own starting point, one day before the
-    # first return, so the x axis is one longer than the panel's date list.
-    x = [dates[0] - dt.timedelta(days=1), *dates]
+    # The dates are the close path's own, starting at the close the first
+    # return is measured from, so they line up with the path row for row.
+    x = np.array(dates, dtype="datetime64[D]")
 
     fig, ax = plt.subplots(figsize=(8.4, 4.6))
     for i, symbol in enumerate(symbols):
@@ -189,9 +195,9 @@ def drawdown_curves(
     ax.axhline(0.0, color=MUTED, linewidth=1.0, zorder=2)
     ax.set_ylabel("drawdown from running peak")
     ax.yaxis.set_major_formatter(lambda v, _: f"{100 * v:.0f}%")
-    # The legend sits above the axes. Six curves that spend most of the window
-    # inside a 15-point band leave no interior space a key could occupy
-    # without covering data.
+    # The legend sits above the axes. The curves cross the whole plot area
+    # over the window, so no interior space could hold a key without covering
+    # data.
     ax.legend(loc="lower left", bbox_to_anchor=(0.0, 1.01), ncols=6, fontsize=9.5)
     ax.grid(axis="y")
     ax.grid(axis="x", visible=False)
@@ -252,8 +258,8 @@ def diversification_bars(div: dict, path: Path) -> Path:
     return _save(fig, path)
 
 
-def write_all(panel, metrics: dict, figures_dir: Path) -> list[Path]:
-    """Render all four figures from a panel and its computed metrics."""
+def write_all(panel, close_path, metrics: dict, figures_dir: Path) -> list[Path]:
+    """Render all four figures from a panel, its close path, and its computed metrics."""
     from .analysis import drawdown_paths
 
     corr = np.array(metrics["correlation"]["matrix"], dtype=float)
@@ -271,9 +277,9 @@ def write_all(panel, metrics: dict, figures_dir: Path) -> list[Path]:
             panel.symbols, vols, div["average_single_asset_vol"], figures_dir / ASSET_VOLATILITY
         ),
         drawdown_curves(
-            panel.dates,
+            close_path.dates,
             panel.symbols,
-            drawdown_paths(panel.returns),
+            drawdown_paths(np.diff(np.log(close_path.closes), axis=0)),
             figures_dir / DRAWDOWN_CURVES,
         ),
         diversification_bars(div, figures_dir / DIVERSIFICATION),
