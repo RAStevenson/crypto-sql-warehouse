@@ -23,6 +23,7 @@ log = logging.getLogger("run_refresh_marts")
 
 
 def main() -> int:
+    """Parse the command line, refresh the marts, and return a process exit code."""
     parser = argparse.ArgumentParser(
         prog="run_refresh_marts.py",
         description="Refresh the marts layer.",

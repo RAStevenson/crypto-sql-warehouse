@@ -105,8 +105,8 @@ FROM marts.pairwise_correlations_90d
 
 @dataclass(frozen=True)
 class Panel:
-    """A rectangular block of daily log returns: one row per date, one column
-    per symbol, no missing entries anywhere."""
+    """Holds daily log returns as a matrix with one row per date, one column
+    per symbol, and no missing entries."""
 
     dates: list[dt.date]
     symbols: list[str]
@@ -114,29 +114,33 @@ class Panel:
 
     @property
     def n_days(self) -> int:
+        """Return the number of dates in the panel."""
         return len(self.dates)
 
     @property
     def n_assets(self) -> int:
+        """Return the number of symbols in the panel."""
         return len(self.symbols)
 
 
 @dataclass(frozen=True)
 class ClosePath:
-    """Daily closes on every complete day of the panel's window: one row per
-    date, one column per panel symbol. The first row is the close the panel's
-    first return is measured from."""
+    """Holds the daily closes on every day of the panel's window that is complete
+    for all panel symbols, with one row per date and one column per symbol.
+
+    The first row is the close the panel's first return is measured from.
+    """
 
     dates: list[dt.date]
     closes: np.ndarray
 
 
 def build_panel(rows: list[tuple[dt.date, str, float]]) -> Panel:
-    """Turn the long (date, symbol, log_return) table into a complete panel.
+    """Build a Panel from (date, symbol, log_return) rows, keeping only the dates
+    on which every symbol in the input has a return.
 
-    A date survives only when every symbol seen anywhere in the input has a
-    return on it. Dropping a date costs one observation for every asset;
-    keeping it with a hole costs the covariance matrix its meaning.
+    Raises ValueError when fewer than two symbols have returns or when no date
+    carries all of them.
     """
     by_date: dict[dt.date, dict[str, float]] = defaultdict(dict)
     for trade_date, symbol, value in rows:
@@ -154,7 +158,7 @@ def build_panel(rows: list[tuple[dt.date, str, float]]) -> Panel:
         raise ValueError(f"no date carries all {len(symbols)} symbols; the panel would be empty")
 
     # The panel is the intersection of every asset's dates, so one asset with
-    # a shorter history shortens it for all. Say so when that happens.
+    # a shorter history shortens it for all. Warn when that happens.
     starts = {s: min(d for d, obs in by_date.items() if s in obs) for s in symbols}
     ends = {s: max(d for d, obs in by_date.items() if s in obs) for s in symbols}
     if len(set(starts.values())) > 1 or len(set(ends.values())) > 1:
@@ -175,12 +179,12 @@ def build_panel(rows: list[tuple[dt.date, str, float]]) -> Panel:
 
 
 def build_close_path(rows: list[tuple[dt.date, str, float]], panel: Panel) -> ClosePath:
-    """Turn the long (date, symbol, close) table into the panel window's close path.
+    """Build the panel's ClosePath from (date, symbol, close) rows, keeping every
+    date on which all panel symbols have a close, from the last such date
+    before the panel's first return through the panel's last date.
 
-    Keeps every date on which all panel symbols have a complete close, from
-    the last such date before the panel's first return through the panel's
-    last date. That includes complete days the panel excludes, such as the
-    first day after a gap, whose return is undefined but whose close is real.
+    That includes days the panel excludes, such as the first day after a gap,
+    and a ValueError is raised when no close precedes the panel's first return.
     """
     by_date: dict[dt.date, dict[str, float]] = defaultdict(dict)
     for trade_date, symbol, value in rows:
@@ -201,13 +205,12 @@ def build_close_path(rows: list[tuple[dt.date, str, float]], panel: Panel) -> Cl
 def classify_excluded_dates(
     observed: list[tuple[dt.date, int, int]], panel: Panel
 ) -> dict[str, list[dt.date]]:
-    """Sort every observed date the panel leaves out into the reason it is out.
+    """Return the observed dates the panel leaves out, grouped under partial_bar,
+    not_every_asset, or after_excluded_day.
 
-    observed holds one (date, assets_present, partial_bars) row per date. A
-    date with a partial bar is listed under partial_bar. A date on which not
-    every panel asset has a bar is listed under not_every_asset. Whatever is
-    left has every bar complete and still lacks a return for some asset, which
-    happens on the first observation after an excluded day.
+    Each observed row is (date, assets_present, partial_bars), and a date goes
+    under the first reason that applies, so the last group holds days with
+    every bar complete that still lack a return.
     """
     in_panel = set(panel.dates)
     reasons: dict[str, list[dt.date]] = {
@@ -238,6 +241,7 @@ def annualized_covariance(returns: np.ndarray) -> np.ndarray:
 
 
 def correlation_matrix(returns: np.ndarray) -> np.ndarray:
+    """Return the Pearson correlation matrix of the columns of a return matrix."""
     return np.corrcoef(returns, rowvar=False)
 
 
@@ -247,24 +251,22 @@ def off_diagonal(matrix: np.ndarray) -> np.ndarray:
     return matrix[mask]
 
 
+# Defined here rather than in plots.py because the report's caption quotes the
+# heatmap's color range. The bounds are computed once and stored in the
+# metrics, so the caption and the image cannot state different ranges.
 def scale_bounds(values: np.ndarray, step: float = 0.05) -> tuple[float, float]:
-    """Round a data range outward to the nearest step.
-
-    Lives here rather than in plots.py because the heatmap's color axis is
-    quoted in the report's caption, and a caption that says one range while the
-    image shows another is worse than no caption.
-    """
+    """Return the (low, high) range of the values, rounded outward to multiples of step."""
     lo = float(np.floor(values.min() / step) * step)
     hi = float(np.ceil(values.max() / step) * step)
     return lo, hi
 
 
 def fisher_interval(r: float, n: int, z: float = 1.959963984540054) -> tuple[float, float]:
-    """Two-sided 95% interval for one Pearson correlation from n observations.
+    """Return the two-sided Fisher interval, 95% at the default z, for one Pearson
+    correlation r estimated from n observations.
 
-    Fisher's transform, so the interval is asymmetric near the ends of the
-    range instead of running past 1. This describes a single pair; it is not a
-    joint statement about all pairs at once.
+    The interval describes a single pair and is not a joint statement about
+    several pairs, and a ValueError is raised when n is 3 or less.
     """
     if n <= 3:
         raise ValueError("a Fisher interval needs more than 3 observations")
@@ -274,11 +276,10 @@ def fisher_interval(r: float, n: int, z: float = 1.959963984540054) -> tuple[flo
 
 
 def max_drawdown(returns: np.ndarray) -> np.ndarray:
-    """Deepest peak-to-trough fall of each column's cumulative return path.
+    """Return the deepest peak-to-trough fall of each column's cumulative return path.
 
-    The path starts at 1.0 on the day before the first return, so an asset that
-    falls from the first observation onward records that fall. The peak is the
-    running maximum within the path it is given, not an all-time high.
+    The path starts at 1.0 before the first return, and the peak is the running
+    maximum within the returns given, not an all-time high.
     """
     level = np.exp(np.vstack([np.zeros(returns.shape[1]), np.cumsum(returns, axis=0)]))
     return (level / np.maximum.accumulate(level, axis=0) - 1.0).min(axis=0)
@@ -295,42 +296,38 @@ def drawdown_paths(returns: np.ndarray) -> np.ndarray:
 
 
 def portfolio_volatility(covariance: np.ndarray, weights: np.ndarray) -> float:
-    """sqrt(w' C w). Volatility on whatever horizon the covariance carries."""
+    """Return the portfolio volatility sqrt(w' C w), on the same horizon as the covariance."""
     return float(np.sqrt(weights @ covariance @ weights))
 
 
 def equal_weights(n: int) -> np.ndarray:
+    """Return a vector of n weights that each equal 1/n."""
     return np.full(n, 1.0 / n)
 
 
 def diversification(covariance: np.ndarray) -> dict[str, float]:
-    """Compare an equal-weight portfolio against two references.
+    """Compare an equal-weight portfolio's volatility with two references and
+    return the resulting figures as a dict.
 
-    The first reference is the average volatility of the individual assets,
-    which is what an investor gives up single-name risk to improve on. The
-    second holds every variance fixed and sets all correlations to zero.
-    Negative covariances put a portfolio below that second reference, which is
-    what a hedge is for, and test_analysis.py checks that the arithmetic
-    behaves that way. Long spot positions in one sector do not supply negative
-    covariance, so zero correlation is the right reference here.
-    Reporting the ratio of the two says how much of the available benefit the
-    real correlations leave on the table.
+    The references are the average single-asset volatility and the volatility
+    of the same variances with every correlation set to zero.
     """
     n = covariance.shape[0]
     weights = equal_weights(n)
     asset_vols = np.sqrt(np.diag(covariance))
     portfolio_vol = portfolio_volatility(covariance, weights)
     average_vol = float(asset_vols.mean())
+    # Zero correlation is the reference because long spot positions in one
+    # sector do not supply negative covariance. A portfolio with negative
+    # covariances falls below it, which test_analysis.py checks.
     independent_vol = portfolio_volatility(np.diag(np.diag(covariance)), weights)
     risk_removed_actual = 1.0 - portfolio_vol / average_vol
     risk_removed_if_uncorrelated = 1.0 - independent_vol / average_vol
 
-    # Where an equal-weight basket of similar assets is headed as more names are
-    # added. For equal volatilities and a shared correlation rho, portfolio
-    # variance is sigma^2 * (1/n + (1 - 1/n) * rho), so as n grows the 1/n terms
-    # vanish and volatility approaches sigma * sqrt(rho). Adding names past that
-    # buys nothing; only a fall in rho does. Quoted so the report does not have
-    # to assert "a seventh name would not help" without arithmetic behind it.
+    # For equal volatilities sigma and a shared correlation rho, equal-weight
+    # variance is sigma^2 * (1/n + (1 - 1/n) * rho), so volatility tends to
+    # sigma * sqrt(rho) as n grows. The report quotes this limit to show what
+    # adding more names of the same kind could remove.
     correlation = covariance / np.outer(asset_vols, asset_vols)
     off_diagonal = correlation[np.triu_indices(n, k=1)]
     mean_correlation = float(off_diagonal.mean())
@@ -349,7 +346,12 @@ def diversification(covariance: np.ndarray) -> dict[str, float]:
 
 
 def panel_metrics(panel: Panel, close_path: ClosePath) -> dict:
-    """Everything the report needs that comes out of the returns and closes alone."""
+    """Compute the panel, close-path, per-asset, correlation, and diversification
+    figures the report reads and return them as a dict.
+
+    Raises ValueError when an asset's returns do not vary over the panel,
+    because its correlations are undefined.
+    """
     returns = panel.returns
     vols = annualized_volatility(returns)
     constant = [s for s, v in zip(panel.symbols, vols, strict=True) if v == 0.0]
@@ -368,13 +370,14 @@ def panel_metrics(panel: Panel, close_path: ClosePath) -> dict:
     off = off_diagonal(corr)
 
     # Which pair is least and which is most correlated, named rather than left as
-    # bare numbers the reader has to hunt for in the matrix.
+    # bare numbers the reader has to look for in the matrix.
     upper = np.triu_indices(panel.n_assets, k=1)
     pair_values = corr[upper]
     least_correlated = int(np.argmin(pair_values))
     most_correlated = int(np.argmax(pair_values))
 
     def pair_name(index: int) -> list[str]:
+        """Return the two symbols of the pair at a position in the upper triangle."""
         return [panel.symbols[upper[0][index]], panel.symbols[upper[1][index]]]
 
     mean_low, mean_high = fisher_interval(float(off.mean()), panel.n_days)

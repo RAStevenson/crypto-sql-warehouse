@@ -18,12 +18,13 @@ MAX_CANDLES_PER_REQUEST = 300
 
 
 def floor_hour(moment: datetime) -> datetime:
-    """Truncate to the top of the UTC hour. A naive datetime is truncated as given.
+    """Return the moment truncated to the top of its UTC hour.
 
-    The conversion to UTC matters for a session time zone with a half-hour
-    offset: psycopg2 hands back timestamps in the session's zone, and flooring
-    10:45+05:30 in place gives 10:00+05:30, which is 04:30 UTC, not a bucket.
+    A naive datetime is truncated as given, with no conversion.
     """
+    # Converted before truncating because psycopg2 returns timestamps in the
+    # session's zone, and flooring 10:45+05:30 in place gives 10:00+05:30,
+    # which is 04:30 UTC and not a bucket.
     if moment.tzinfo is not None:
         moment = moment.astimezone(UTC)
     return moment.replace(minute=0, second=0, microsecond=0)
@@ -61,29 +62,21 @@ def iter_windows(
     current_hour: datetime,
     max_candles: int = MAX_CANDLES_PER_REQUEST,
 ) -> Iterator[tuple[datetime, datetime]]:
-    """Yield (window_start, window_end) pairs covering every hourly bucket in
-    [floor_hour(start), current_hour).
+    """Yield inclusive (window_start, window_end) pairs that together cover every
+    hourly bucket from floor_hour(start) up to but not including current_hour.
 
-    Both bounds are inclusive, matching the API: a window from 00:00 to 02:00
-    asks for three candles. A window therefore spans at most max_candles - 1
-    hours, and consecutive windows are adjacent rather than overlapping - the
-    next one begins on the hour after the previous one ended. The old code
-    overlapped by one bucket and relied on the upsert to absorb the duplicate;
-    exact tiling is easier to reason about and one fewer row per window.
-
-    current_hour is the still-forming bucket and is never requested, so the
-    last bucket any window can cover is current_hour - 1h. That also makes the
-    generator empty when the watermark has caught up (start == current_hour)
-    or when clock skew puts it in the future (start > current_hour).
-
-    A start that is not on the hour is floored, which can pull in one bucket
-    already held. The upsert dedupes it and the alternative, ceiling, would
-    skip an hour.
+    Consecutive windows share no bucket, each holds at most max_candles
+    buckets, and nothing is yielded when start is at or after current_hour.
     """
     if max_candles < 1:
         raise ValueError(f"max_candles must be at least 1, got {max_candles}")
 
+    # The start is floored, not ceiled, because flooring can request one
+    # bucket already held, which the upsert absorbs, while a ceiling would
+    # skip an hour.
     cursor = floor_hour(start)
+    # current_hour is still forming, so the last bucket requested is the hour
+    # before it.
     last_bucket = floor_hour(current_hour) - HOUR
     span = (max_candles - 1) * HOUR
 

@@ -1,10 +1,10 @@
 """Registering a new asset in the warehouse's work list.
 
-core.assets IS the ingest work list (is_active = true), so adding an asset is
-an INSERT. What earns this a module is the validation in front of the INSERT.
-A typo'd product code would otherwise sit in the work list failing every
-scheduled run from then on, so the code has to prove it answers on Coinbase
-with at least one candle before it is allowed in.
+core.assets is the ingest work list (is_active = true), so adding an asset is
+an INSERT. This module holds the validation that runs before the INSERT. A
+mistyped product code would otherwise stay in the work list and fail in every
+scheduled run from then on, so a code must answer on Coinbase with at least
+one candle before it is inserted.
 """
 
 from __future__ import annotations
@@ -29,16 +29,17 @@ PROBE_HOURS = 72
 
 
 def parse_product_code(product_code: str) -> tuple[str, str]:
-    """Split 'XRP-USD' into ('XRP', 'USD'), rejecting anything else early.
+    """Split a product code such as 'XRP-USD' into ('XRP', 'USD'), uppercased and
+    with surrounding whitespace removed.
 
-    The API would reject a malformed code too, but with a 404 that reads as
-    "no such product", and the operator's actual mistake (wrong separator, a
-    stray space) deserves a message that names it. Lowercase is normalized
-    rather than rejected because Coinbase treats codes case-insensitively and
-    the schema seeds are upper.
+    Raises ConfigError for anything not of the form BASE-QUOTE.
     """
+    # Lowercase is normalized, not rejected, because Coinbase treats codes
+    # case-insensitively and the seeded codes are uppercase.
     code = product_code.strip().upper()
     parts = code.split("-")
+    # Checked here because the API answers a malformed code with a 404, which
+    # reads as "no such product" and does not name the actual mistake.
     if len(parts) != 2 or not all(part.isalnum() and part for part in parts):
         raise ConfigError(
             f"{product_code!r} is not a Coinbase product code of the form BASE-QUOTE, e.g. XRP-USD"
@@ -47,14 +48,11 @@ def parse_product_code(product_code: str) -> tuple[str, str]:
 
 
 def probe_product(session: requests.Session, product_code: str) -> int:
-    """Positive evidence that the product exists and trades. Returns the
-    candle count seen.
+    """Fetch the trailing PROBE_HOURS of candles for a product and return how
+    many came back.
 
-    Fetches the trailing PROBE_HOURS as one window. An unknown product
-    surfaces as the client's HTTPError (a 404 is fatal on the first try
-    there); a 200 with no candles at all is rejected here, since a product
-    that has not traded for three days straight is either de-listed or a code
-    that resolves to the wrong thing.
+    Raises ConfigError when the answer holds no candles, and an unknown
+    product raises the client's HTTPError.
     """
     end = floor_hour(datetime.now(UTC))
     start = end - timedelta(hours=PROBE_HOURS)
@@ -82,13 +80,14 @@ def insert_asset(
     asset_name: str,
     quote_currency: str,
 ) -> int:
-    """INSERT the asset row and return its asset_id.
+    """Insert the asset row into core.assets and return its asset_id.
 
-    No upsert on purpose. Re-adding an existing asset is either an operator
-    mistake or a soft-disabled asset coming back, and both deserve a look at
-    the existing row rather than a silent merge, so the unique collision is
-    translated into a plain instruction instead of a traceback.
+    A symbol or product code that already exists raises ConfigError, because
+    the insert never updates an existing row.
     """
+    # The INSERT has no ON CONFLICT clause, because re-adding an existing
+    # asset is either a mistake or a soft-disabled asset coming back, and both
+    # call for a look at the existing row, not a silent merge.
     try:
         cur.execute(
             """

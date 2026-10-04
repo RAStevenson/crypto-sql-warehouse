@@ -85,7 +85,7 @@ def equicorrelated_covariance(n: int, sigma: float, rho: float) -> np.ndarray:
 def test_equicorrelation_limit_matches_the_closed_form():
     # With equal volatilities and a shared rho, an equal-weight basket tends to
     # sigma * sqrt(rho) as the asset count grows. The report quotes this to say
-    # what another name of the same kind would buy, so pin it to the algebra.
+    # what another name of the same kind would add, so pin it to the algebra.
     sigma, rho = 0.5, 0.64
     result = analysis.diversification(equicorrelated_covariance(6, sigma, rho))
     assert result["equicorrelation_limit_vol"] == pytest.approx(sigma * 0.8)
@@ -487,7 +487,7 @@ def test_panel_metrics_output_is_json_serializable():
 
 
 # --------------------------------------------------------------------------
-# helpers quoted in the report
+# fisher_interval and scale_bounds
 # --------------------------------------------------------------------------
 
 

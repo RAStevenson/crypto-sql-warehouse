@@ -39,11 +39,7 @@ SQL_DIR = REPO_ROOT / "sql"
 
 
 def count_tests() -> int:
-    """Count test functions on disk rather than quoting a number.
-
-    The report cites its own test count as evidence, and a literal here drifts
-    silently the first time a test is added.
-    """
+    """Return the number of test functions in tests/, counted from the files on disk."""
     return sum(
         line.lstrip().startswith("def test_")
         for path in TESTS_DIR.glob("test_*.py")
@@ -52,8 +48,8 @@ def count_tests() -> int:
 
 
 def count_queries() -> int:
-    """Count the numbered analytical queries in sql/04_queries.sql the same
-    way: by looking, not by remembering."""
+    """Return the number of numbered queries in sql/04_queries.sql, or 0 when the
+    file is missing."""
     path = SQL_DIR / "04_queries.sql"
     if not path.is_file():
         return 0
@@ -64,12 +60,11 @@ def count_queries() -> int:
 
 
 def count_checks() -> int:
-    """Count the DO blocks in sql/05_verify.sql.
+    """Return the number of DO blocks in sql/05_verify.sql, or 0 when the file is
+    missing.
 
-    Each block is one check that aborts the script on failure. Counting them
-    rather than writing the number keeps the report accurate the next time one
-    is added. Note a block can raise on more than one condition, so this counts
-    checks, not RAISE statements.
+    Each block is one check and can raise on more than one condition, so this
+    is a count of checks and not of RAISE statements.
     """
     path = SQL_DIR / "05_verify.sql"
     if not path.is_file():
@@ -79,7 +74,7 @@ def count_checks() -> int:
     )
 
 
-# Shared page chrome; plain string, single braces.
+# Page styles, kept as a plain string so the CSS braces need no doubling.
 REPORT_CSS = """<style>
   :root {
     --ink: #1a1a1a;
@@ -231,11 +226,13 @@ REPORT_CSS = """<style>
 
 
 def img(name: str) -> str:
+    """Return a PNG from reports/figures as a base64 data URI."""
     data = base64.b64encode((FIGURES / name).read_bytes()).decode("ascii")
     return f"data:image/png;base64,{data}"
 
 
 def pct(x: float, places: int = 1) -> str:
+    """Return a fraction formatted as a percentage with the given decimal places."""
     return f"{100 * x:.{places}f}%"
 
 
@@ -254,17 +251,14 @@ SMALL_NUMBERS = {
 
 
 def spell(n: int, capital: bool = True) -> str:
-    """Small counts as words, for the title and for sentence openings.
-
-    Derived from the metrics rather than typed into the prose, so a warehouse
-    loaded with a different number of assets retitles itself.
-    """
+    """Return a count from 1 to 10 as a word, capitalized unless capital is
+    False, and any other count as digits."""
     word = SMALL_NUMBERS.get(n, str(n))
     return word if capital else word.lower()
 
 
 def listing(items: list[str], conjunction: str = "and") -> str:
-    """Comma-separated list with a conjunction before the last item."""
+    """Return the items joined by commas, with a conjunction before the last one."""
     if not items:
         return ""
     if len(items) == 1:
@@ -275,7 +269,8 @@ def listing(items: list[str], conjunction: str = "and") -> str:
 
 
 def emit_pdf(html_path: Path = OUT, pdf_path: Path = OUT_PDF) -> bool:
-    """Print the HTML report to PDF with headless Chrome, if Chrome is present."""
+    """Print the HTML report to PDF with headless Chrome and return True, or
+    return False when Chrome is not at its default path."""
     if not CHROME.exists():
         print("Chrome not found: skipping PDF (open the HTML and print to PDF manually)")
         return False
@@ -296,6 +291,12 @@ def emit_pdf(html_path: Path = OUT, pdf_path: Path = OUT_PDF) -> bool:
 
 
 def build_report() -> None:
+    """Render the HTML report from metrics.json and the figures, then print it
+    to PDF when Chrome is present.
+
+    Exits with a message when metrics.json is missing or when a figure or
+    table is not cited from the body prose.
+    """
     if not METRICS.exists():
         raise SystemExit(f"{METRICS} not found; run scripts/run_analysis.py first")
     m = json.loads(METRICS.read_text(encoding="utf-8"))
@@ -332,17 +333,16 @@ def build_report() -> None:
     shallowest_drawdown = -max(a["max_drawdown"] for a in assets)
 
     # Some sentences state qualitative facts as literals that no placeholder
-    # can update. They hold for the recorded run. Each one computable from the
-    # metrics has a condition below, and a reload that breaks one prints a
-    # warning naming the sentence to reword. The thresholds are rough lines,
-    # not tests. A warning rather than a failed build, because this builder
-    # also renders other people's loads; the cost is that a reload which
-    # breaks a condition still writes a report with the false sentence in it,
-    # body prose included, until someone rewords it. Four literals describe
-    # the shape of Figure 3 and cannot be computed from the metrics ("fall
-    # together and rebound together", "mostly depth rather than timing",
-    # "falling together" in section 1, "one deep joint decline" in section 5);
-    # after a reload, check them against the figure by eye.
+    # can update, and they hold for the recorded run. Each one computable from
+    # the metrics has a condition below, with a rough threshold, and a reload
+    # that breaks one prints a warning naming the sentence to reword. It is a
+    # warning and not a failed build because this builder also renders other
+    # people's loads, so such a reload still writes a report with the false
+    # sentence in it, body prose included, until someone rewords it. Four
+    # literals describe the shape of Figure 3 and cannot be computed from the
+    # metrics ("fall together and rebound together", "mostly depth rather than
+    # timing", "falling together" in section 1, "one deep joint decline" in
+    # section 5), so check them against the figure by eye after a reload.
     limit_gap = (
         div["equal_weight_portfolio_vol"] - div["equicorrelation_limit_vol"]
     ) / div["equal_weight_portfolio_vol"]
@@ -421,6 +421,7 @@ supports the figure's ordering only between pairs that far apart. Beyond that, w
 that the whole block sits high."""
 
     def verb(n: int, singular: str, plural: str) -> str:
+        """Return the singular wording when n is 1 and the plural otherwise."""
         return singular if n == 1 else plural
 
     # Why each excluded date is out, read from the analysis rather than
@@ -917,9 +918,10 @@ each fatal on failure, covering hourly gaps, rollup coverage, raw-to-core
 agreement, upsert idempotency, run status, session-timezone invariance of
 the daily rollup, and agreement of the two stored daily marts with their
 definitions.
-<code>pytest</code> runs {n_tests} test functions, none of which need a database or a network,
-covering the ingestion windowing and watermark, the API client, asset
-registration, and the diversification math in this report. The
+<code>pytest</code> runs {n_tests} test functions, none of which need a
+database or a network. They cover the ingestion windowing and watermark, the
+API client, asset registration, and the diversification math in this report,
+and one checks that every function is documented. The
 {n_queries} annotated queries in <code>sql/04_queries.sql</code> each run
 standalone against a loaded database.</p>
 

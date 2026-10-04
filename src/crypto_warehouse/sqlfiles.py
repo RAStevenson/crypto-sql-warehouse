@@ -24,21 +24,23 @@ QUERIES_FILE = "04_queries.sql"
 VERIFY_FILE = "05_verify.sql"
 
 
+# psycopg2 keeps notices in a plain list capped at 50 entries, and the verify
+# script reports each passing check as a RAISE NOTICE line, so the list is
+# replaced.
 class NoticeLogger(list):
-    """Drop-in replacement for conn.notices that logs each server notice as it
-    arrives.
+    """A replacement for conn.notices that logs each server notice as it arrives.
 
-    psycopg2 otherwise buffers notices in a plain list capped at 50 entries,
-    which is exactly the wrong behavior for a verify script whose whole job
-    is to show the RAISE NOTICE lines. Nothing is retained, so a long run
-    cannot grow the list without bound.
+    Nothing is stored, so the list stays empty however long the run is.
     """
 
     def append(self, notice: str) -> None:
+        """Log one server notice instead of storing it."""
         log.info("postgres: %s", notice.strip())
 
 
 def sql_path(name: str) -> Path:
+    """Return the path of a named file in sql/, raising FileNotFoundError that
+    lists the files present when it is missing."""
     path = SQL_DIR / name
     if not path.is_file():
         available = sorted(p.name for p in SQL_DIR.glob("*.sql")) if SQL_DIR.is_dir() else []
@@ -49,11 +51,9 @@ def sql_path(name: str) -> Path:
 
 
 def run_sql_file(conn, name: str) -> None:
-    """Execute one file from sql/ on an open connection.
+    """Execute one file from sql/ on an open connection in a single execute() call.
 
-    Transaction handling is the caller's: this does not commit, so a caller on
-    a normal connection controls the boundary and a caller that needs
-    autocommit opens the connection that way.
+    This does not commit, so the caller controls the transaction.
     """
     path = sql_path(name)
     log.info("executing sql/%s", path.name)

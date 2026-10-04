@@ -36,6 +36,8 @@ log = logging.getLogger("run_add_asset")
 
 
 def positive_int(value: str) -> int:
+    """Return a command-line value as a whole number of days, raising an argparse
+    error when it is below 1."""
     number = int(value)
     if number < 1:
         raise argparse.ArgumentTypeError(f"must be at least 1 day, got {value}")
@@ -43,6 +45,8 @@ def positive_int(value: str) -> int:
 
 
 def main() -> int:
+    """Validate the product on Coinbase, register it in core.assets, backfill it
+    unless --no-backfill is passed, and return a process exit code."""
     parser = argparse.ArgumentParser(
         prog="run_add_asset.py",
         description="Validate a Coinbase product, register it in core.assets, backfill it.",

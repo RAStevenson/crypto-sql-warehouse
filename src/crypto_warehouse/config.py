@@ -1,8 +1,8 @@
 """Connection settings and logging setup.
 
-One place that knows how to turn DATABASE_URL into a psycopg2 connection, so
-every entry point in scripts/ gets the same behavior and the same error
-message when it is missing.
+This module is the one place that turns DATABASE_URL into a psycopg2
+connection, so every entry point in scripts/ gets the same behavior and the
+same error message when the variable is missing.
 """
 
 from __future__ import annotations
@@ -26,18 +26,17 @@ MAINTENANCE_DATABASE = "postgres"
 
 
 class ConfigError(RuntimeError):
-    """Something the operator has to fix before the pipeline can run."""
+    """Raised for a problem the operator has to fix before the pipeline can run."""
 
 
 def load_dsn() -> str:
-    """DATABASE_URL from the environment, falling back to the repo's .env.
+    """Return DATABASE_URL from the environment, falling back to the repo's .env file.
 
-    The repo .env is read by absolute path rather than by searching upward
-    from the working directory, so the scripts behave the same whether they
-    are launched from the repo root or from anywhere else. load_dotenv never
-    overwrites a variable that is already exported, so an explicit
-    DATABASE_URL in the shell still wins.
+    A variable already exported takes precedence over the .env value, and
+    ConfigError is raised when neither source sets it.
     """
+    # Read by absolute path, not by searching upward from the working
+    # directory, so the scripts behave the same wherever they are launched.
     load_dotenv(ENV_FILE)
     dsn = os.environ.get("DATABASE_URL")
     if not dsn:
@@ -49,8 +48,12 @@ def load_dsn() -> str:
 
 
 def connect(dsn: str | None = None, *, autocommit: bool = False):
-    """Open a connection. autocommit=True is for statements that refuse to run
-    inside a transaction block, such as CREATE DATABASE."""
+    """Open a psycopg2 connection to the DSN, or to DATABASE_URL when none is
+    given, and return it.
+
+    Pass autocommit=True for statements that cannot run inside a transaction
+    block, such as CREATE DATABASE.
+    """
     conn = psycopg2.connect(dsn or load_dsn())
     conn.autocommit = autocommit
     return conn
@@ -59,9 +62,8 @@ def connect(dsn: str | None = None, *, autocommit: bool = False):
 def split_database_name(dsn: str) -> tuple[str, str] | None:
     """Return (maintenance_dsn, database_name) for a URL-style DSN.
 
-    Returns None for the libpq keyword form ("host=... dbname=..."), which
-    this project does not need to rewrite; the caller falls back to telling
-    the operator to create the database themselves.
+    Returns None for the libpq keyword form ("host=... dbname=...") and for a
+    URL that names no database.
     """
     parts = urlsplit(dsn)
     if parts.scheme not in ("postgresql", "postgres"):
@@ -74,16 +76,18 @@ def split_database_name(dsn: str) -> tuple[str, str] | None:
 
 
 class _UtcFormatter(logging.Formatter):
-    """Timestamps in UTC. The whole warehouse is UTC; log lines that are not
-    make correlating a failed run with a bucket boundary needlessly annoying.
-    """
+    """Formats log timestamps in UTC, so a log line can be matched to the
+    warehouse's UTC bucket boundaries."""
 
     converter = time.gmtime
 
 
 def configure_logging(verbose: bool = False) -> None:
-    """Send timestamped logs to stderr. Idempotent, so calling it twice from
-    a script and a module does not double every line."""
+    """Send timestamped log lines to stderr at INFO level, or DEBUG when verbose.
+
+    A second call adds no second handler, so calling it twice does not double
+    every line.
+    """
     root = logging.getLogger()
     if not root.handlers:
         handler = logging.StreamHandler(sys.stderr)

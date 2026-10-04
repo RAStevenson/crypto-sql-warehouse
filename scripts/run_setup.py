@@ -28,6 +28,7 @@ log = logging.getLogger("run_setup")
 
 
 def main() -> int:
+    """Parse the command line, run the setup, and return a process exit code."""
     parser = argparse.ArgumentParser(
         prog="run_setup.py",
         description="Create the database and apply sql/01_schema.sql and sql/02_marts.sql.",

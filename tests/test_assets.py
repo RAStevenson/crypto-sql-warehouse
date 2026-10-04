@@ -1,7 +1,7 @@
-"""The asset door: code parsing, the existence probe, and the insert's
-collision translation. No database and no network, like the rest of the suite;
-the probe runs against a scripted fake session and the insert against a fake
-cursor."""
+"""Tests of asset registration, covering product code parsing, the existence
+probe, and the insert's handling of a unique collision. They use no database
+and no network, like the rest of the suite. The probe runs against a scripted
+fake session and the insert against a fake cursor."""
 
 from __future__ import annotations
 
