@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff>=0.4"]
+dev = ["pytest>=8.0", "ruff>=0.4", "pyright>=1.1.400"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -32,3 +32,15 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "C4", "RUF"]
+
+[tool.pyright]
+# Type checking in pyright's basic mode. Declared here so an editor (Pylance
+# in VS Code reads this section) and the CI runner apply the same rules. A
+# finding is fixed with explicit code; an ignore comment is used only where a
+# library's own typing is wrong, and says so.
+include = ["src", "scripts", "tests"]
+extraPaths = ["src"]
+typeCheckingMode = "basic"
+pythonVersion = "3.11"
+venvPath = "."
+venv = ".venv"
