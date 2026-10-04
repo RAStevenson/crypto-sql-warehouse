@@ -8,11 +8,11 @@
 -- run exits nonzero under ON_ERROR_STOP and works as a CI gate. Passing
 -- checks print a NOTICE with the numbers they saw.
 --
--- Design rule these checks now follow, learned the hard way: an assertion is
--- only worth having if it fails on the bad state it claims to detect. Checks
--- 1 to 3 were rewritten after constructing each failure case inside a
--- transaction and watching the previous version pass, and every assertion
--- added since was run against its own constructed failure the same way.
+-- The design rule these checks follow is that an assertion is only worth
+-- having if it fails on the bad state it claims to detect. Checks 1 to 3
+-- were rewritten after constructing each failure case inside a transaction
+-- and watching the previous version pass, and every assertion added since
+-- was run against its own constructed failure the same way.
 
 -- Check 1: no asset-specific gaps in the hourly series.
 -- Hours missing for EVERY asset that has history at that hour are exchange
@@ -276,7 +276,7 @@ END $$;
 -- status = 'succeeded' INSIDE its DISTINCT ON, which means that if the most
 -- recent run for a product failed, check 4 quietly validates the last run
 -- that worked and reports a pass. That is the worst possible behavior for a
--- pipeline gate: it goes green precisely when the pipeline is broken. This
+-- pipeline gate: it passes precisely when the pipeline is broken. This
 -- check looks at the newest run per product with no status filter at all.
 DO $$
 DECLARE
@@ -313,9 +313,9 @@ END $$;
 -- a second layer, since any client can override it with SET timezone.
 --
 -- The check reads the mart's defining query live from the catalog with
--- pg_get_viewdef, so a drifted definition cannot dodge it, then runs that
--- query once under America/Chicago and once under UTC and requires the two
--- results to be identical row for row. Failure case constructed per the
+-- pg_get_viewdef, so it tests the definition the database holds now. It
+-- runs that query once under America/Chicago and once under UTC and requires
+-- the two results to be identical row for row. Failure case constructed per the
 -- design rule above: with marts.daily_ohlcv redefined to bucket by ts_utc::date
 -- inside a rolled-back transaction, this check reported all 708 rows differing
 -- on each side (moving the boundary by 5 hours touches nearly every day's
@@ -331,7 +331,7 @@ DECLARE
     total_rows bigint;
     example text;
 BEGIN
-    -- set_config(..., is_local => true): both overrides die with the enclosing
+    -- set_config(..., is_local => true): both overrides end with the enclosing
     -- transaction, so a failure cannot leak a Chicago timezone into anything
     -- that runs after this block.
     PERFORM set_config('timezone', 'America/Chicago', true);

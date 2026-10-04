@@ -2,9 +2,9 @@
 -- crypto-sql-warehouse: 20 analytical queries.
 --
 -- Each query is headed by the question it answers, then by the SQL technique
--- it uses. They are ordered roughly by how much machinery they need, so the
--- file also reads as a progression. Every query is self-contained and
--- runnable once the pipeline has loaded data and marts are refreshed.
+-- it uses. They are ordered roughly from the simpler techniques to the more
+-- involved ones. Every query is self-contained and runnable once the
+-- pipeline has loaded data and marts are refreshed.
 --
 -- Timezone note that applies file-wide: every date_trunc() over a timestamptz
 -- is written as date_trunc(unit, ts_utc AT TIME ZONE 'UTC'). That yields a
@@ -23,8 +23,9 @@
 -- Q01 --------------------------------------------------------------------
 -- What is the latest price on record for each asset, and how fresh is it?
 -- Technique: DISTINCT ON, Postgres's top-1-per-group. ORDER BY must lead
--- with the DISTINCT ON columns; the trailing sort key picks the winner.
--- ts_utc is unique per asset, so there is nothing left to break a tie on.
+-- with the DISTINCT ON columns; the trailing sort key decides which row of
+-- each group is kept, here the newest. ts_utc is unique per asset, so no
+-- tie is possible.
 SELECT DISTINCT ON (a.symbol)
     a.symbol,
     o.ts_utc,
@@ -136,16 +137,17 @@ ORDER BY avg_daily_dollar_volume DESC;
 -- bottom. Monthly return from first and last daily close, then the best
 -- month per asset.
 --
--- The "full calendar month" wording is load-bearing. The load starts and
--- ends mid-month, so the first and last calendar months are always stubs.
--- An earlier version of this query ranked those stubs against whole months
--- and reported a 7-day fragment as four of the six "best months", because a
--- 7-day window has far less room to give back a gain than a 31-day one.
--- days_present is carried through the CTEs and compared against the
--- calendar length of the month, and only complete months compete. It counts
--- complete days, so the current month does not qualify on its last day while
--- that day is still loading. Both columns stay in the output so the reader
--- can check the claim instead of trusting it.
+-- The "full calendar month" wording matters, because the load starts and
+-- ends mid-month, so the first and last calendar months are always partial.
+-- An earlier version of this query ranked those partial months against
+-- whole ones and reported a 7-day fragment as four of the six "best
+-- months", because a 7-day window has far less room to give back a gain
+-- than a 31-day one. days_present is carried through the CTEs and compared
+-- against the calendar length of the month, and only months with every day
+-- present are ranked. It counts complete days, so the current month does
+-- not qualify on its last day while that day is still loading. Both columns
+-- stay in the output so the reader can check the claim instead of trusting
+-- it.
 WITH monthly_bounds AS (
     SELECT
         asset_id,
@@ -214,9 +216,9 @@ ORDER BY a.symbol, d.trade_date;
 -- What were the three heaviest dollar-volume days for each asset?
 -- Technique: ROW_NUMBER for top-N-per-group. Window functions cannot appear
 -- in WHERE (they are evaluated after it), hence the CTE-then-filter shape.
--- The trade_date tiebreak makes the winners stable across runs if two days
--- ever tie on volume, and the IS NOT NULL filter keeps partial days out of a
--- ranking they would only distort.
+-- The trade_date tiebreak returns the same three days on every run if two
+-- days ever tie on volume, and the IS NOT NULL filter keeps partial days out
+-- of a ranking they would only distort.
 WITH ranked AS (
     SELECT
         asset_id,
@@ -250,8 +252,8 @@ ORDER BY a.symbol, r.rn;
 -- same rows; w_tie leaves the tie intact so RANK and DENSE_RANK still have
 -- something to demonstrate. Filtering on row_num rather than a global LIMIT
 -- is what makes all six assets appear: the previous LIMIT 40 was consumed
--- entirely by ADA, and the cut landed inside a tie group, so the surviving
--- rows changed between runs.
+-- entirely by ADA, and the cut landed inside a tie group, so the rows
+-- returned changed between runs.
 WITH ranked AS (
     SELECT
         m.asset_id,
@@ -285,15 +287,15 @@ ORDER BY a.symbol, r.row_num;
 -- What do the 7-day and 30-day moving averages and the 30-day annualized
 -- volatility look like day by day?
 -- Technique: window frames. ROWS BETWEEN N PRECEDING AND CURRENT ROW for
--- moving averages and rolling volatility; the talking point is that the
--- default frame is RANGE UNBOUNDED PRECEDING TO CURRENT ROW, and an explicit
--- ROWS frame is what you want as soon as the ORDER BY key can repeat.
+-- moving averages and rolling volatility. The default frame is RANGE
+-- UNBOUNDED PRECEDING TO CURRENT ROW, and an explicit ROWS frame is needed
+-- as soon as the ORDER BY key can repeat.
 --
 -- The count() guards are the same ones marts.daily_metrics applies. Without
 -- them the first row of each partition publishes a one-observation mean
 -- under a column named ma_30d, and BTC's first volatility print comes out
 -- at 0.2076 against 0.4043 for its first genuine 30-observation window.
--- NULL during warm-up is the honest answer.
+-- NULL is the accurate value during warm-up.
 SELECT
     a.symbol,
     m.trade_date,
@@ -320,19 +322,19 @@ ORDER BY a.symbol, m.trade_date;
 -- Q12 --------------------------------------------------------------------
 -- How far did each asset fall from its running peak, and on what day?
 -- Technique: cumulative windows. Running peak with ROWS BETWEEN UNBOUNDED
--- PRECEDING AND CURRENT ROW, a finance-flavored running total.
+-- PRECEDING AND CURRENT ROW, the same frame a running total uses.
 --
--- Two things worth saying out loud. First, the frame is spelled out rather
--- than left to the RANGE default; with one row per (asset, day) the results
--- agree, but the marts header claims ROWS frames and the code should match
--- the claim. Second, the peak is the highest close in the LOADED WINDOW,
+-- Two points need stating. First, the frame is spelled out rather than left
+-- to the RANGE default; with one row per (asset, day) the results agree, but
+-- the marts header claims ROWS frames and the code should match the claim.
+-- Second, the peak is the highest close in the LOADED WINDOW,
 -- measured from the first day of loaded history. This is not an
 -- all-time-high drawdown, and backfilling earlier data would change every
 -- number below.
 --
--- The trade_date tiebreak in array_agg is not decoration: ADA has an exact
+-- The trade_date tiebreak in array_agg is needed, because ADA has an exact
 -- tie, 2026-06-25 and 2026-06-28 both at -0.49203539823008849558, and
--- without the tiebreak the reported worst_day flips between runs.
+-- without the tiebreak the reported worst_day changes between runs.
 WITH dd AS (
     SELECT
         asset_id,
@@ -431,8 +433,8 @@ LIMIT 10;
 -- Which hours should exist in the series but have no candle?
 -- Technique: anti-join against generate_series, the data quality audit.
 -- LEFT JOIN plus WHERE right-side IS NULL is the anti-join idiom; NOT EXISTS
--- is the equivalent worth mentioning. Bounds are per asset, so an asset that
--- started loading later is not reported as missing its own prehistory.
+-- is the equivalent form. Bounds are per asset, so an asset that started
+-- loading later is not reported as missing the hours before its first candle.
 WITH bounds AS (
     SELECT asset_id, min(ts_utc) AS first_ts, max(ts_utc) AS last_ts
     FROM core.ohlcv_hourly
@@ -499,7 +501,7 @@ ORDER BY correlation DESC, asset_a, asset_b;
 -- loader ran. That is enough to manufacture or suppress an anomaly on the
 -- days that follow it.
 --
--- No day is judged until its baseline holds 30 observations, the same rule
+-- No day is tested until its baseline holds 30 observations, the same rule
 -- the marts apply to ma_30d. Without the count, the second day of history
 -- would be compared against an average of one.
 WITH baseline AS (
@@ -550,11 +552,11 @@ ORDER BY a.symbol, recent.ts_utc DESC;
 
 
 -- Q19 --------------------------------------------------------------------
--- Does the average daily return describe a typical day, or is it dragged
--- around by a handful of outliers?
+-- Does the average daily return describe a typical day, or is it moved by
+-- a handful of outliers?
 -- Technique: ordered-set aggregates. percentile_cont gives the median and
 -- the tails; crypto returns are heavy-tailed, so mean and median visibly
--- disagree, which is the reason to know the function exists.
+-- disagree.
 SELECT
     a.symbol,
     round(avg(m.simple_return), 5)                                          AS mean_return,
@@ -572,14 +574,14 @@ ORDER BY a.symbol;
 -- How does a rerun of the loader avoid duplicating or corrupting rows that
 -- are already in the fact table?
 -- Technique: idempotent incremental loading with INSERT ... ON CONFLICT.
--- This is the pipeline's core statement, isolated so I can walk through it.
--- Talking points: the conflict target must match a unique constraint;
--- EXCLUDED refers to the incoming row; the DO UPDATE ... WHERE clause skips
--- no-op updates, which avoids dead tuples and keeps updated_at honest.
+-- This is the pipeline's core statement, shown on its own. The conflict
+-- target must match a unique constraint. EXCLUDED refers to the incoming
+-- row. The DO UPDATE ... WHERE clause skips no-op updates, which avoids dead
+-- tuples and moves updated_at only when a value changed.
 -- DISTINCT ON guards against the same bucket appearing twice in one run,
 -- because ON CONFLICT cannot update the same row twice in one statement.
--- The ORDER BY ends on raw_id DESC, a unique column, so "newest copy wins"
--- is a total order and the statement is deterministic.
+-- The ORDER BY ends on raw_id DESC, a unique column, so the newest copy of
+-- each bucket is the one kept and the statement is deterministic.
 --
 -- (Illustrative: run against a real run_id, e.g. the latest succeeded run.)
 INSERT INTO core.ohlcv_hourly
