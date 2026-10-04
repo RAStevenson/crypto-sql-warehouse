@@ -37,12 +37,14 @@ class FakeResponse:
             raise requests.HTTPError(f"HTTP {self.status_code}", response=self)
 
 
-class FakeSession:
+class FakeSession(requests.Session):
     """Replays a scripted list of outcomes. An Exception instance in the list
     is raised instead of returned, which is how transport failures are
-    simulated."""
+    simulated. It subclasses requests.Session only so the type checker accepts
+    it where a Session is declared; get never reaches the network."""
 
     def __init__(self, outcomes):
+        super().__init__()
         self.outcomes = list(outcomes)
         self.calls: list[dict] = []
 
@@ -163,6 +165,42 @@ def test_parse_candles_rejects_malformed_payloads(payload):
     assert "BTC-USD" in str(caught.value)
 
 
+@pytest.mark.parametrize("literal", ["NaN", "Infinity", "-Infinity"])
+@pytest.mark.parametrize(
+    "position", [1, 2, 3, 4, 5], ids=["low", "high", "open", "close", "volume"]
+)
+def test_parse_candles_rejects_nan_or_infinity_in_any_price_or_volume_field(position, literal):
+    # JSON text may carry these literals, the decoder accepts them, and a NaN
+    # would pass every CHECK on the candle tables.
+    fields = ["1782871200", "1.0", "2.0", "1.5", "1.5", "1.0"]
+    fields[position] = literal
+    payload = decode(f"[[{', '.join(fields)}]]")
+
+    with pytest.raises(CandlePayloadError) as caught:
+        parse_candles(payload, "BTC-USD")
+
+    assert "BTC-USD" in str(caught.value)
+
+
+# --------------------------------------------------------------------------
+# The request
+# --------------------------------------------------------------------------
+def test_fetch_window_sends_the_window_start_and_end_and_hourly_granularity_as_params(no_sleep):
+    session = FakeSession([FakeResponse(200, LIVE_PAYLOAD_TEXT)])
+    window_start, window_end = window()
+    assert window_start != window_end  # a swap of the two has to be visible
+
+    fetch_window(session, "BTC-USD", window_start, window_end)
+
+    (call,) = session.calls
+    assert "/products/BTC-USD/candles" in call["url"]
+    assert call["params"] == {
+        "granularity": 3600,
+        "start": window_start.isoformat(),
+        "end": window_end.isoformat(),
+    }
+
+
 # --------------------------------------------------------------------------
 # Retries
 # --------------------------------------------------------------------------
@@ -208,6 +246,34 @@ def test_fetch_window_ignores_unparseable_retry_after(no_sleep):
     assert no_sleep == [1.0]  # fell back to the exponential schedule
 
 
+@pytest.mark.parametrize("header", ["0", "nan"])
+def test_fetch_window_falls_back_to_its_own_backoff_on_a_zero_or_nan_retry_after(no_sleep, header):
+    session = FakeSession(
+        [
+            FakeResponse(429, headers={"Retry-After": header}),
+            FakeResponse(200, LIVE_PAYLOAD_TEXT),
+        ]
+    )
+
+    fetch_window(session, "BTC-USD", *window())
+
+    assert no_sleep == [1.0]  # the first backoff step, not 0 and not nan
+
+
+def test_fetch_window_caps_a_retry_after_larger_than_the_maximum(no_sleep):
+    session = FakeSession(
+        [
+            FakeResponse(429, headers={"Retry-After": "86400"}),
+            FakeResponse(200, LIVE_PAYLOAD_TEXT),
+        ]
+    )
+
+    fetch_window(session, "BTC-USD", *window())
+
+    assert no_sleep == [api.MAX_RETRY_AFTER_SECONDS]
+    assert api.MAX_RETRY_AFTER_SECONDS < 86400
+
+
 def test_fetch_window_gives_up(no_sleep):
     session = FakeSession([FakeResponse(429) for _ in range(api.MAX_ATTEMPTS)])
 
@@ -228,6 +294,28 @@ def test_fetch_window_retries_5xx(no_sleep, status):
     candles = fetch_window(session, "BTC-USD", *window())
 
     assert len(candles) == 1
+    assert len(session.calls) == 2
+    assert no_sleep == [1.0]
+
+
+@pytest.mark.parametrize("status", [408, 524])
+def test_fetch_window_retries_http_408_and_the_proxy_timeout_524(no_sleep, status):
+    session = FakeSession([FakeResponse(status), FakeResponse(200, LIVE_PAYLOAD_TEXT)])
+
+    candles = fetch_window(session, "BTC-USD", *window())
+
+    assert len(candles) == 1
+    assert len(session.calls) == 2
+    assert no_sleep == [1.0]
+
+
+def test_fetch_window_retries_a_chunked_encoding_error_and_returns_the_second_attempt(no_sleep):
+    cut_off = requests.exceptions.ChunkedEncodingError("response ended mid-body")
+    session = FakeSession([cut_off, FakeResponse(200, LIVE_PAYLOAD_TEXT)])
+
+    candles = fetch_window(session, "BTC-USD", *window())
+
+    assert [candle.close for candle in candles] == [Decimal("58991.99")]
     assert len(session.calls) == 2
     assert no_sleep == [1.0]
 

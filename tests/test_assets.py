@@ -6,6 +6,7 @@ cursor."""
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import requests
@@ -18,6 +19,7 @@ from crypto_warehouse.assets import (
     probe_product,
 )
 from crypto_warehouse.config import ConfigError
+from crypto_warehouse.windows import floor_hour
 
 # One real candle row in wire order, enough for the probe to count.
 CANDLE_PAYLOAD = "[[1782871200, 58566.2, 59077.93, 58668.85, 58991.99, 350.09989392]]"
@@ -37,8 +39,13 @@ class FakeResponse:
             raise requests.HTTPError(f"HTTP {self.status_code}", response=self)
 
 
-class FakeSession:
+class FakeSession(requests.Session):
+    """Answers every get with one scripted response. It subclasses
+    requests.Session only so the type checker accepts it where a Session is
+    declared; get never reaches the network."""
+
     def __init__(self, response):
+        super().__init__()
         self.response = response
         self.calls: list[dict] = []
 
@@ -70,11 +77,29 @@ def test_parse_rejects_malformed_codes(bad):
 # --------------------------------------------------------------------------
 # probe_product
 # --------------------------------------------------------------------------
-def test_probe_counts_candles_and_asks_for_the_probe_window():
+def test_probe_counts_candles_and_names_the_product_in_the_url():
     session = FakeSession(FakeResponse(text=CANDLE_PAYLOAD))
     assert probe_product(session, "XRP-USD") == 1
     (call,) = session.calls
     assert "XRP-USD" in call["url"]
+
+
+def test_probe_asks_for_exactly_the_trailing_probe_hours_ending_on_the_current_hour():
+    session = FakeSession(FakeResponse(text=CANDLE_PAYLOAD))
+    hour_before = floor_hour(datetime.now(UTC))
+
+    probe_product(session, "XRP-USD")
+
+    hour_after = floor_hour(datetime.now(UTC))
+    (call,) = session.calls
+    start = datetime.fromisoformat(call["params"]["start"])
+    end = datetime.fromisoformat(call["params"]["end"])
+    assert end - start == timedelta(hours=PROBE_HOURS)
+    assert PROBE_HOURS > 0
+    assert (end.minute, end.second, end.microsecond) == (0, 0, 0)
+    # Trailing means the window ends at the current hour. The two readings
+    # bracket the call, so the check holds even across an hour rollover.
+    assert hour_before <= end <= hour_after
 
 
 def test_probe_rejects_a_200_with_no_candles():
@@ -96,7 +121,7 @@ class FakeCursor:
     def __init__(self, error=None, asset_id=7):
         self.error = error
         self.asset_id = asset_id
-        self.executed: list[tuple[str, tuple]] = []
+        self.executed: list[tuple[str, tuple | None]] = []
 
     def execute(self, sql, params=None):
         if self.error is not None:

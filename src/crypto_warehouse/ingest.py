@@ -31,24 +31,37 @@ import requests
 from . import config, sqlfiles
 from .api import GRANULARITY_SECONDS, fetch_window
 from .config import ConfigError
-from .windows import bucket_count, floor_hour, iter_windows
+from .windows import (
+    bucket_count,
+    floor_hour,
+    iter_windows,
+    longest_consecutive_run,
+    missing_buckets,
+)
 
 log = logging.getLogger(__name__)
 
 USER_AGENT = "crypto-sql-warehouse (portfolio project)"
 
-# Re-fetch the trailing few hours on every run: the most recent candle can be
-# revised while its hour is in progress, and the upsert makes overlap free.
+# Re-fetch the trailing few hours on every run: a completed candle can be
+# revised shortly after its hour closes, and the upsert leaves an unrevised
+# row in core untouched.
 OVERLAP_HOURS = 3
 DEFAULT_BACKFILL_DAYS = 365
 REQUEST_PAUSE_SECONDS = 0.15  # public endpoint allows ~10 req/s; stay well under
 
-# A window that comes back missing more than this fraction of its buckets gets
-# logged loudly. Zero-trade hours are legitimately absent from the response, so
-# a couple of holes in a 300-hour window on an illiquid pair is normal; a
-# six-hour exchange outage across every asset is not, and the MAX() watermark
-# makes any hole permanent unless somebody notices it.
+# A window is logged as short when it is missing this fraction of its buckets
+# or more, or when it is missing this many consecutive hours or more. The
+# fraction rounds down with a floor of one bucket, so a window under 20 hours
+# is flagged by a single hole and an ordinary daily window by two.
+# Zero-trade hours are legitimately absent from the response, so an isolated
+# hole in a long backfill window on an illiquid pair is normal. Several hours missing in a row is
+# what an exchange outage looks like, and a fraction alone would not see it:
+# six hours is 2% of a 300-hour window. The MAX() watermark makes any hole
+# permanent unless somebody notices it. Three hours is a judgment line, not a
+# measured bound.
 SHORT_WINDOW_TOLERANCE = 0.10
+GAP_WARNING_HOURS = 3
 
 # Column list in DDL order. The Candle NamedTuple carries the wire order, and
 # building the tuple by field name is what keeps the two from drifting.
@@ -161,7 +174,7 @@ def get_watermark(
     if max_ts is None:
         return floor
 
-    resume = max_ts - timedelta(hours=OVERLAP_HOURS)
+    resume = max_ts.astimezone(UTC) - timedelta(hours=OVERLAP_HOURS)
     return min(resume, floor) if apply_floor else resume
 
 
@@ -203,22 +216,41 @@ def _fetch_into_raw(
     short_windows = 0
 
     for window_start, window_end in iter_windows(start, current_hour):
-        candles = fetch_window(session, product_code, window_start, window_end)
-        # Defensive: iter_windows already stops before the forming hour.
-        candles = [c for c in candles if c.bucket_start < current_hour]
+        fetched = fetch_window(session, product_code, window_start, window_end)
+        # Keep only what was asked for. iter_windows already stops before the
+        # forming hour, and a candle outside the window would otherwise count
+        # toward the completeness check below.
+        candles = [
+            c
+            for c in fetched
+            if window_start <= c.bucket_start <= window_end and c.bucket_start < current_hour
+        ]
+        if len(candles) != len(fetched):
+            log.warning(
+                "%s: dropped %d candle(s) outside the requested window %s..%s",
+                product_code,
+                len(fetched) - len(candles),
+                window_start.isoformat(),
+                window_end.isoformat(),
+            )
 
         expected = bucket_count(window_start, window_end)
-        missing = expected - len(candles)
-        if missing > 0 and missing >= max(1, int(expected * SHORT_WINDOW_TOLERANCE)):
+        missing = missing_buckets(window_start, window_end, {c.bucket_start for c in candles})
+        longest_gap = longest_consecutive_run(missing)
+        if longest_gap >= GAP_WARNING_HOURS or (
+            missing and len(missing) >= max(1, int(expected * SHORT_WINDOW_TOLERANCE))
+        ):
             short_windows += 1
             log.warning(
-                "%s: window %s..%s returned %d of %d buckets, %d missing",
+                "%s: window %s..%s is missing %d of %d buckets, longest gap %d hour(s) "
+                "starting %s",
                 product_code,
                 window_start.isoformat(),
                 window_end.isoformat(),
-                len(candles),
+                len(missing),
                 expected,
-                missing,
+                longest_gap,
+                missing[0].isoformat(),
             )
 
         if candles:
@@ -319,7 +351,9 @@ def load_product(
             conn, session, product_code, run_id, start, current_hour
         )
         rows_upserted = _promote_to_core(conn, run_id, rows_fetched)
-    except Exception:
+    except BaseException:
+        # BaseException, so that Ctrl+C also closes out the run row instead of
+        # leaving it at 'running'.
         _mark_run_failed(conn, run_id)
         raise
 
@@ -333,18 +367,18 @@ def load_product(
     return LoadResult(product_code, run_id, rows_fetched, rows_upserted, short_windows)
 
 
-def refresh_marts(conn) -> None:
-    """Run sql/03_refresh_marts.sql.
-
-    REFRESH MATERIALIZED VIEW CONCURRENTLY cannot run inside a transaction
-    block, so the connection is flipped to autocommit for the duration.
-    """
-    conn.commit()  # close any open read transaction before toggling
-    conn.autocommit = True
+def _rollback_quietly(conn) -> None:
+    """Roll back, logging instead of raising when the connection itself is gone."""
     try:
-        sqlfiles.run_sql_file(conn, sqlfiles.REFRESH_MARTS_FILE)
-    finally:
-        conn.autocommit = False
+        conn.rollback()
+    except Exception:
+        log.warning("rollback after a failure also failed", exc_info=True)
+
+
+def refresh_marts(conn) -> None:
+    """Run sql/03_refresh_marts.sql in one transaction, so the three views change together."""
+    sqlfiles.run_sql_file(conn, sqlfiles.REFRESH_MARTS_FILE)
+    conn.commit()
 
 
 def run_ingest(
@@ -384,6 +418,10 @@ def run_ingest(
             except Exception as exc:
                 failures.append(product_code)
                 log.error("%s: load failed: %s", product_code, exc, exc_info=True)
+                # A failure before the run row exists never reaches the
+                # rollback in _mark_run_failed, and an aborted transaction
+                # would fail every product after this one.
+                _rollback_quietly(conn)
                 continue
             log.info(
                 "%s: fetched %d, upserted %d (run %d)",
@@ -399,6 +437,7 @@ def run_ingest(
             except Exception as exc:
                 failures.append("refresh-marts")
                 log.error("mart refresh failed: %s", exc, exc_info=True)
+                _rollback_quietly(conn)
 
     if failures:
         log.error("finished with %d failure(s): %s", len(failures), ", ".join(failures))

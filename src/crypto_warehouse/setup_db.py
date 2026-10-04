@@ -74,7 +74,9 @@ def drop_schemas(conn) -> None:
     Destructive and only reachable behind an explicit flag. The DDL files use
     plain CREATE rather than CREATE IF NOT EXISTS, which is the right choice
     for a file that is meant to describe one exact schema, and it means
-    re-applying them needs the old objects gone first.
+    re-applying them needs the old objects gone first. Does not commit: the
+    caller commits the drop together with the rebuild, so a DDL error leaves
+    the old schemas in place.
     """
     log.warning("dropping schemas %s and everything in them", ", ".join(SCHEMAS))
     with conn.cursor() as cur:
@@ -82,7 +84,6 @@ def drop_schemas(conn) -> None:
             cur.execute(
                 pgsql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(pgsql.Identifier(schema))
             )
-    conn.commit()
 
 
 def run_setup(*, reset: bool = False) -> int:
@@ -104,8 +105,10 @@ def run_setup(*, reset: bool = False) -> int:
                 return 1
             drop_schemas(conn)
 
-        # One transaction for both files: a database with the fact tables but
-        # no matviews is a worse state to land in than no database at all.
+        # One transaction for the drop and both files: a database with the
+        # fact tables but no matviews is a worse state to land in than no
+        # database at all, and a failed rebuild must not have dropped the old
+        # schemas.
         sqlfiles.run_sql_file(conn, sqlfiles.SCHEMA_FILE)
         sqlfiles.run_sql_file(conn, sqlfiles.MARTS_FILE)
         conn.commit()

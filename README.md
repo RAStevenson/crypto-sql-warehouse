@@ -126,14 +126,13 @@ Every argument of every script, mirroring `--help`:
 - `run_add_asset.py --backfill-days N` sets the depth of the initial load in
   days (default 365).
 - `run_add_asset.py --no-backfill` registers the asset only, and the next
-  ingest run loads it.
+  ingest run loads it. It cannot be combined with `--backfill-days`.
 - `run_analysis.py --metrics PATH` sets the output path for the metrics file
   (default `reports/metrics.json`). Any other path skips the report, because
   the report builder reads only the default.
 - `run_analysis.py --figures DIR` sets the output directory for the PNG
-  figures (default `reports/figures`). The report always embeds the figures in
-  `reports/figures`, so with another directory it shows the older figures
-  there beside the new numbers.
+  figures (default `reports/figures`). Any other directory skips the report
+  too, because the report builder embeds only the figures in the default directory.
 - `run_analysis.py --no-report` skips rendering the HTML and PDF report after
   the metrics and figures.
 - Every script except `run_build_report.py` accepts `--verbose` for
@@ -141,11 +140,9 @@ Every argument of every script, mirroring `--help`:
   other arguments, and `run_build_report.py` takes none at all.
 
 Rerunning the loader is safe by construction, and `run_verify.py` asserts it.
-After two back-to-back runs the second must have upserted (inserted or
-updated) at most one row per product, which is the tolerance for an hour
-boundary crossing between them. That check holds only straight after such a
-pair of runs. After an ordinary daily load, the latest run has upserted a
-day of new candles and the check fails.
+One of its checks looks at the rows each product's latest run updated. If any
+of them holds the same values as the copy an earlier run had already loaded,
+the run rewrote a row it should have left alone, and the check fails.
 
 The six seeded assets are a starting set, not a limit. `run_add_asset.py`
 registers any Coinbase product after proving it answers with at least one
@@ -158,8 +155,9 @@ stops ingestion without deleting history.
 
 On my machine the loader runs daily through Windows Task Scheduler. The task
 `crypto-warehouse-ingest` calls `scripts/scheduled_ingest.cmd` at 07:10 local
-time, which runs the default ingest from the repo root and appends its log to
-`logs/`. Because every run resumes from the watermark, a day the machine was
+time. The script runs the default ingest from the repo root and appends its
+log to `logs/`. It uses the Python in the repo's `.venv` when there is one,
+and the `python` on PATH otherwise. Because every run resumes from the watermark, a day the machine was
 off is made up in full by the next run, and `raw.ingest_runs` records what
 each run did. To register the same task, with the repo path substituted:
 
@@ -210,9 +208,10 @@ queries trust. Marts are presentation-shaped and rebuilt from core.
 
 ## Design decisions
 
-Idempotency lives in the database, not the pipeline. The upsert targets the
+The database enforces idempotency. The loader writes with an upsert, an
+insert that becomes an update when the row already exists. The upsert targets the
 natural primary key `(asset_id, ts_utc)`, so replaying any window changes
-nothing unless the source data changed. The `DO UPDATE` has an `IS DISTINCT FROM`
+nothing in core unless the source data changed. The `DO UPDATE` has an `IS DISTINCT FROM`
 guard, so unchanged rows are skipped entirely. That leaves no dead tuples, and
 `updated_at` only moves when the data moved.
 
@@ -224,8 +223,8 @@ duplicate rows per product per run in append-only `raw.candles`, three from
 the overlap and one from re-fetching the watermark hour itself. Three hours is a guess at
 Coinbase's revision window, not a measured bound.
 
-Prices are stored as `numeric(20,8)` and volumes as `numeric(30,8)`. A warehouse where `SUM(volume)` drifts by
-rounding is a warehouse people stop trusting. The API returns JSON numbers,
+Prices are stored as `numeric(20,8)` and volumes as `numeric(30,8)`. The API
+returns JSON numbers,
 which Python would ordinarily parse as float64, so the client parses them
 straight to `Decimal` instead and psycopg2 adapts that to `numeric`. Exactness
 holds end to end rather than starting at the database boundary.
@@ -276,11 +275,9 @@ it complicates the upsert and the vacuum story for nothing. The DDL comments say
 where the crossover is.
 
 The three mart materialized views (matviews) have unique indexes so refreshes
-run `CONCURRENTLY` and a live Tableau session never blocks. The guarantee is
-per view, not across the layer. Each refresh is its own transaction, so a
-reader can catch
-`daily_ohlcv` refreshed while `daily_metrics` still holds prior data.
-`tableau_daily_extract` is a plain view over `daily_metrics`, so it shows
+run `CONCURRENTLY` and a live Tableau session never blocks. The loader runs
+the three refreshes in one transaction, so a connected session sees all three views
+change together. `tableau_daily_extract` is a plain view over `daily_metrics`, so it shows
 whatever that matview last committed.
 
 ## Tableau
@@ -337,7 +334,7 @@ sql/01_schema.sql             schema DDL with design rationale in comments
 sql/02_marts.sql              derived layers (rollups, volatility, correlations)
 sql/03_refresh_marts.sql      mart refresh, dependency-ordered
 sql/04_queries.sql            annotated analytical queries, each standalone
-sql/05_verify.sql             the assertion battery, fatal on failure
+sql/05_verify.sql             the assertions, fatal on failure
 tests/                        the test suite, no database or network needed
 reports/                      the generated report, its metrics and figures
 requirements.txt              exact pins the reported numbers were produced with

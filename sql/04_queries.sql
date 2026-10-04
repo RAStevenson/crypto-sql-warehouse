@@ -142,14 +142,15 @@ ORDER BY avg_daily_dollar_volume DESC;
 -- and reported a 7-day fragment as four of the six "best months", because a
 -- 7-day window has far less room to give back a gain than a 31-day one.
 -- days_present is carried through the CTEs and compared against the
--- calendar length of the month, and only complete months compete. Both
--- columns stay in the output so the reader can check the claim instead of
--- trusting it.
+-- calendar length of the month, and only complete months compete. It counts
+-- complete days, so the current month does not qualify on its last day while
+-- that day is still loading. Both columns stay in the output so the reader
+-- can check the claim instead of trusting it.
 WITH monthly_bounds AS (
     SELECT
         asset_id,
         date_trunc('month', trade_date)::date                  AS month,
-        count(*)                                              AS days_present,
+        count(*) FILTER (WHERE is_complete)                   AS days_present,
         (array_agg(close ORDER BY trade_date ASC ))[1]        AS first_close,
         (array_agg(close ORDER BY trade_date DESC))[1]        AS last_close
     FROM marts.daily_ohlcv
@@ -189,19 +190,23 @@ ORDER BY a.symbol, fm.month;
 -- alongside so the arithmetic is checkable by eye?
 -- Technique: LAG, the canonical period-over-period question. NULLIF guards
 -- division by zero; the first row per partition is NULL by construction and
--- that is correct, not a bug to paper over. hours_present is selected so a
--- return computed against a partial bar is visible rather than implied.
+-- that is correct, not a bug to hide. This query computes the return on
+-- every row, so three columns are selected to show when it should not be
+-- trusted: hours_present and prev_hours_present expose a partial bar on
+-- either side, and prev_date exposes a return that spans a gap.
+-- marts.daily_metrics is where those returns are set to NULL.
 SELECT
     a.symbol,
     d.trade_date,
     d.close,
     d.hours_present,
-    lag(d.close) OVER (PARTITION BY d.asset_id ORDER BY d.trade_date) AS prev_close,
-    round(d.close / NULLIF(lag(d.close) OVER (PARTITION BY d.asset_id
-                                              ORDER BY d.trade_date), 0) - 1, 4)
-        AS daily_return
+    lag(d.trade_date)    OVER w AS prev_date,
+    lag(d.hours_present) OVER w AS prev_hours_present,
+    lag(d.close)         OVER w AS prev_close,
+    round(d.close / NULLIF(lag(d.close) OVER w, 0) - 1, 4) AS daily_return
 FROM marts.daily_ohlcv d
 JOIN core.assets a USING (asset_id)
+WINDOW w AS (PARTITION BY d.asset_id ORDER BY d.trade_date)
 ORDER BY a.symbol, d.trade_date;
 
 
@@ -459,7 +464,9 @@ ORDER BY a.symbol, e.ts;
 --
 -- The bound is > max - 90, not >= max - 90. The inclusive form spans 91
 -- distinct dates; it previously reported 90 only because the earliest
--- log_return happened to be NULL, which is luck rather than logic.
+-- log_return happened to be NULL, which is luck rather than logic. The
+-- window is anchored on max(trade_date), normally the day still being
+-- loaded, so shared_days tops out at 89 under a daily load.
 WITH r AS (
     SELECT asset_id, trade_date, log_return
     FROM marts.daily_metrics
@@ -491,16 +498,21 @@ ORDER BY correlation DESC, asset_a, asset_b;
 -- trailing window moves the baseline by an amount that depends on when the
 -- loader ran. That is enough to manufacture or suppress an anomaly on the
 -- days that follow it.
+--
+-- No day is judged until its baseline holds 30 observations, the same rule
+-- the marts apply to ma_30d. Without the count, the second day of history
+-- would be compared against an average of one.
 WITH baseline AS (
     SELECT
         asset_id,
         trade_date,
         dollar_volume_approx,
-        avg(dollar_volume_approx) OVER (PARTITION BY asset_id ORDER BY trade_date
-                                        ROWS BETWEEN 30 PRECEDING AND 1 PRECEDING)
-            AS trailing_avg_volume
+        avg(dollar_volume_approx)   OVER w AS trailing_avg_volume,
+        count(dollar_volume_approx) OVER w AS baseline_days
     FROM marts.daily_metrics
     WHERE dollar_volume_approx IS NOT NULL
+    WINDOW w AS (PARTITION BY asset_id ORDER BY trade_date
+                 ROWS BETWEEN 30 PRECEDING AND 1 PRECEDING)
 )
 SELECT
     a.symbol,
@@ -510,7 +522,7 @@ SELECT
     round(b.dollar_volume_approx / b.trailing_avg_volume, 1) AS volume_multiple
 FROM baseline b
 JOIN core.assets a USING (asset_id)
-WHERE b.trailing_avg_volume IS NOT NULL
+WHERE b.baseline_days = 30
   AND b.dollar_volume_approx > 3 * b.trailing_avg_volume
 ORDER BY volume_multiple DESC, a.symbol, b.trade_date;
 

@@ -2,13 +2,24 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
-from crypto_warehouse.windows import HOUR, MAX_CANDLES_PER_REQUEST, floor_hour, iter_windows
+from crypto_warehouse.windows import (
+    HOUR,
+    MAX_CANDLES_PER_REQUEST,
+    floor_hour,
+    iter_windows,
+    longest_consecutive_run,
+    missing_buckets,
+)
 
 BASE = datetime(2026, 3, 14, 7, tzinfo=UTC)
+
+# A session time zone with a half-hour offset, the case where flooring in
+# place and flooring in UTC give different instants.
+HALF_HOUR_ZONE = timezone(timedelta(hours=5, minutes=30))
 
 SPANS = [
     timedelta(hours=1),
@@ -114,3 +125,95 @@ def test_iter_windows_terminates_on_a_long_backfill():
 def test_iter_windows_rejects_a_nonsense_cap():
     with pytest.raises(ValueError):
         list(iter_windows(BASE, BASE + timedelta(hours=5), max_candles=0))
+
+
+def test_floor_hour_converts_an_aware_datetime_to_utc_before_truncating():
+    moment = datetime(2026, 10, 3, 13, 30, tzinfo=HALF_HOUR_ZONE)
+
+    result = floor_hour(moment)
+
+    # 13:30+05:30 is 08:00 UTC. Truncating in place would give 13:00+05:30,
+    # which is 07:30 UTC and not a bucket.
+    assert result == datetime(2026, 10, 3, 8, 0, tzinfo=UTC)
+    assert result.tzinfo is UTC
+
+
+def test_iter_windows_from_a_half_hour_offset_start_tiles_on_the_utc_hour():
+    start = datetime(2026, 10, 3, 13, 30, tzinfo=HALF_HOUR_ZONE)
+    first_bucket = datetime(2026, 10, 3, 8, 0, tzinfo=UTC)
+    current_hour = first_bucket + timedelta(hours=301)
+
+    windows = list(iter_windows(start, current_hour))
+
+    assert len(windows) == 2  # the tiling is checked across a window boundary
+    covered: list[datetime] = []
+    for window_start, window_end in windows:
+        for bound in (window_start, window_end):
+            in_utc = bound.astimezone(UTC)
+            assert (in_utc.minute, in_utc.second, in_utc.microsecond) == (0, 0, 0)
+        bucket = window_start
+        while bucket <= window_end:
+            covered.append(bucket)
+            bucket += HOUR
+
+    assert covered == [first_bucket + i * HOUR for i in range(301)]
+
+
+# --------------------------------------------------------------------------
+# missing_buckets and longest_consecutive_run, the two halves of the
+# short-window check in the loader.
+# --------------------------------------------------------------------------
+def test_missing_buckets_returns_exactly_the_absent_hours_of_an_inclusive_window_in_order():
+    window_end = BASE + timedelta(hours=5)
+    # The first and last buckets are among the absent ones, so an exclusive
+    # bound at either end would change the answer.
+    present = {BASE + timedelta(hours=1), BASE + timedelta(hours=2), BASE + timedelta(hours=4)}
+
+    missing = missing_buckets(BASE, window_end, present)
+
+    assert missing == [BASE, BASE + timedelta(hours=3), BASE + timedelta(hours=5)]
+
+
+def test_missing_buckets_ignores_present_buckets_outside_the_window():
+    window_end = BASE + timedelta(hours=2)
+    present = {
+        BASE - HOUR,  # before the window
+        BASE + timedelta(hours=1),
+        BASE + timedelta(hours=3),  # after the window
+        BASE + timedelta(days=9),
+    }
+
+    missing = missing_buckets(BASE, window_end, present)
+
+    assert missing == [BASE, BASE + timedelta(hours=2)]
+
+
+def test_missing_buckets_is_empty_when_every_bucket_is_present():
+    window_end = BASE + timedelta(hours=3)
+    present = [BASE + i * HOUR for i in range(4)]
+
+    assert missing_buckets(BASE, window_end, present) == []
+
+
+def test_longest_consecutive_run_of_an_empty_list_is_zero():
+    assert longest_consecutive_run([]) == 0
+
+
+def test_longest_consecutive_run_of_isolated_hours_is_one():
+    isolated = [BASE, BASE + timedelta(hours=2), BASE + timedelta(hours=7)]
+
+    assert longest_consecutive_run(isolated) == 1
+
+
+def test_longest_consecutive_run_finds_a_six_hour_run_among_scattered_single_holes():
+    # Single holes before and after the run, so neither the first nor the last
+    # run in the list is the longest.
+    buckets = [
+        BASE,
+        BASE + timedelta(hours=3),
+        *(BASE + timedelta(hours=10 + i) for i in range(6)),
+        BASE + timedelta(hours=20),
+        BASE + timedelta(hours=40),
+    ]
+
+    assert longest_consecutive_run(buckets) == 6

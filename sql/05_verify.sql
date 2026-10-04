@@ -1,6 +1,7 @@
--- Smoke test: structural invariants the warehouse must satisfy after any load.
+-- Smoke test: structural invariants the warehouse must satisfy after any
+-- successful load that refreshed the marts.
 --
--- Usage (check 4 assumes the loader just ran twice back to back):
+-- Usage:
 --   psql -d crypto_warehouse -v ON_ERROR_STOP=1 -f sql/05_verify.sql
 --
 -- Each check is a DO block that raises an exception on failure, so a failing
@@ -8,9 +9,10 @@
 -- checks print a NOTICE with the numbers they saw.
 --
 -- Design rule these checks now follow, learned the hard way: an assertion is
--- only worth having if it fails on the bad state it claims to detect. Every
--- check below was rewritten after constructing its failure case inside a
--- transaction and watching the previous version pass.
+-- only worth having if it fails on the bad state it claims to detect. Checks
+-- 1 to 3 were rewritten after constructing each failure case inside a
+-- transaction and watching the previous version pass, and every assertion
+-- added since was run against its own constructed failure the same way.
 
 -- Check 1: no asset-specific gaps in the hourly series.
 -- Hours missing for EVERY asset that has history at that hour are exchange
@@ -30,10 +32,21 @@
 --     matched neither FILTER and vanished from both counters.
 -- Counting expected and missing in the same GROUP BY makes both impossible,
 -- and the >= in the outage filter means nothing can fall between the two.
+--
+-- What the gap count cannot see, stated so nobody assumes otherwise. Each
+-- asset's expected hours run from its own first candle to its own last, so
+-- an asset that stops loading produces no gap; the second assertion below
+-- covers that case for active assets. Where only one asset has history, an
+-- hour it lacks counts as an outage, because there is nothing to compare it
+-- with. And a thinly traded product with zero-trade hours fails this check
+-- by design: the six seeded assets trade every hour, and a product that does
+-- not would need a tolerance this check does not have.
 DO $$
 DECLARE
     partial_gap_hours bigint;
     outage_hours bigint;
+    stale_assets bigint;
+    stale_detail text;
 BEGIN
     WITH bounds AS (
         SELECT asset_id, min(ts_utc) AS first_ts, max(ts_utc) AS last_ts
@@ -61,7 +74,30 @@ BEGIN
         RAISE EXCEPTION 'gap check failed: % hour(s) missing for only some assets (pipeline bug, not outage)',
             partial_gap_hours;
     END IF;
-    RAISE NOTICE 'gap check passed: 0 asset-specific gaps, % exchange-wide outage hour(s) tolerated', outage_hours;
+
+    -- An active asset whose newest candle trails the newest candle of any
+    -- active asset by more than two days has stopped loading. Two days,
+    -- because a daily schedule plus a load of a single product can
+    -- legitimately leave the others a day behind.
+    WITH newest AS (
+        SELECT a.product_code, max(o.ts_utc) AS last_ts
+        FROM core.assets a
+        JOIN core.ohlcv_hourly o USING (asset_id)
+        WHERE a.is_active
+        GROUP BY a.product_code
+    )
+    SELECT count(*),
+           string_agg(format('%s (last candle %s)', product_code, last_ts), ', '
+                      ORDER BY product_code)
+    INTO stale_assets, stale_detail
+    FROM newest
+    WHERE last_ts < (SELECT max(last_ts) FROM newest) - interval '48 hours';
+
+    IF stale_assets > 0 THEN
+        RAISE EXCEPTION 'gap check failed: % active asset(s) stopped loading more than 48 hours before the newest candle: %',
+            stale_assets, stale_detail;
+    END IF;
+    RAISE NOTICE 'gap check passed: 0 asset-specific gaps, % exchange-wide outage hour(s) tolerated, no active asset more than 48 hours behind', outage_hours;
 END $$;
 
 -- Check 2: the daily rollup covers exactly the (asset, day) pairs present in
@@ -165,19 +201,28 @@ BEGIN
     RAISE NOTICE 'raw/core check passed: values agree, no core orphans, no unpromoted raw buckets';
 END $$;
 
--- Check 4: idempotency. The latest succeeded run per product must have
--- upserted at most one row, which is what a rerun over unchanged data does.
--- Valid immediately after two back-to-back runs; if an hour boundary crossed
--- between them, one new candle per product is legitimate, so the threshold
--- is 1, not 0.
+-- Check 4: idempotency. The latest succeeded run per product must not have
+-- rewritten a row whose values did not change.
 --
--- rows_upserted IS NULL is now an explicit failure. It used to slip through
--- because NULL > 1 evaluates to NULL, not true, so count(*) never counted
--- it. A succeeded run that never recorded how many rows it moved is exactly
--- the case this check exists to catch.
+-- The upsert's IS DISTINCT FROM guard is what makes a rerun leave core alone,
+-- and this is the state a broken guard would leave behind: a core row whose
+-- source_run_id is the latest run, that was updated rather than inserted
+-- (updated_at later than inserted_at), and whose values equal the copy an
+-- earlier succeeded run had already promoted. Raw keeps every copy, so the
+-- comparison needs no second run and holds after an ordinary daily load.
+--
+-- This replaces a count-based version (the latest run upserted at most one
+-- row) that was valid only straight after two back-to-back runs. On any
+-- other day it failed on a healthy warehouse, and because a failed check
+-- aborts the script, the checks after it never ran.
+--
+-- rows_upserted IS NULL stays an explicit failure. A succeeded run that
+-- never recorded how many rows it moved is a broken run record.
 DO $$
 DECLARE
-    offending bigint;
+    rewritten bigint;
+    unrecorded bigint;
+    example text;
 BEGIN
     WITH latest AS (
         SELECT DISTINCT ON (product_code)
@@ -185,16 +230,44 @@ BEGIN
         FROM raw.ingest_runs
         WHERE status = 'succeeded'
         ORDER BY product_code, run_id DESC
+    ),
+    rewritten_rows AS (
+        SELECT l.product_code, c.ts_utc
+        FROM latest l
+        JOIN core.assets a ON a.product_code = l.product_code
+        JOIN core.ohlcv_hourly c
+          ON c.asset_id = a.asset_id AND c.source_run_id = l.run_id
+        JOIN LATERAL (
+            SELECT r.open, r.high, r.low, r.close, r.volume
+            FROM raw.candles r
+            JOIN raw.ingest_runs pr ON pr.run_id = r.run_id AND pr.status = 'succeeded'
+            WHERE r.product_code = l.product_code
+              AND r.bucket_start = c.ts_utc
+              AND r.run_id < l.run_id
+            ORDER BY r.raw_id DESC
+            LIMIT 1
+        ) previous ON true
+        WHERE c.updated_at > c.inserted_at
+          AND (previous.open, previous.high, previous.low, previous.close, previous.volume)
+              IS NOT DISTINCT FROM
+              (c.open, c.high, c.low, c.close, c.volume)
     )
-    SELECT count(*) INTO offending
-    FROM latest
-    WHERE rows_upserted IS NULL OR rows_upserted > 1;
+    SELECT
+        (SELECT count(*) FROM rewritten_rows),
+        (SELECT count(*) FROM latest WHERE rows_upserted IS NULL),
+        (SELECT format('%s at %s', product_code, ts_utc)
+         FROM rewritten_rows ORDER BY product_code, ts_utc LIMIT 1)
+    INTO rewritten, unrecorded, example;
 
-    IF offending > 0 THEN
-        RAISE EXCEPTION 'idempotency check failed: % product(s) upserted more than 1 row on rerun, or recorded no count at all (see raw.ingest_runs)',
-            offending;
+    IF unrecorded > 0 THEN
+        RAISE EXCEPTION 'idempotency check failed: % succeeded run(s) recorded no upsert count (see raw.ingest_runs)',
+            unrecorded;
     END IF;
-    RAISE NOTICE 'idempotency check passed: latest succeeded run per product upserted <= 1 row';
+    IF rewritten > 0 THEN
+        RAISE EXCEPTION 'idempotency check failed: the latest run rewrote % row(s) whose values had not changed (e.g. %)',
+            rewritten, example;
+    END IF;
+    RAISE NOTICE 'idempotency check passed: the latest run per product rewrote no unchanged row';
 END $$;
 
 -- Check 5: the newest run per product actually succeeded.
@@ -287,4 +360,35 @@ BEGIN
             only_chicago, only_utc, example;
     END IF;
     RAISE NOTICE 'timezone check passed: % rollup rows identical under America/Chicago and UTC', total_rows;
+END $$;
+
+-- Check 7: the stored marts equal their own defining queries run now.
+--
+-- Checks 2 and 6 both pass on a stale mart. Check 2 compares only which
+-- (asset, day) pairs exist, and check 6 compares two fresh runs with each
+-- other. A load with --no-refresh-marts, or a refresh that failed, leaves
+-- stored rows that no longer match the hourly facts on a day the mart
+-- already holds. Here each matview's stored rows are compared with a fresh
+-- run of its definition, read from the catalog. daily_ohlcv and
+-- daily_metrics are compared row for row. The correlation mart is refreshed
+-- in the same transaction as daily_metrics and is left out, because its
+-- float aggregate is not guaranteed to reproduce bit for bit.
+DO $$
+DECLARE
+    mart text;
+    differing bigint;
+BEGIN
+    FOREACH mart IN ARRAY ARRAY['marts.daily_ohlcv', 'marts.daily_metrics'] LOOP
+        EXECUTE format(
+            'WITH fresh AS (%s) '
+            'SELECT (SELECT count(*) FROM (SELECT * FROM %s EXCEPT SELECT * FROM fresh) s) '
+            '     + (SELECT count(*) FROM (SELECT * FROM fresh EXCEPT SELECT * FROM %s) f)',
+            rtrim(pg_get_viewdef(mart::regclass), '; '), mart, mart)
+        INTO differing;
+        IF differing > 0 THEN
+            RAISE EXCEPTION 'stale-mart check failed: % stored row(s) of % differ from its definition run now; refresh the marts',
+                differing, mart;
+        END IF;
+    END LOOP;
+    RAISE NOTICE 'stale-mart check passed: daily_ohlcv and daily_metrics match their definitions run now';
 END $$;

@@ -2,9 +2,8 @@
 
 They go through psycopg2 rather than a psql subprocess so nothing depends on
 psql being installed or on PATH, which on Windows it usually is not. The cost
-is that a file is one execute() call: it succeeds or fails as a unit, and
-statements that refuse to run inside a transaction block (REFRESH ...
-CONCURRENTLY) need a connection opened with autocommit=True.
+is that a file is one execute() call: it succeeds or fails as a unit, inside
+whatever transaction the caller has open.
 """
 
 from __future__ import annotations

@@ -7,8 +7,8 @@ the only cheap way to be sure is to test every start offset exhaustively.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from datetime import datetime, timedelta
+from collections.abc import Collection, Iterator
+from datetime import UTC, datetime, timedelta
 
 HOUR = timedelta(hours=1)
 
@@ -18,7 +18,14 @@ MAX_CANDLES_PER_REQUEST = 300
 
 
 def floor_hour(moment: datetime) -> datetime:
-    """Truncate to the top of the hour, keeping the tzinfo."""
+    """Truncate to the top of the UTC hour. A naive datetime is truncated as given.
+
+    The conversion to UTC matters for a session time zone with a half-hour
+    offset: psycopg2 hands back timestamps in the session's zone, and flooring
+    10:45+05:30 in place gives 10:00+05:30, which is 04:30 UTC, not a bucket.
+    """
+    if moment.tzinfo is not None:
+        moment = moment.astimezone(UTC)
     return moment.replace(minute=0, second=0, microsecond=0)
 
 
@@ -27,6 +34,26 @@ def bucket_count(window_start: datetime, window_end: datetime) -> int:
     if window_end < window_start:
         return 0
     return int((window_end - window_start) // HOUR) + 1
+
+
+def missing_buckets(
+    window_start: datetime, window_end: datetime, present: Collection[datetime]
+) -> list[datetime]:
+    """The hourly buckets of the inclusive window that present lacks, in time order."""
+    held = set(present)
+    wanted = (window_start + i * HOUR for i in range(bucket_count(window_start, window_end)))
+    return [bucket for bucket in wanted if bucket not in held]
+
+
+def longest_consecutive_run(buckets: list[datetime]) -> int:
+    """Length of the longest run of back-to-back hours in a time-ordered bucket list."""
+    longest = run = 0
+    previous = None
+    for bucket in buckets:
+        run = run + 1 if previous is not None and bucket - previous == HOUR else 1
+        longest = max(longest, run)
+        previous = bucket
+    return longest
 
 
 def iter_windows(

@@ -27,6 +27,7 @@ from contextlib import closing
 
 import requests
 
+from crypto_warehouse.api import CandlePayloadError
 from crypto_warehouse.assets import insert_asset, parse_product_code, probe_product
 from crypto_warehouse.config import ConfigError, configure_logging, connect
 from crypto_warehouse.ingest import DEFAULT_BACKFILL_DAYS, USER_AGENT, run_ingest
@@ -60,16 +61,22 @@ def main() -> int:
     parser.add_argument(
         "--backfill-days",
         type=positive_int,
-        default=DEFAULT_BACKFILL_DAYS,
+        default=None,
         help=f"Depth of the initial load in days (default {DEFAULT_BACKFILL_DAYS})",
     )
     parser.add_argument(
         "--no-backfill",
         action="store_true",
-        help="Register the asset only; the next ingest run loads it",
+        help=(
+            "Register the asset only; the next ingest run loads it. Cannot be "
+            "combined with --backfill-days"
+        ),
     )
     parser.add_argument("--verbose", action="store_true", help="Debug-level logging")
     args = parser.parse_args()
+    if args.no_backfill and args.backfill_days is not None:
+        parser.error("--backfill-days has no effect with --no-backfill; pass one or the other")
+    backfill_days = args.backfill_days or DEFAULT_BACKFILL_DAYS
 
     configure_logging(args.verbose)
 
@@ -97,7 +104,7 @@ def main() -> int:
     except ConfigError as exc:
         log.error("%s", exc)
         return 2
-    except (requests.RequestException, RuntimeError) as exc:
+    except (requests.RequestException, RuntimeError, CandlePayloadError) as exc:
         log.error("%s: Coinbase did not answer for this product: %s", args.product_code, exc)
         return 2
 
@@ -105,12 +112,21 @@ def main() -> int:
         log.info("registered without backfill; the next ingest run loads %s", code)
         return 0
 
-    return run_ingest(
+    exit_code = run_ingest(
         products=[code],
-        backfill_days=args.backfill_days,
+        backfill_days=backfill_days,
         apply_floor=False,
         refresh=True,
     )
+    if exit_code != 0:
+        log.error(
+            "%s is registered but its backfill did not finish. Finish it with: "
+            "python scripts/run_ingest.py --products %s --backfill-days %d",
+            code,
+            code,
+            backfill_days,
+        )
+    return exit_code
 
 
 if __name__ == "__main__":
