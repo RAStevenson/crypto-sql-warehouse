@@ -1,9 +1,8 @@
 """Incremental, idempotent OHLCV ingestion from Coinbase Exchange into Postgres.
 
-Data source: the public Coinbase Exchange candles endpoint. No API key needed,
-real traded volume, and a hard cap of 300 candles per request, which forces the
-windowed pagination that makes this a worthwhile incremental-loading exercise
-rather than a single bulk download.
+The data source is the public Coinbase Exchange candles endpoint. It needs no
+API key and reports real traded volume. It caps a request at 300 candles, so
+any load longer than 300 hours has to be fetched as a series of windows.
 
 Flow per product:
   1. Watermark: MAX(ts_utc) in core.ohlcv_hourly, minus a re-fetch overlap.
@@ -97,6 +96,9 @@ UPSERT_SQL = """
 
 
 class LoadResult(NamedTuple):
+    """Holds the outcome of one product's load, with its run id, its row counts,
+    and the number of windows that came back short."""
+
     product_code: str
     run_id: int
     rows_fetched: int
@@ -105,14 +107,11 @@ class LoadResult(NamedTuple):
 
 
 def resolve_products(cur, requested: list[str] | None) -> list[str]:
-    """The work list.
+    """Return the sorted product codes to load, which are the requested codes
+    or, with none requested, every active asset.
 
-    With no --products, the work list is every asset flagged is_active: that
-    flag exists so ingestion can be soft-disabled without deleting history.
-    Naming products explicitly overrides the flag, because "load BTC-USD" is a
-    direct instruction and silently doing nothing would be the worse
-    surprise - backfilling a de-listed asset is a real reason to reach for the
-    flag. The override is logged so it is never silent.
+    A requested code is loaded even when inactive, with a warning, and one
+    that is missing from core.assets raises ConfigError.
     """
     if requested:
         cur.execute(
@@ -123,6 +122,8 @@ def resolve_products(cur, requested: list[str] | None) -> list[str]:
         missing = sorted(set(requested) - set(found))
         if missing:
             raise ConfigError(f"not in core.assets: {missing}. Add them there first.")
+        # A named product is loaded even when inactive, because naming it is a
+        # direct instruction and backfilling a delisted asset is a real use.
         inactive = sorted(code for code, active in found.items() if not active)
         if inactive:
             log.warning(
@@ -143,21 +144,14 @@ def get_watermark(
     apply_floor: bool = False,
     now_utc: datetime | None = None,
 ) -> datetime:
-    """Where this product's fetch should resume.
+    """Return the UTC time this product's fetch should start from.
 
-    With no rows for the product, backfill_days sets the depth of the first
-    load. With rows, the resume point is MAX(ts_utc) minus the overlap.
-
-    apply_floor makes backfill_days a floor on that resume point rather than a
-    cold-start-only setting, so it can actually extend an existing warehouse.
-    It is off by default and scripts/run_ingest.py turns it on only when the
-    operator passes --backfill-days explicitly; if it were always on, the
-    default of 365 would drag every ordinary incremental run back a full year.
-
-    The cold-start point is floored to the hour. Keeping now()'s minutes and
-    microseconds served nothing: every bucket is on the hour, so the fractional
-    part only made the first window's bounds look arbitrary in the run record.
+    With no rows it is the current hour minus backfill_days, and with rows it
+    is MAX(ts_utc) minus the overlap, or the earlier of that and the backfill
+    point when apply_floor is set.
     """
+    # Floored to the hour so the window_start stored in the run record is a
+    # bucket boundary.
     now_hour = floor_hour(now_utc or datetime.now(UTC))
     floor = now_hour - timedelta(days=backfill_days)
 
@@ -175,18 +169,17 @@ def get_watermark(
         return floor
 
     resume = max_ts.astimezone(UTC) - timedelta(hours=OVERLAP_HOURS)
+    # apply_floor is off unless the operator passes --backfill-days. If it
+    # were always on, the default of 365 days would make every ordinary
+    # incremental run re-fetch a full year.
     return min(resume, floor) if apply_floor else resume
 
 
 def _mark_run_failed(conn, run_id: int) -> None:
-    """Best-effort bookkeeping after a failed load.
+    """Roll back the open transaction and mark the run row failed, logging a
+    warning instead of raising if either step fails.
 
-    Every statement here can itself fail - on a dead connection even
-    conn.rollback() raises - and when it does, the InterfaceError from the
-    bookkeeping used to replace the exception that actually explains the
-    failure. So this swallows its own errors and the caller always re-raises
-    the original. The cost of the swallow is a run row stranded at 'running',
-    which the warning says out loud.
+    When a step fails, the run row stays at 'running' in raw.ingest_runs.
     """
     try:
         conn.rollback()
@@ -198,6 +191,9 @@ def _mark_run_failed(conn, run_id: int) -> None:
             )
         conn.commit()
     except Exception:
+        # The error is not re-raised, because on a dead connection even the
+        # rollback raises, and that error would replace the exception that
+        # explains the failure.
         log.warning(
             "could not mark run %s failed; it stays 'running' in raw.ingest_runs",
             run_id,
@@ -208,10 +204,8 @@ def _mark_run_failed(conn, run_id: int) -> None:
 def _fetch_into_raw(
     conn, session, product_code: str, run_id: int, start: datetime, current_hour: datetime
 ) -> tuple[int, int]:
-    """Fetch every window into raw.candles, committing as it goes.
-
-    Returns (rows_fetched, short_windows).
-    """
+    """Fetch every window from start up to the current hour into raw.candles,
+    committing each window, and return (rows_fetched, short_windows)."""
     rows_fetched = 0
     short_windows = 0
 
@@ -272,6 +266,9 @@ def _fetch_into_raw(
                         for c in candles
                     ],
                 )
+            # Committed per window, so a failure late in a long backfill
+            # leaves the fetched windows in raw, where UPSERT_SQL can promote
+            # them under their run_id without another API call.
             conn.commit()
             rows_fetched += len(candles)
 
@@ -281,8 +278,11 @@ def _fetch_into_raw(
 
 
 def _promote_to_core(conn, run_id: int, rows_fetched: int) -> int:
-    """Upsert this run's raw rows into core and close out the run row, in one
-    transaction."""
+    """Upsert this run's raw rows into core, mark the run succeeded, and return
+    the number of rows inserted or updated.
+
+    Both statements commit in one transaction.
+    """
     with conn.cursor() as cur:
         cur.execute(UPSERT_SQL, (run_id,))
         rows_upserted = cur.rowcount
@@ -307,28 +307,11 @@ def load_product(
     *,
     apply_floor: bool = False,
 ) -> LoadResult:
-    """Load one product: watermark, fetch into raw, promote to core.
+    """Load one product by reading its watermark, fetching into raw, and
+    promoting to core, and return a LoadResult.
 
-    Transaction shape, and why it changed
-    -------------------------------------
-    This used to be one transaction spanning every HTTP request for the
-    product. That made the schema's "raw is append-only, so we never have to
-    re-call the API" promise false exactly when it mattered: on a 365-day
-    backfill, a kill at window 29 of 30 rolled back all ~8,600 candles already
-    paid for and the next run started from nothing.
-
-    Now each window commits as it lands, and the core upsert runs afterwards in
-    its own transaction. The property the single transaction really bought was
-    that core could never reference raw rows that were not there, and ordering
-    preserves it: raw is durable before the upsert that reads it even begins,
-    so the dangling direction is impossible by construction.
-
-    What is now possible instead is the harmless direction: a crash between the
-    last window and the upsert leaves raw rows that core has not promoted. The
-    next run re-fetches that span from the watermark under a new run_id and
-    promotes it then, and the stranded rows stay in raw as extra copies, which
-    is precisely what raw is specified to tolerate. Recovering them without
-    re-fetching is also just the UPSERT_SQL statement with the old run_id.
+    On any failure, Ctrl+C included, the run row is marked failed and the
+    exception is re-raised.
     """
     current_hour = floor_hour(datetime.now(UTC))
 
@@ -344,8 +327,12 @@ def load_product(
             (product_code, GRANULARITY_SECONDS, start, current_hour),
         )
         run_id = cur.fetchone()[0]
-    conn.commit()  # run row is visible even if the fetch below dies
+    conn.commit()  # run row is visible even if the fetch below fails
 
+    # Raw commits per window and the core upsert follows in its own
+    # transaction, so core never references raw rows that are missing. A crash
+    # between the two leaves unpromoted raw rows, which raw tolerates as extra
+    # copies, and the next run re-fetches that span from the watermark.
     try:
         rows_fetched, short_windows = _fetch_into_raw(
             conn, session, product_code, run_id, start, current_hour
@@ -388,13 +375,11 @@ def run_ingest(
     apply_floor: bool = False,
     refresh: bool = False,
 ) -> int:
-    """Load every requested product. Returns a process exit code.
+    """Load every requested product, refresh the marts when asked, and return a
+    process exit code.
 
-    Products are isolated from each other: one that fails is logged, recorded
-    as failed, and the run moves on to the next. The mart refresh still
-    happens, because stale marts help nobody. The exit code is what expresses
-    partial success - nonzero if anything at all failed, with a summary line
-    naming what.
+    A product that fails is logged and the run continues with the next one,
+    and the exit code is 1 if any product or the refresh failed.
     """
     failures: list[str] = []
 
@@ -431,6 +416,8 @@ def run_ingest(
                 result.run_id,
             )
 
+        # The refresh runs even after a failed product, so the products that
+        # did load reach the marts.
         if refresh:
             try:
                 refresh_marts(conn)

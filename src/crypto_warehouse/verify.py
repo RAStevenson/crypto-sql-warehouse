@@ -20,7 +20,8 @@ log = logging.getLogger(__name__)
 
 
 def run_verify() -> int:
-    """Execute the verify script. Returns a process exit code."""
+    """Run sql/05_verify.sql and return 0 if it completed or 1 if a check or any
+    other statement raised a database error."""
     # autocommit: the checks write nothing that persists, and it keeps a
     # failed check from leaving the session in an aborted transaction on the
     # way out.

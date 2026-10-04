@@ -1,9 +1,9 @@
 """Coinbase Exchange candles client.
 
-Split in two halves on purpose. fetch_window does the I/O and the retrying;
-parse_candles is pure and does the column mapping. The mapping is the one
-piece whose silent failure would poison every downstream number in the
-warehouse, so it is the piece that gets tested without a network.
+The client is split in two. fetch_window does the I/O and the retrying, and
+parse_candles is pure and does the column mapping. A mapping error would put
+wrong values into every downstream number without raising, so the mapping is
+kept free of I/O and tested without a network.
 """
 
 from __future__ import annotations
@@ -48,19 +48,15 @@ MAX_RETRY_AFTER_SECONDS = 120.0
 
 
 class CandlePayloadError(ValueError):
-    """The endpoint answered 200 with something that is not a candle array."""
+    """Raised when the endpoint answers 200 with a body that is not a candle array."""
 
 
 class Candle(NamedTuple):
-    """One hourly bar, with the fields in the order Coinbase puts them on the
-    wire: [time, low, high, open, close, volume].
+    """Holds one hourly bar, with its fields in the order Coinbase sends them
+    (time, low, high, open, close, volume).
 
-    That is deliberately not the open/high/low/close order the DDL declares,
-    and the mismatch used to live in an INSERT whose column list quietly
-    reordered itself against the table definition. Naming the fields is the
-    fix: callers write candle.open rather than row[3], and the INSERT can list
-    its columns in DDL order without anyone having to hold both orders in
-    their head at once.
+    That order differs from the open/high/low/close order of the table
+    columns, so callers read fields by name and never by position.
     """
 
     bucket_start: datetime
@@ -72,12 +68,10 @@ class Candle(NamedTuple):
 
 
 def _to_decimal(value: object) -> Decimal:
-    """Coerce one JSON scalar to Decimal without ever routing through float.
+    """Return one JSON scalar as a finite Decimal.
 
-    The response is decoded with parse_float=Decimal, so prices normally
-    arrive here already exact. The float branch exists only for a caller that
-    decoded some other way, and goes via str() so it recovers the shortest
-    representation rather than the binary expansion.
+    A bool or an unsupported type raises TypeError, and NaN or Infinity raises
+    ValueError.
     """
     if isinstance(value, bool):
         raise TypeError(f"{value!r} is a bool, not a price")
@@ -86,6 +80,9 @@ def _to_decimal(value: object) -> Decimal:
     elif isinstance(value, int):
         number = Decimal(value)
     elif isinstance(value, (float, str)):
+        # A float arrives only when the caller decoded without
+        # parse_float=Decimal. str() gives its shortest decimal form, where
+        # Decimal(float) would give the full binary expansion.
         number = Decimal(str(value))
     else:
         raise TypeError(f"cannot read {value!r} as a decimal")
@@ -97,14 +94,11 @@ def _to_decimal(value: object) -> Decimal:
 
 
 def parse_candles(payload: object, product_code: str) -> list[Candle]:
-    """Map a decoded candles response onto Candle rows.
+    """Convert a decoded candles response into a list of Candle rows.
 
-    Pure: no network, no clock. Anything that is not a list of at least
-    6-element rows raises CandlePayloadError naming the product, so an error
-    body like {"message": "NotFound"} surfaces as a typed error instead of a
-    TypeError thrown while iterating a dict's keys three frames away. An empty
-    list is not an error: an hour in which nothing traded is legitimately
-    absent from the response.
+    Anything other than a list of rows with at least 6 readable elements
+    raises CandlePayloadError naming the product, and an empty list is valid
+    because an hour with no trades is absent from the response.
     """
     if isinstance(payload, dict):
         message = payload.get("message", payload)
@@ -141,21 +135,24 @@ def parse_candles(payload: object, product_code: str) -> list[Candle]:
 
 
 def _backoff_seconds(attempt: int) -> float:
-    """Exponential backoff with jitter, so a whole fleet of retries does not
-    come back in lockstep."""
+    """Return the seconds to wait before the next attempt, which double per
+    attempt up to a cap and carry a small random jitter so that retries do not
+    repeat at fixed intervals."""
     base = min(BACKOFF_BASE_SECONDS * (2**attempt), BACKOFF_CAP_SECONDS)
     return base + random.uniform(0.0, BACKOFF_JITTER_SECONDS)
 
 
 def _retry_after_seconds(response: requests.Response) -> float | None:
-    """The server's own Retry-After, in seconds, when it gave a usable one.
+    """Return the server's Retry-After delay in seconds, capped at
+    MAX_RETRY_AFTER_SECONDS, or None when it gave no usable one.
 
-    Only the delta-seconds form is honored. The HTTP-date form is legal but
-    Coinbase does not send it, and parsing it to save a request is not worth
-    the code."""
+    Only the delta-seconds form is read, so an HTTP-date value returns None.
+    """
     header = response.headers.get("Retry-After")
     if header is None:
         return None
+    # The HTTP-date form is legal, but Coinbase does not send it, so it is
+    # not parsed and returns None.
     try:
         seconds = float(header.strip())
     except (AttributeError, ValueError):
@@ -173,11 +170,12 @@ def fetch_window(
     window_start: datetime,
     window_end: datetime,
 ) -> list[Candle]:
-    """Fetch one inclusive [window_start, window_end] candle window.
+    """Fetch one inclusive [window_start, window_end] window of hourly candles
+    and return it as a list of Candle rows.
 
-    Retries rate limiting, 408, 5xx, and the transport-level failures that a
-    long backfill actually hits (a dropped connection, a read timeout, a
-    response cut off mid-body). Other 4xx responses are fatal on the first try.
+    Rate limiting, 408, 5xx, and transport failures are retried up to
+    MAX_ATTEMPTS times before a RuntimeError, and any other 4xx raises on the
+    first try.
     """
     url = f"{API_BASE}/products/{product_code}/candles"
     params = {
@@ -204,7 +202,7 @@ def fetch_window(
         else:
             if response.status_code not in RETRY_STATUSES:
                 response.raise_for_status()
-                # parse_float=Decimal is what makes the numeric columns honest.
+                # parse_float=Decimal is what keeps the numeric columns exact.
                 # Without it every price would round-trip through a binary
                 # double before psycopg2 ever saw it, and 9999999999.99999999
                 # would land in the warehouse as 10000000000.0.
@@ -229,7 +227,7 @@ def fetch_window(
                 delay,
             )
 
-        # Sleeping after the final attempt buys nothing but a slower failure.
+        # A sleep after the final attempt would only delay the failure.
         if attempt < MAX_ATTEMPTS - 1:
             time.sleep(delay)
 

@@ -1,10 +1,9 @@
 """Creating the database and applying the DDL without needing psql.
 
-psql is the obvious tool for this and it is not the one available: on Windows
-it ships inside the PostgreSQL install directory and is almost never on PATH,
-so "just run psql -f sql/01_schema.sql" is a step that fails for the person
-following the README on a fresh machine. psycopg2 is already a dependency and
-can execute the same files.
+psql is the usual tool for this, but on Windows it ships inside the PostgreSQL
+install directory and is almost never on PATH, so a README step that runs
+psql -f sql/01_schema.sql would fail on a fresh machine. psycopg2 is already a
+dependency and can execute the same files.
 """
 
 from __future__ import annotations
@@ -24,6 +23,11 @@ SCHEMAS = ("marts", "core", "raw")  # drop order: dependents first
 
 
 def database_exists(dsn: str) -> bool:
+    """Return True if a connection to the DSN succeeds and False if it fails
+    with an error whose text contains "does not exist".
+
+    Any other connection error is re-raised.
+    """
     try:
         conn = psycopg2.connect(dsn)
     except psycopg2.OperationalError as exc:
@@ -35,12 +39,11 @@ def database_exists(dsn: str) -> bool:
 
 
 def create_database(dsn: str) -> bool:
-    """Create the DSN's database if it is missing. Returns True if it created
-    one.
+    """Create the DSN's database if it is missing and return True if one was
+    created.
 
-    Raises ConfigError rather than guessing when the DSN is not a URL this can
-    rewrite, so the operator gets a clear instruction instead of a confusing
-    connection error.
+    Raises ConfigError when the database is missing and the DSN is not a URL
+    that config.split_database_name can point at the maintenance database.
     """
     if database_exists(dsn):
         return False
@@ -63,20 +66,17 @@ def create_database(dsn: str) -> bool:
 
 
 def schema_is_applied(conn) -> bool:
+    """Return True if core.assets exists, which is the test for an applied schema."""
     with conn.cursor() as cur:
         cur.execute("SELECT to_regclass('core.assets') IS NOT NULL")
         return bool(cur.fetchone()[0])
 
 
 def drop_schemas(conn) -> None:
-    """Tear down the three schemas so the DDL can be applied from scratch.
+    """Drop the marts, core, and raw schemas and everything in them.
 
-    Destructive and only reachable behind an explicit flag. The DDL files use
-    plain CREATE rather than CREATE IF NOT EXISTS, which is the right choice
-    for a file that is meant to describe one exact schema, and it means
-    re-applying them needs the old objects gone first. Does not commit: the
-    caller commits the drop together with the rebuild, so a DDL error leaves
-    the old schemas in place.
+    This does not commit, so the caller can commit the drop together with the
+    rebuild and a DDL error leaves the old schemas in place.
     """
     log.warning("dropping schemas %s and everything in them", ", ".join(SCHEMAS))
     with conn.cursor() as cur:
@@ -87,9 +87,11 @@ def drop_schemas(conn) -> None:
 
 
 def run_setup(*, reset: bool = False) -> int:
-    """Create the database if needed, then apply the schema and mart DDL.
+    """Create the database if needed, apply the schema and mart DDL, and return
+    a process exit code.
 
-    Returns a process exit code.
+    A schema that is already applied returns 1 unless reset is set, in which
+    case the schemas are dropped and rebuilt.
     """
     dsn = config.load_dsn()
     created = create_database(dsn)

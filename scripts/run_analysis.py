@@ -34,6 +34,8 @@ log = logging.getLogger("run_analysis")
 
 
 def main() -> int:
+    """Run the analysis, log the main results, render the report when both
+    output paths are the defaults, and return a process exit code."""
     parser = argparse.ArgumentParser(
         prog="run_analysis.py",
         description=(

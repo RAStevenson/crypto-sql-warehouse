@@ -28,6 +28,8 @@ log = logging.getLogger("run_ingest")
 
 
 def positive_int(value: str) -> int:
+    """Return a command-line value as a whole number of days, raising an argparse
+    error when it is below 1."""
     number = int(value)
     if number < 1:
         raise argparse.ArgumentTypeError(f"must be at least 1 day, got {value}")
@@ -35,6 +37,7 @@ def positive_int(value: str) -> int:
 
 
 def main() -> int:
+    """Parse the command line, run the ingest, and return a process exit code."""
     parser = argparse.ArgumentParser(
         prog="run_ingest.py",
         description="Incremental, idempotent OHLCV ingestion from Coinbase Exchange.",
@@ -70,10 +73,9 @@ def main() -> int:
         action="store_true",
         help="Skip the mart refresh that otherwise runs after loading",
     )
-    # The old opt-in spelling, kept as an accepted no-op because report copies
-    # rendered before 2026-08-24 name it in their reproduce section. Refreshing
-    # is the default now, so passing it changes nothing. It can retire once no
-    # published report names it.
+    # --refresh-marts is accepted and does nothing, because refreshing is the
+    # default. Report copies rendered before 2026-08-24 name the flag in their
+    # reproduce section, and it can be removed once no published report does.
     parser.add_argument("--refresh-marts", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--verbose", action="store_true", help="Debug-level logging")
     args = parser.parse_args()

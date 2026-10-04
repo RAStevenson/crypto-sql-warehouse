@@ -74,7 +74,7 @@ def test_get_watermark_returns_the_resume_point_in_utc_when_max_ts_carries_an_of
 def test_get_watermark_ignores_backfill_days_on_an_ordinary_run(backfill_days):
     """With no --backfill-days on the command line there is no floor, so a
     routine incremental run re-fetches the overlap and nothing more. If the
-    floor were always applied, the 365-day default would drag every run back a
+    floor were always applied, the 365-day default would send every run back a
     full year."""
     max_ts = NOW_HOUR - timedelta(hours=1)
 
@@ -107,7 +107,7 @@ def test_get_watermark_floor_reaches_back_from_a_current_watermark():
 
 def test_get_watermark_floor_does_not_skip_a_stale_watermark():
     # Newest row is 500 days old. The floor is 365 days back, but resuming
-    # there would leave a 135-day hole, so the older resume point wins.
+    # there would leave a 135-day hole, so the older resume point is used.
     max_ts = NOW_HOUR - timedelta(days=500)
 
     result = watermark(max_ts, backfill_days=365, apply_floor=True)

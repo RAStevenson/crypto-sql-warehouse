@@ -22,6 +22,7 @@ log = logging.getLogger("run_verify")
 
 
 def main() -> int:
+    """Parse the command line, run the verify script, and return a process exit code."""
     parser = argparse.ArgumentParser(
         prog="run_verify.py",
         description="Execute sql/05_verify.sql; nonzero exit if any check fails.",

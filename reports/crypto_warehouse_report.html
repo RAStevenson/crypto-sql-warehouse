@@ -435,9 +435,10 @@ each fatal on failure, covering hourly gaps, rollup coverage, raw-to-core
 agreement, upsert idempotency, run status, session-timezone invariance of
 the daily rollup, and agreement of the two stored daily marts with their
 definitions.
-<code>pytest</code> runs 110 test functions, none of which need a database or a network,
-covering the ingestion windowing and watermark, the API client, asset
-registration, and the diversification math in this report. The
+<code>pytest</code> runs 111 test functions, none of which need a
+database or a network. They cover the ingestion windowing and watermark, the
+API client, asset registration, and the diversification math in this report,
+and one checks that every function is documented. The
 20 annotated queries in <code>sql/04_queries.sql</code> each run
 standalone against a loaded database.</p>
 

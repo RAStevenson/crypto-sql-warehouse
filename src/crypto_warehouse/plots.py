@@ -36,6 +36,7 @@ DIVERSIFICATION = "diversification.png"
 
 
 def apply_style() -> None:
+    """Set the matplotlib defaults that every figure shares."""
     plt.rcParams.update(
         {
             "figure.facecolor": SURFACE,
@@ -65,6 +66,8 @@ def apply_style() -> None:
 
 
 def _save(fig: Figure, path: Path) -> Path:
+    """Save the figure to path, creating its directory if needed, close the
+    figure, and return the path."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
     fig.savefig(path, bbox_inches="tight")
@@ -75,17 +78,17 @@ def _save(fig: Figure, path: Path) -> Path:
 def correlation_heatmap(
     symbols: list[str], corr: np.ndarray, vmin: float, vmax: float, path: Path
 ) -> Path:
-    """Annotated heatmap on a scale fitted to the observed range.
+    """Draw the correlation matrix as an annotated heatmap, save it, and return
+    the path.
 
-    A -1 to 1 scale would render every cell here in nearly the same tone, so
-    the color axis runs over the observed off-diagonal range rounded outward.
-    The bounds arrive from metrics.json rather than being recomputed here, so
-    the report's caption and the image cannot disagree about the scale. The
-    diagonal is blanked because a variable's correlation with itself is 1 by
-    construction and would otherwise dominate the scale.
+    The color axis runs from vmin to vmax, which the caller takes from the
+    metrics so that the image and the report's caption state the same range.
     """
     apply_style()
     n = len(symbols)
+    # The scale covers the observed off-diagonal range, because on -1 to 1
+    # every cell would render in nearly the same tone. The diagonal is masked
+    # because a self-correlation of 1 would otherwise dominate the scale.
     off_mask = ~np.eye(n, dtype=bool)
     shown = np.ma.masked_array(corr, mask=~off_mask)
 
@@ -125,7 +128,8 @@ def correlation_heatmap(
 
 
 def volatility_bars(symbols: list[str], vols: np.ndarray, average: float, path: Path) -> Path:
-    """Annualized volatility per asset, sorted, with the average marked."""
+    """Draw each asset's annualized volatility as sorted bars with the average
+    marked, save the figure, and return the path."""
     apply_style()
     order = np.argsort(vols)
     labels = [symbols[i] for i in order]
@@ -171,17 +175,15 @@ def volatility_bars(symbols: list[str], vols: np.ndarray, average: float, path: 
 def drawdown_curves(
     dates: list[dt.date], symbols: list[str], paths_matrix: np.ndarray, out_path: Path
 ) -> Path:
-    """Every asset's drawdown from its running peak, on one axis.
-
-    The point of one axis is the co-movement: the assets fall together and
-    rebound together, which is consistent with what the correlation matrix
-    states numerically.
-    """
+    """Draw every asset's drawdown from its running peak on one axis, save the
+    figure, and return the path."""
     apply_style()
     # The dates are the close path's own, starting at the close the first
     # return is measured from, so they line up with the path row for row.
     x = np.array(dates, dtype="datetime64[D]")
 
+    # One axis for all assets, so the reader can compare when each one falls
+    # and recovers.
     fig, ax = plt.subplots(figsize=(8.4, 4.6))
     for i, symbol in enumerate(symbols):
         ax.plot(
@@ -206,8 +208,8 @@ def drawdown_curves(
 
 
 def diversification_bars(div: dict, path: Path) -> Path:
-    """The result: what an equal-weight portfolio removes against what zero
-    correlation would have removed."""
+    """Draw the average single-asset, equal-weight, and zero-correlation
+    volatilities as three bars, save the figure, and return the path."""
     apply_style()
     labels = [
         "average single asset",
@@ -259,7 +261,8 @@ def diversification_bars(div: dict, path: Path) -> Path:
 
 
 def write_all(panel, close_path, metrics: dict, figures_dir: Path) -> list[Path]:
-    """Render all four figures from a panel, its close path, and its computed metrics."""
+    """Render all four figures from a panel, its close path, and its metrics, and
+    return the paths written."""
     from .analysis import drawdown_paths
 
     corr = np.array(metrics["correlation"]["matrix"], dtype=float)
