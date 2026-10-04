@@ -49,8 +49,8 @@
 -- -----------------------------------------------------------------------------
 -- marts.daily_ohlcv: hourly facts rolled up to trading days (UTC).
 --
--- Daily bars are derived from hourly rather than fetched separately so the
--- warehouse has one source of truth; a discrepancy between granularities
+-- Daily bars are derived from hourly rather than fetched separately so both
+-- granularities come from one source; a discrepancy between granularities
 -- can then only be a rollup bug, never a data-source mismatch.
 --
 -- open/close use ordered array_agg: aggregates cannot say "first row by
@@ -97,10 +97,10 @@ CREATE UNIQUE INDEX daily_ohlcv_pk ON marts.daily_ohlcv (asset_id, trade_date);
 -- observation, under a column literally named ma_30d. Roughly half the
 -- non-null volatility_30d_ann rows were warm-up values of that kind. BTC's
 -- first published figure was 0.2076 against 0.4043 for its first genuine
--- 30-observation window: not a rounding difference, a different number
--- wearing the same label. The CASE clauses make the column name true. No
--- value is published until the window it claims is actually full, and
--- warm-up rows are NULL.
+-- 30-observation window: not a rounding difference, a different quantity
+-- published under the same column name. The CASE clauses make the column
+-- name true. No value is published until the window it claims is actually
+-- full, and warm-up rows are NULL.
 --
 -- Adjacency guard on the return. Incomplete days are excluded from the
 -- return series, so lag() on the day after a gap would reach back two or

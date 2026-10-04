@@ -93,8 +93,9 @@ CREATE INDEX ingest_runs_product_started_idx
 --
 -- No uniqueness constraint here on purpose: if the same bucket is fetched
 -- twice (overlap re-fetch, retried run), both copies land. Deduplication is
--- the core layer's job, and keeping raw dumb makes idempotency reasoning
--- simple. Replaying any run can only ever add rows here, never corrupt.
+-- the core layer's job, and a raw layer that applies no rules makes
+-- idempotency simple to reason about. Replaying any run can only ever add
+-- rows here, never corrupt.
 --
 -- numeric, not double precision: prices are exact decimal quantities and
 -- float rounding artifacts in a warehouse invite "why doesn't this sum
@@ -120,26 +121,26 @@ CREATE INDEX candles_run_idx ON raw.candles (run_id);
 -- core.ohlcv_hourly: the fact table. One row per asset per hour, UTC.
 --
 -- Composite natural PK (asset_id, ts_utc) instead of a surrogate id:
--- the grain IS the identity, the PK doubles as the upsert conflict target,
+-- the grain IS the identity, the PK is also the upsert conflict target,
 -- and the implicit index serves the dominant access pattern
 -- (per-asset time-range scans). A surrogate key would add a column and an
 -- index while enforcing nothing.
 --
 -- CHECK constraints encode OHLC invariants. They have caught real API
--- glitches in similar pipelines; cheap insurance at insert time.
+-- glitches in similar pipelines, and checking at insert time costs little.
 --
 -- low > 0 is not cosmetic. marts.daily_metrics computes ln(close/lag(close)),
 -- and a single zero close makes that raise "cannot take logarithm of zero",
 -- which aborts the whole matview refresh. Because low <= open, close and
 -- high, one constraint on low makes all four prices positive. The check
--- lives here rather than on raw.candles on purpose: raw stays dumb and
--- accepts whatever the API sent, so a bad payload is still inspectable.
+-- lives here rather than on raw.candles on purpose: raw applies no rules
+-- and accepts whatever the API sent, so a bad payload is still inspectable.
 --
 -- Not partitioned: ~6 assets x 24 x 365 is about 53k rows/year. Declarative
 -- range partitioning on ts_utc becomes worth its operational cost somewhere
 -- past tens of millions of rows; below that it only complicates the upsert
 -- and vacuum story. The PK already leads with asset_id, so pruning would
--- buy little here. Documented so the decision can be defended, and reversed,
+-- save little here. Documented so the decision can be defended, and reversed,
 -- on evidence rather than on habit.
 -- -----------------------------------------------------------------------------
 CREATE TABLE core.ohlcv_hourly (
