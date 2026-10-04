@@ -309,12 +309,160 @@ def test_build_panel_rejects_a_panel_with_no_common_date():
         analysis.build_panel(rows)
 
 
+def close_rows(day_list, symbols, returns, start_level=100.0):
+    """Closes consistent with a gap-free return matrix: one base close on the
+    day before the first return, then each day's close compounded from it."""
+    levels = start_level * np.exp(np.vstack([np.zeros(len(symbols)), np.cumsum(returns, axis=0)]))
+    all_days = [day_list[0] - DAY, *day_list]
+    return [
+        (all_days[i], symbols[j], levels[i, j])
+        for i in range(len(all_days))
+        for j in range(len(symbols))
+    ]
+
+
+def panel_and_path(day_list, symbols, returns):
+    rows = [
+        (day_list[i], symbols[j], returns[i, j])
+        for i in range(len(day_list))
+        for j in range(len(symbols))
+    ]
+    panel = analysis.build_panel(rows)
+    return panel, analysis.build_close_path(close_rows(day_list, symbols, returns), panel)
+
+
+def test_build_panel_rejects_a_single_asset():
+    d = dates(3)
+    rows = [(d[i], "AAA", 0.01 * (i + 1)) for i in range(3)]
+    with pytest.raises(ValueError, match="at least two active assets"):
+        analysis.build_panel(rows)
+
+
+def test_build_panel_warns_when_one_asset_shortens_the_panel(caplog):
+    d = dates(4)
+    rows = [(d[i], "AAA", 0.01) for i in range(4)] + [(d[i], "BBB", 0.02) for i in range(2, 4)]
+    with caplog.at_level("WARNING"):
+        panel = analysis.build_panel(rows)
+    assert panel.dates == [d[2], d[3]]
+    assert "do not share one history" in caplog.text
+    assert "BBB" in caplog.text
+
+
+def test_build_panel_is_silent_when_every_asset_shares_one_history(caplog):
+    d = dates(3)
+    rows = [(d[i], s, 0.01) for i in range(3) for s in ("AAA", "BBB")]
+    with caplog.at_level("WARNING"):
+        analysis.build_panel(rows)
+    assert caplog.text == ""
+
+
+def test_build_close_path_starts_at_the_close_before_the_first_return():
+    d = dates(3)
+    symbols = ["AAA", "BBB"]
+    returns = np.array([[0.01, 0.02], [0.03, -0.01], [-0.02, 0.04]])
+    _, path = panel_and_path(d, symbols, returns)
+    assert path.dates == [d[0] - DAY, *d]
+    assert np.allclose(np.diff(np.log(path.closes), axis=0), returns)
+
+
+def test_build_close_path_keeps_complete_days_the_panel_excludes():
+    """A day after a gap has no return, so the panel drops it, but its close
+    is real and the path has to pass through it."""
+    d = dates(5)
+    symbols = ["AAA", "BBB"]
+    # returns exist on d[0], d[1], d[4]; d[2] is a partial day (no close row at
+    # all here) and d[3] is the complete day after it (a close, but no return).
+    return_rows = [(day, s, 0.01) for day in (d[0], d[1], d[4]) for s in symbols]
+    panel = analysis.build_panel(return_rows)
+    levels = {d[0] - DAY: 100.0, d[0]: 101.0, d[1]: 102.0, d[3]: 80.0, d[4]: 81.0}
+    closes = [(day, s, level) for day, level in levels.items() for s in symbols]
+    path = analysis.build_close_path(closes, panel)
+    assert path.dates == [d[0] - DAY, d[0], d[1], d[3], d[4]]
+
+
+def test_build_close_path_needs_a_close_before_the_first_return():
+    d = dates(2)
+    symbols = ["AAA", "BBB"]
+    panel = analysis.build_panel([(day, s, 0.01) for day in d for s in symbols])
+    closes = [(day, s, 100.0) for day in d for s in symbols]
+    with pytest.raises(ValueError, match="no complete close precedes"):
+        analysis.build_close_path(closes, panel)
+
+
+def test_panel_metrics_drawdown_and_total_return_follow_the_closes_across_an_excluded_date():
+    """The defect this pins: summing only the panel's returns cuts the move
+    across an excluded date out of the path. Here both assets halve across the
+    excluded stretch, and that fall has to show up."""
+    d = dates(7)
+    symbols = ["AAA", "BBB"]
+    panel_days = (d[0], d[1], d[4], d[5], d[6])
+    pairs = [(0.01, 0.02), (0.02, -0.01), (0.03, 0.01), (-0.01, 0.02), (0.02, 0.03)]
+    return_rows = [
+        (day, s, r)
+        for day, pair in zip(panel_days, pairs, strict=True)
+        for s, r in zip(symbols, pair, strict=True)
+    ]
+    panel = analysis.build_panel(return_rows)
+    levels = {
+        d[0] - DAY: 100.0, d[0]: 110.0, d[1]: 120.0,  # the peak
+        d[3]: 60.0,  # complete day after the excluded d[2]: the trough
+        d[4]: 66.0, d[5]: 70.0, d[6]: 75.0,
+    }  # fmt: skip
+    closes = [(day, s, level) for day, level in levels.items() for s in symbols]
+    metrics = analysis.panel_metrics(panel, analysis.build_close_path(closes, panel))
+    for asset in metrics["assets"]:
+        assert asset["total_log_return"] == pytest.approx(np.log(75.0 / 100.0))
+        assert asset["max_drawdown"] == pytest.approx(60.0 / 120.0 - 1.0)
+    assert metrics["close_path"] == {
+        "first_date": (d[0] - DAY).isoformat(),
+        "last_date": d[6].isoformat(),
+        "n_closes": 7,
+    }
+
+
+def test_panel_metrics_rejects_an_asset_that_never_moved():
+    d = dates(6)
+    symbols = ["AAA", "BBB"]
+    returns = np.column_stack([np.array([0.01, -0.02, 0.03, 0.01, -0.01, 0.02]), np.zeros(6)])
+    panel, path = panel_and_path(d, symbols, returns)
+    with pytest.raises(ValueError, match="BBB did not move"):
+        analysis.panel_metrics(panel, path)
+
+
+def test_classify_excluded_dates_sorts_each_date_into_its_reason():
+    d = dates(6)
+    panel_days = (d[1], d[4], d[5])
+    panel = analysis.build_panel([(day, s, 0.01) for day in panel_days for s in ("AAA", "BBB")])
+    observed = [
+        (d[0], 1, 0),  # only one asset has a bar
+        (d[1], 2, 0),  # in the panel
+        (d[2], 2, 1),  # a partial bar
+        (d[3], 2, 0),  # complete for both, excluded: first observation after d[2]
+        (d[4], 2, 0),
+        (d[5], 2, 0),
+    ]
+    assert analysis.classify_excluded_dates(observed, panel) == {
+        "partial_bar": [d[2]],
+        "not_every_asset": [d[0]],
+        "after_excluded_day": [d[3]],
+    }
+
+
+def test_classify_excluded_dates_counts_a_partial_bar_first_when_an_asset_is_also_absent():
+    d = dates(2)
+    panel = analysis.build_panel([(d[1], s, 0.01) for s in ("AAA", "BBB")])
+    assert analysis.classify_excluded_dates([(d[0], 1, 1), (d[1], 2, 0)], panel) == {
+        "partial_bar": [d[0]],
+        "not_every_asset": [],
+        "after_excluded_day": [],
+    }
+
+
 def test_panel_metrics_reports_the_panel_it_was_given():
     d = dates(8)
     returns = orthogonal_panel()
     symbols = ["AAA", "BBB", "CCC"]
-    rows = [(d[i], symbols[j], returns[i, j]) for i in range(8) for j in range(3)]
-    metrics = analysis.panel_metrics(analysis.build_panel(rows))
+    metrics = analysis.panel_metrics(*panel_and_path(d, symbols, returns))
     assert metrics["panel"]["n_days"] == 8
     assert metrics["panel"]["n_assets"] == 3
     assert metrics["panel"]["symbols"] == symbols
@@ -333,8 +481,7 @@ def test_panel_metrics_output_is_json_serializable():
     d = dates(8)
     returns = orthogonal_panel()
     symbols = ["AAA", "BBB", "CCC"]
-    rows = [(d[i], symbols[j], returns[i, j]) for i in range(8) for j in range(3)]
-    text = json.dumps(analysis.panel_metrics(analysis.build_panel(rows)))
+    text = json.dumps(analysis.panel_metrics(*panel_and_path(d, symbols, returns)))
     assert "NaN" not in text
     assert "Infinity" not in text
 

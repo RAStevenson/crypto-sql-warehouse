@@ -17,13 +17,19 @@ equal-weight holding of the six assets the warehouse loads actually removes.
 It covers the method, the result, and the limitations. GitHub renders the PDF
 inline.
 
-Its main finding, over the 113 complete trading days ending 2026-08-02, is that
-spreading capital equally across all six assets removes only 8.8 percent of
+Its main finding, over 175 complete trading days ending 2026-10-03, is that
+spreading capital equally across all six assets removes only 9.9 percent of
 the volatility of holding the average one. If the six were uncorrelated it
-would remove 58.4 percent. Every pair of the six correlates between 0.73 and
-0.90, mean 0.80. A reload moves these figures, and the generated report is
-their live copy. Holding six of these is close to holding one, and the report explains what
-that does and does not justify.
+would remove 58.6 percent. Every pair of the six correlates between 0.73 and
+0.89, averaging 0.78. A reload moves these figures, and the generated report is
+their live copy. Holding six of these is close to holding one, and the report
+explains what that does and does not justify.
+
+The chart below is the report's Figure 4. Its three bars are the annualized
+volatility of the average single asset, of the equal-weight portfolio, and of
+that portfolio if the six assets were uncorrelated.
+
+![Bar chart of annualized volatility for the average single asset, the equal-weight portfolio, and that portfolio with zero correlation between the assets](reports/figures/diversification.png)
 
 ## Quick start
 

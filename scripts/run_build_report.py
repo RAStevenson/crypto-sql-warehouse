@@ -5,9 +5,10 @@
 scripts/run_analysis.py runs this script itself after writing the metrics, so
 a standalone run is only needed to re-render after a wording change.
 
-Every number in the report is read from metrics.json at render time rather than
-transcribed into the prose, so no number in the report can drift from the
-analysis that produced it. Figures are embedded as base64 data URIs, so the
+Every measured quantity in the report is read from metrics.json at render time
+rather than transcribed into the prose, so no number in the report can drift
+from the analysis that produced it. The counts of tests, queries, and checks
+are read from the files on disk. Figures are embedded as base64 data URIs, so the
 HTML is one file that opens anywhere with nothing alongside it. When Chrome is
 installed at its default Windows location the same HTML is printed headlessly
 to PDF; when it is not, the HTML is still written and the script says so.
@@ -22,6 +23,8 @@ import base64
 import json
 import re
 import subprocess
+
+from crypto_warehouse.ingest import DEFAULT_BACKFILL_DAYS
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REPORTS = REPO_ROOT / "reports"
@@ -237,6 +240,7 @@ def pct(x: float, places: int = 1) -> str:
 
 
 SMALL_NUMBERS = {
+    1: "One",
     2: "Two",
     3: "Three",
     4: "Four",
@@ -305,9 +309,7 @@ def build_report() -> None:
     symbols = listing(panel["symbols"])
     n_days, n_assets = panel["n_days"], panel["n_assets"]
 
-    excluded = prov["excluded_dates"]
-    incomplete_dates = prov["incomplete_dates"]
-    n_adjacency = len(excluded) - len(incomplete_dates)
+    close_path = m["close_path"]
 
     # sqrt(252) is the equity convention. How far it would move these numbers
     # is arithmetic on the two day counts, not a remembered figure.
@@ -323,12 +325,11 @@ def build_report() -> None:
         most_volatile["annualized_volatility"] / least_volatile["annualized_volatility"]
     )
 
-    n_down = sum(a["total_log_return"] < 0 for a in assets)
-    down_phrase = (
-        f"every one of the {n_assets} assets"
-        if n_down == n_assets
-        else f"{n_down} of the {n_assets} assets"
-    )
+    # The depth of the decline is stated from the drawdown figures, which
+    # hold whichever way the window ended: every asset fell at least this far
+    # below its own peak. That the falls happened together is what Figure 3
+    # shows, and the prose cites the figure for it.
+    shallowest_drawdown = -max(a["max_drawdown"] for a in assets)
 
     # Some sentences state qualitative facts as literals that no placeholder
     # can update. They hold for the recorded run. Each one computable from the
@@ -338,16 +339,16 @@ def build_report() -> None:
     # also renders other people's loads; the cost is that a reload which
     # breaks a condition still writes a report with the false sentence in it,
     # body prose included, until someone rewords it. Four literals describe
-    # the shape of Figure 3 and cannot be computed from the metrics ("the
-    # troughs line up in time", "rebound together", "mostly depth rather than
-    # timing", "no asset in this set was rising while the others fell"); after
-    # a reload, check them against the figure by eye.
+    # the shape of Figure 3 and cannot be computed from the metrics ("fall
+    # together and rebound together", "mostly depth rather than timing",
+    # "falling together" in section 1, "one deep joint decline" in section 5);
+    # after a reload, check them against the figure by eye.
     limit_gap = (
         div["equal_weight_portfolio_vol"] - div["equicorrelation_limit_vol"]
     ) / div["equal_weight_portfolio_vol"]
     literal_conditions = {
-        "every asset ended the window down (section 1 joint selloff, "
-        "section 5 one joint decline)": n_down == n_assets,
+        "every asset fell at least 10% below its peak (section 1 selloff, "
+        "section 5 decline)": shallowest_drawdown >= 0.10,
         "every correlation is positive (section 2.4, Table 1 positive)":
             corr["off_diagonal_min"] > 0,
         "correlations sit in one high block (section 3.1 no pair to lean on, "
@@ -403,7 +404,9 @@ neither raised nor lowered volatility relative to it.</p>"""
     ci_width = corr["mean_ci95_high"] - corr["mean_ci95_low"]
     pair_spread = corr["off_diagonal_max"] - corr["off_diagonal_min"]
     ci_vs_spread = ci_width / pair_spread
-    if ci_vs_spread >= 1:
+    # Compared at the precision the ratio is printed at, so "about 100% as
+    # wide" never sits beside the wording for a ratio below 1.
+    if round(ci_vs_spread, 2) >= 1:
         ordering_caveat = """the ordering of individual pairs in the
 correlation matrix is not established by this sample"""
         ordering_finding = """The ordering of pairs in that figure is therefore not
@@ -420,7 +423,65 @@ that the whole block sits high."""
     def verb(n: int, singular: str, plural: str) -> str:
         return singular if n == 1 else plural
 
-    incomplete_list = f" ({listing(incomplete_dates)})" if incomplete_dates else ""
+    # Why each excluded date is out, read from the analysis rather than
+    # inferred by subtraction, so the sentence stays true when an asset joins
+    # late or stops early.
+    partial_dates = prov["incomplete_dates"]
+    n_unshared = len(prov["dates_without_every_asset"])
+    n_after = len(prov["dates_after_an_excluded_day"])
+    n_dropped = prov["dates_dropped_from_panel"]
+    # Each reason as (count, what is true of those dates). The last one is
+    # worded to hold for every date the analysis files under it: a complete
+    # day whose previous day is not a complete one, including the first day
+    # of history.
+    exclusion_reasons = [
+        (
+            len(partial_dates),
+            verb(len(partial_dates), "has", "have")
+            + f" at least one partial bar ({listing(partial_dates)})",
+        ),
+        (
+            n_unshared,
+            verb(n_unshared, "is a date", "are dates")
+            + " on which not every asset has a daily bar",
+        ),
+        (
+            n_after,
+            verb(
+                n_after,
+                "is a complete day with no complete day directly before it, so it has",
+                "are complete days with no complete day directly before them, so they have",
+            )
+            + " no one-day return (section 2.2)",
+        ),
+    ]
+    exclusion_reasons = [(n, text) for n, text in exclusion_reasons if n]
+    excluded_count = (
+        f"Of {prov['observed_dates']} observed dates, {n_dropped} "
+        f"{verb(n_dropped, 'is', 'are')} excluded"
+    )
+    # True only when this run's history is shorter than a default first load,
+    # so the sentence is left out of a report rendered from a full one.
+    fresh_load_sentence = (
+        f" A fresh load reaches back {DEFAULT_BACKFILL_DAYS} days, further than the "
+        "history behind this run, so its panel starts earlier as well."
+        if prov["observed_dates"] < DEFAULT_BACKFILL_DAYS
+        else ""
+    )
+
+    if not exclusion_reasons:
+        exclusion_sentence = f"All {prov['observed_dates']} observed dates are in the panel."
+    elif len(exclusion_reasons) == 1:
+        # One reason covers every excluded date, so the count is not repeated.
+        exclusion_sentence = (
+            f"{excluded_count}. {verb(n_dropped, 'It', 'They')} {exclusion_reasons[0][1]}."
+        )
+    else:
+        exclusion_sentence = (
+            f"{excluded_count}: "
+            + listing([f"{n} {text}" for n, text in exclusion_reasons])
+            + "."
+        )
 
     asset_rows = "\n".join(
         f"<tr><td>{a['symbol']}</td><td>{a['annualized_volatility']:.3f}</td>"
@@ -473,10 +534,11 @@ drivers. If their daily returns move together, an equal-weight basket is close
 to a single position spread across {n_assets} tickers, and the extra fees and
 operational surface of {n_assets} holdings buy very little risk reduction.</p>
 
-<p class="callout">Every result in this report is computed on one basis, the
-{n_days}-day panel of days where all {n_assets} assets have a clean daily
-return. Section 2 states how that panel is built and section 5 states what it
-cannot support.</p>
+<p class="callout">Every volatility, correlation, and diversification figure
+in this report is computed on one basis, the {n_days}-day panel of days where
+all {n_assets} assets have a clean daily return. Drawdown and total return
+are computed from the daily closes over the same window, as Table 2 states. Section 2
+states how the panel is built and section 5 states what it cannot support.</p>
 
 <p>On this panel the equal-weight portfolio has an annualized volatility of
 {div["equal_weight_portfolio_vol"]:.4f}, against
@@ -490,8 +552,9 @@ them, the portfolio would have come out at
 between the same {n_assets} assets would have given.</p>
 
 <p>Two caveats belong with that number rather than after it. The panel is
-{n_days} days, short enough that {ordering_caveat}. And {down_phrase} ended
-the window down, so the
+{n_days} days, short enough that {ordering_caveat}. And Figure 3 shows all
+{n_assets} assets falling together, each at least
+{pct(shallowest_drawdown)} below its peak, so the
 {pct(div["risk_removed_actual"])} is measured partly through a joint selloff,
 which is when correlations are widely reported to run highest. Section 5
 gives both in full.</p>
@@ -533,23 +596,16 @@ day or a down day depends on when the loader ran rather than on the
 market. Any variance or correlation computed over such a bar inherits that
 distortion. The mart therefore keeps the observed open, high, low, close, and
 volume on those days and
-sets every derived column, including <code>log_return</code>, to NULL. It does
-the same on any day that is not adjacent to the previous observation, because a
-return computed across a gap covers more than one day while still labeled as
-one day.</p>
+sets every derived column, including <code>log_return</code>, to NULL. On any
+complete day with no complete day directly before it, the mart sets the
+return to NULL as well, because a return computed across a gap covers more than one day
+while still labeled as one day.</p>
 
 <h3>2.3 Building one panel</h3>
 
 <p>A covariance matrix has to describe one portfolio over one set of dates, so
 the panel keeps only dates where all {n_assets} assets have a non-null log
-return. Of {prov["observed_dates"]} observed dates,
-{prov["dates_dropped_from_panel"]}
-{verb(prov["dates_dropped_from_panel"], "is", "are")} excluded:
-{len(incomplete_dates)} {verb(len(incomplete_dates), "has", "have")} at least
-one partial bar{incomplete_list}, and {n_adjacency}
-{verb(n_adjacency, "is the first observation after one of those, whose return",
-        "are the first observations after those, whose returns")} would span an
-excluded day (section 2.2). Each exclusion removes
+return. {exclusion_sentence} Each exclusion removes
 the date for all {n_assets} assets at once, so the panel is not lopsided toward
 any name. What remains is {n_days} days from {panel["first_date"]} to
 {panel["last_date"]}, {n_days * n_assets:,} asset-days with no holes.</p>
@@ -558,7 +614,7 @@ any name. What remains is {n_days} days from {panel["first_date"]} to
 particular pair happened to share, lets different entries of the matrix
 describe different periods. A matrix assembled that way is not guaranteed to be
 positive semidefinite, and the portfolio variance it produces can come out
-negative. Dropping {prov["dates_dropped_from_panel"]} dates for everyone is the
+negative. Dropping {n_dropped} {verb(n_dropped, "date", "dates")} for everyone is the
 cheaper problem.</p>
 
 <h3>2.4 Returns, annualization, and covariance</h3>
@@ -583,11 +639,11 @@ is the square root of w'Cw, the weight vector times the covariance matrix
 times the weight vector, with w set to {div["weight_per_asset"]:.4f} in every
 position. The zero-correlation counterfactual replaces C with its own diagonal.
 Every asset keeps its variance exactly, and every covariance is set to zero.
-Independence is a benchmark, not a floor. Negative covariances put a portfolio
-below it, which is what a hedge is for, and <code>tests/test_analysis.py</code>
+Negative covariances put a portfolio below that counterfactual, which is what
+a hedge is for, and <code>tests/test_analysis.py</code>
 checks that the arithmetic behaves that way. Every correlation in Table 1 is
-positive, so for the case at hand the independent portfolio is the reference
-the real number is measured against.</p>
+positive, so for the case at hand the zero-correlation portfolio is the
+reference the real number is measured against.</p>
 
 <h3>2.5 One basis, stated once</h3>
 
@@ -656,10 +712,13 @@ names at random would have had.</p>
 </figure>
 
 <table class="data">
-  <caption><strong>Table 2.</strong> Per-asset figures over the panel. Drawdown
-  is measured from the running peak within the panel, not from an
-  all-time high. Total log return is the sum of the panel's daily log
-  returns.</caption>
+  <caption><strong>Table 2.</strong> Per-asset figures. Volatility is computed
+  from the panel's returns. Max drawdown and total log return are computed
+  from the closes of every complete day from {close_path["first_date"]} to
+  {close_path["last_date"]}, so they include the moves on days the panel
+  excludes. The first of those closes is the one the panel's first return is
+  measured from. Drawdown is measured from the running peak within that window,
+  not from an all-time high.</caption>
   <thead><tr><th>Asset</th><th>Annualized volatility</th><th>Max drawdown</th>
     <th>Total log return</th></tr></thead>
   <tbody>{asset_rows}</tbody>
@@ -676,10 +735,9 @@ than timing.</p>
   <img src="{img("drawdown_curves.png")}"
        alt="Drawdown from running peak for all {n_assets} assets">
   <figcaption><strong>Figure 3.</strong> Each asset's drawdown from its own
-  running peak, all on one axis. The troughs line up in time.
-  The deepest drawdown is {pct(worst_dd["max_drawdown"])}, for
-  {worst_dd["symbol"]}. No asset in this set was rising while the others
-  fell.</figcaption>
+  running peak, all on one axis. The assets fall together and rebound
+  together. The deepest drawdown is
+  {pct(worst_dd["max_drawdown"])}, for {worst_dd["symbol"]}.</figcaption>
 </figure>
 
 <h3>3.4 The diversification result</h3>
@@ -693,7 +751,8 @@ removed {pct(div["risk_removed_actual"])} of the volatility. Holding the same
 {pct(div["risk_removed_if_uncorrelated"])}. The ratio of the two,
 {pct(div["diversification_captured"])}, is the share of the available
 diversification these assets actually delivered. Figure 4 puts the three
-volatilities side by side.</p>
+volatilities side by side, and Table 3 lists them with the two reductions and
+their ratio.</p>
 
 <figure>
   <img src="{img("diversification.png")}"
@@ -708,8 +767,8 @@ volatilities side by side.</p>
 </figure>
 
 <table class="data">
-  <caption><strong>Table 3.</strong> The four volatility figures and the
-  ratios derived from them, all annualized.</caption>
+  <caption><strong>Table 3.</strong> The three volatilities, all annualized,
+  with the two reductions and their ratio.</caption>
   <thead><tr><th>Quantity</th><th>Value</th></tr></thead>
   <tbody>
     <tr><td>Average single-asset volatility</td>
@@ -783,18 +842,21 @@ loaded there is no way to separate it out.</p>
 <p>Correlations are not stable, and they are widely reported to rise in
 selloffs. This is the limitation that matters most for how the diversification
 result should be read, because a selloff is when diversification is being
-asked to do something. This panel cannot test that pattern on its own,
-because it holds one joint decline and no calm stretch to
-compare it against. That decline is visible in Figure 3, and
-{down_phrase} ended the window down. The
-{pct(div["risk_removed_actual"])} is therefore a reading taken partly through a
-stressed market, and it is more likely to be optimistic than conservative as a
-forecast for the next selloff.</p>
+asked to do something. This panel cannot test that pattern on its own. It
+holds one deep joint decline, visible in Figure 3, in which every asset fell at
+least {pct(shallowest_drawdown)} below its peak, and one such decline is too little
+to measure how correlation inside a selloff differs from correlation outside
+one. The {pct(div["risk_removed_actual"])} is therefore a reading taken partly
+through a stressed market. If correlations do rise in selloffs, the days
+outside the decline lowered the measured correlation below its selloff
+level, so the
+{pct(div["risk_removed_actual"])} is more likely to be optimistic than conservative
+as a forecast for the next selloff.</p>
 
-<p>Drawdown is measured from the start of the panel.
-The peak in Table 2 and Figure 3 is the highest cumulative level since
-{panel["first_date"]}, not an all-time high. Backfilling earlier history would
-change every drawdown figure in this report. These are not the numbers a
+<p>Drawdown is measured only over the days this report covers.
+The peak in Table 2 and Figure 3 is the highest close since
+{close_path["first_date"]}, not an all-time high. Backfilling earlier history
+could change any drawdown figure in this report. These are not the numbers a
 trading desk means by maximum drawdown.</p>
 
 <p>Equal weight is not an optimized portfolio. The weights are
@@ -829,7 +891,7 @@ PostgreSQL 10. From the repository root (on Mac or Linux, use
 <pre><code>pip install -r requirements.txt
 copy .env.example .env
 python scripts/run_setup.py
-python scripts/run_ingest.py --backfill-days 365
+python scripts/run_ingest.py
 python scripts/run_analysis.py</code></pre>
 
 <p>Between the copy and <code>run_setup.py</code>, edit <code>DATABASE_URL</code>
@@ -852,16 +914,17 @@ template and stated in section 2.</p>
 <p>The pipeline underneath is checked three ways. <code>python
 scripts/run_verify.py</code> runs {n_checks} checks against a loaded warehouse,
 each fatal on failure, covering hourly gaps, rollup coverage, raw-to-core
-agreement, upsert idempotency, run status, and session-timezone invariance of
-the daily rollup. <code>python -m pytest</code>
-runs {n_tests} test functions, none of which need a database or a network,
+agreement, upsert idempotency, run status, session-timezone invariance of
+the daily rollup, and agreement of the two stored daily marts with their
+definitions.
+<code>pytest</code> runs {n_tests} test functions, none of which need a database or a network,
 covering the ingestion windowing and watermark, the API client, asset
 registration, and the diversification math in this report. The
 {n_queries} annotated queries in <code>sql/04_queries.sql</code> each run
 standalone against a loaded database.</p>
 
 <p>Rerunning the ingestion loads whatever the exchange has published since,
-which moves the panel end date and every number here. The figures in this
+which moves the panel's end date and every number here.{fresh_load_sentence} The figures in this
 document are the ones produced by the run recorded in
 <code>reports/metrics.json</code>, generated {m["generated_at_utc"]} against
 PostgreSQL {prov["server_version"]}.</p>
@@ -878,20 +941,18 @@ PostgreSQL {prov["server_version"]}.</p>
 {REPORT_CSS}
 """
 
-    # A figure that no body prose points at ships without saying what it is
-    # evidence for, so an uncited figure fails the build instead of waiting
-    # for a reviewer. Figure and table captions are stripped before counting,
-    # so a mention in a caption does not count as a citation.
+    # A figure or table that no body prose points at ships without saying
+    # what it is evidence for, so an uncited one fails the build instead of
+    # waiting for a reviewer. Figure and table captions are stripped before
+    # counting, so a mention in a caption does not count as a citation.
     body = re.sub(r"<(fig)?caption>.*?</(fig)?caption>", "", html, flags=re.S)
     uncited = [
-        n
-        for n in re.findall(r"<strong>Figure (\d+)\.</strong>", html)
-        if not re.search(rf"\bFigure {n}\b", body)
+        f"{kind} {n}"
+        for kind, n in re.findall(r"<strong>(Figure|Table) (\d+)\.</strong>", html)
+        if not re.search(rf"\b{kind} {n}\b", body)
     ]
     if uncited:
-        raise SystemExit(
-            "not cited from body prose: " + ", ".join(f"Figure {n}" for n in uncited)
-        )
+        raise SystemExit("not cited from body prose: " + ", ".join(uncited))
 
     for condition, holds in literal_conditions.items():
         if not holds:

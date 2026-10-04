@@ -4,10 +4,11 @@ render the report.
     python scripts/run_ingest.py
     python scripts/run_analysis.py
 
-Reads marts.daily_metrics, keeps the dates where every asset has a
-non-null log return, and writes the panel description, per-asset volatility, the
-correlation matrix and the equal-weight diversification result to
-reports/metrics.json, plus four figures under reports/figures/. It then runs
+Reads marts.daily_metrics, keeps the dates where every active asset has a
+non-null log return, and writes the panel description, per-asset volatility,
+drawdown and total return from the complete-day closes, the correlation
+matrix, the equal-weight diversification result, and row counts for
+provenance to reports/metrics.json, plus four figures under reports/figures/. It then runs
 scripts/run_build_report.py, which reads that file at render time; nothing is
 transcribed by hand between the two. --no-report skips the render, and so does
 a --metrics or --figures path other than the default. The builder also runs
@@ -35,7 +36,10 @@ log = logging.getLogger("run_analysis")
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="run_analysis.py",
-        description="Compute the diversification metrics and figures from marts.daily_metrics.",
+        description=(
+            "Compute the diversification metrics and figures from marts.daily_metrics, "
+            "then render the report."
+        ),
     )
     parser.add_argument(
         "--metrics", default=str(METRICS_PATH), help="output path for metrics.json"

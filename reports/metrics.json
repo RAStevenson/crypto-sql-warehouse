@@ -1,8 +1,8 @@
 {
   "panel": {
     "first_date": "2026-04-10",
-    "last_date": "2026-08-02",
-    "n_days": 113,
+    "last_date": "2026-10-03",
+    "n_days": 175,
     "n_assets": 6,
     "symbols": [
       "ADA",
@@ -13,42 +13,47 @@
       "SOL"
     ]
   },
+  "close_path": {
+    "first_date": "2026-04-09",
+    "last_date": "2026-10-03",
+    "n_closes": 177
+  },
   "assets": [
     {
       "symbol": "ADA",
-      "annualized_volatility": 0.6836496136686054,
+      "annualized_volatility": 0.7054237689448591,
       "max_drawdown": -0.49203539823008846,
-      "total_log_return": -0.3246166404839698
+      "total_log_return": -0.04148606232876295
     },
     {
       "symbol": "BTC",
-      "annualized_volatility": 0.35722926975051594,
-      "max_drawdown": -0.2880299620474407,
-      "total_log_return": -0.1309237044164226
+      "annualized_volatility": 0.38040480770516366,
+      "max_drawdown": -0.28802996204744147,
+      "total_log_return": 0.16575718284405738
     },
     {
       "symbol": "DOGE",
-      "annualized_volatility": 0.4573085561030542,
-      "max_drawdown": -0.403114998181881,
-      "total_log_return": -0.2771818020433921
+      "annualized_volatility": 0.5653302546601462,
+      "max_drawdown": -0.40201005025125636,
+      "total_log_return": 0.001833972141420226
     },
     {
       "symbol": "ETH",
-      "annualized_volatility": 0.49996702752197936,
-      "max_drawdown": -0.36300608423790626,
-      "total_log_return": -0.16623130115860885
+      "annualized_volatility": 0.5252277855660725,
+      "max_drawdown": -0.3531764890631911,
+      "total_log_return": 0.20439202541366353
     },
     {
       "symbol": "LINK",
-      "annualized_volatility": 0.498789592873905,
-      "max_drawdown": -0.3291340052258306,
-      "total_log_return": -0.11779939862585656
+      "annualized_volatility": 0.603782624625092,
+      "max_drawdown": -0.3291340052258305,
+      "total_log_return": 0.45607249561795626
     },
     {
       "symbol": "SOL",
-      "annualized_volatility": 0.5155995502252123,
-      "max_drawdown": -0.36164749383730477,
-      "total_log_return": -0.17700877037802196
+      "annualized_volatility": 0.5536838694808807,
+      "max_drawdown": -0.3616474938373051,
+      "total_log_return": 0.3611405999864088
     }
   ],
   "correlation": {
@@ -62,110 +67,115 @@
     ],
     "matrix": [
       [
+        0.9999999999999998,
+        0.7618139827606014,
+        0.8076620256203821,
+        0.7327676570088625,
+        0.7323398193388806,
+        0.7653250216278634
+      ],
+      [
+        0.7618139827606014,
         1.0,
-        0.7258064697606097,
-        0.761644242415742,
-        0.734889700707218,
-        0.8054809452781742,
-        0.7747032655867657
+        0.7756048115414478,
+        0.8875590812446749,
+        0.7348406338739439,
+        0.8317590513713654
       ],
       [
-        0.7258064697606097,
+        0.8076620256203821,
+        0.7756048115414478,
         1.0,
-        0.7419665064876095,
-        0.8914667097265759,
-        0.8391612438999627,
-        0.829967557488871
+        0.7285202593366795,
+        0.7447021324782899,
+        0.7433158474659128
       ],
       [
-        0.7616442424157421,
-        0.7419665064876095,
+        0.7327676570088624,
+        0.887559081244675,
+        0.7285202593366795,
         1.0,
-        0.752208768150149,
-        0.8098791663884354,
-        0.7266999904309673
+        0.7922989604514988,
+        0.8300313853763016
       ],
       [
-        0.734889700707218,
-        0.8914667097265758,
-        0.752208768150149,
+        0.7323398193388806,
+        0.7348406338739439,
+        0.7447021324782899,
+        0.7922989604514988,
         1.0,
-        0.8953125350393539,
-        0.8412727914737739
+        0.776468885528437
       ],
       [
-        0.805480945278174,
-        0.8391612438999627,
-        0.8098791663884353,
-        0.8953125350393538,
-        0.9999999999999999,
-        0.8703879610691287
-      ],
-      [
-        0.7747032655867656,
-        0.8299675574888711,
-        0.7266999904309673,
-        0.8412727914737739,
-        0.8703879610691286,
-        1.0
+        0.7653250216278635,
+        0.8317590513713653,
+        0.743315847465913,
+        0.8300313853763016,
+        0.776468885528437,
+        0.9999999999999999
       ]
     ],
-    "off_diagonal_min": 0.7258064697606097,
-    "off_diagonal_max": 0.8953125350393539,
-    "off_diagonal_mean": 0.8000565235935557,
-    "mean_ci95_low": 0.7220401135784853,
-    "mean_ci95_high": 0.8579815623098643,
+    "off_diagonal_min": 0.7285202593366795,
+    "off_diagonal_max": 0.887559081244675,
+    "off_diagonal_mean": 0.7763339703350094,
+    "mean_ci95_low": 0.7097255404713309,
+    "mean_ci95_high": 0.8291849946169926,
     "heatmap_scale_low": 0.7000000000000001,
     "heatmap_scale_high": 0.9,
     "least_correlated_pair": [
-      "ADA",
-      "BTC"
+      "DOGE",
+      "ETH"
     ],
     "most_correlated_pair": [
-      "ETH",
-      "LINK"
+      "BTC",
+      "ETH"
     ],
     "n_pairs": 15
   },
   "diversification": {
     "weight_per_asset": 0.16666666666666666,
-    "equal_weight_portfolio_vol": 0.4578653833144495,
-    "average_single_asset_vol": 0.5020906016905454,
-    "zero_correlation_vol": 0.20874769750438113,
-    "risk_removed_actual": 0.08808214737975395,
-    "risk_removed_if_uncorrelated": 0.5842429696920735,
-    "diversification_captured": 0.15076287084152307,
-    "equicorrelation_limit_vol": 0.4490993511001004
+    "equal_weight_portfolio_vol": 0.5003783201271901,
+    "average_single_asset_vol": 0.5556421851637023,
+    "zero_correlation_vol": 0.2302723218884789,
+    "risk_removed_actual": 0.0994594480263058,
+    "risk_removed_if_uncorrelated": 0.5855744433431805,
+    "diversification_captured": 0.16984936613433588,
+    "equicorrelation_limit_vol": 0.4895753078425671
   },
   "provenance": {
-    "ohlcv_hourly_rows": 16878,
-    "daily_ohlcv_rows": 708,
+    "ohlcv_hourly_rows": 25752,
+    "daily_ohlcv_rows": 1080,
     "incomplete_asset_days": 18,
-    "observed_dates": 118,
+    "observed_dates": 180,
     "dates_dropped_from_panel": 5,
     "incomplete_dates": [
       "2026-04-08",
       "2026-05-08",
-      "2026-08-03"
+      "2026-10-04"
+    ],
+    "dates_without_every_asset": [],
+    "dates_after_an_excluded_day": [
+      "2026-04-09",
+      "2026-05-09"
     ],
     "excluded_dates": [
       "2026-04-08",
       "2026-04-09",
       "2026-05-08",
       "2026-05-09",
-      "2026-08-03"
+      "2026-10-04"
     ],
     "assets_loaded": 6,
     "server_version": "17.10",
     "mart_correlations_90d": {
       "note": "trailing 90-day window from marts.pairwise_correlations_90d, not the complete-day panel this report is built on",
-      "min": 0.7385414453274194,
-      "max": 0.927855242539712,
-      "mean": 0.8148850936672518,
+      "min": 0.6599293050414581,
+      "max": 0.8782093241801403,
+      "mean": 0.7576134546444097,
       "n_pairs": 15,
-      "n_days_min": 87,
-      "n_days_max": 87
+      "n_days_min": 89,
+      "n_days_max": 89
     }
   },
-  "generated_at_utc": "2026-08-03T21:44:40Z"
+  "generated_at_utc": "2026-10-04T23:13:41Z"
 }
