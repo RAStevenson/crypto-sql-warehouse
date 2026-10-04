@@ -105,8 +105,11 @@ CREATE UNIQUE INDEX daily_ohlcv_pk ON marts.daily_ohlcv (asset_id, trade_date);
 -- Adjacency guard on the return. Incomplete days are excluded from the
 -- return series, so lag() on the day after a gap would reach back two or
 -- more calendar days and label the result a daily return. The
--- trade_date = prev_date + 1 test suppresses that; one extra NULL per gap is
--- cheaper than one wrong number.
+-- trade_date = prev_date + 1 test suppresses that; one extra NULL return per
+-- gap is cheaper than one wrong number. For volatility_30d_ann the cost is
+-- thirty rows, not one: that NULL return stays inside the 30-row frame for
+-- the day after the gap and the 29 complete days that follow, and no
+-- volatility is published until it has left the frame.
 --
 -- drawdown_from_peak is measured from the running peak WITHIN THE LOADED
 -- WINDOW, not from an all-time high. A drawdown of -0.49 means "49% below
@@ -198,8 +201,11 @@ CREATE UNIQUE INDEX daily_metrics_pk ON marts.daily_metrics (asset_id, trade_dat
 -- design. Strict > gives exactly 90 candidate dates.
 --
 -- Only complete days contribute, because log_return is NULL on incomplete
--- ones by construction, so n_days can legitimately come in under 90 when the
--- window contains a gap. That is reported rather than hidden.
+-- ones by construction, so n_days comes in under 90 when the window contains
+-- a gap. Under a daily load that is the normal case: the window is anchored
+-- on max(trade_date), which is the day still being loaded, so one of the 90
+-- candidate dates never has a return and n_days tops out at 89. That is
+-- reported rather than hidden.
 -- -----------------------------------------------------------------------------
 CREATE MATERIALIZED VIEW marts.pairwise_correlations_90d AS
 SELECT

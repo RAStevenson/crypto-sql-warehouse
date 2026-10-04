@@ -1,12 +1,10 @@
 """Run the warehouse smoke tests in sql/05_verify.sql.
 
-    python scripts/run_ingest.py
-    python scripts/run_ingest.py
     python scripts/run_verify.py
 
 Each check is a DO block that raises on failure, so this exits nonzero when
-one fails and prints the message that names it. Check 4 assumes the pipeline
-was run twice back to back, as above.
+one fails and prints the message that names it. The checks hold after any
+successful load that refreshed the marts, including an ordinary daily one.
 """
 
 import sys

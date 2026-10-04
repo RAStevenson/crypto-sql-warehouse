@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import decimal
 import logging
+import math
 import random
 import time
 from datetime import UTC, datetime
@@ -25,10 +26,20 @@ GRANULARITY_SECONDS = 3600
 REQUEST_TIMEOUT_SECONDS = 30
 
 MAX_ATTEMPTS = 5
-# 429 is rate limiting and 5xx is the exchange having a moment; both are worth
-# another try. Every other 4xx (404 on an unknown product, 400 on a bad window)
-# is a bug in the request and retrying it just wastes time.
-RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+# 429 is rate limiting, 408 is a server-side timeout, and every 5xx is a
+# failure on the server's side, including the 520 to 524 codes a proxy in
+# front of the exchange returns when the origin is slow. All are worth another
+# try. Every other 4xx (404 on an unknown product, 400 on a bad window) is a
+# bug in the request and retrying it just wastes time.
+RETRY_STATUSES = frozenset({408, 429}) | frozenset(range(500, 600))
+# A response cut off mid-body raises ChunkedEncodingError, which is neither a
+# ConnectionError nor a Timeout in requests' hierarchy and has to be named.
+RETRY_EXCEPTIONS = (
+    requests.ConnectionError,
+    requests.Timeout,
+    requests.exceptions.ChunkedEncodingError,
+    requests.exceptions.ContentDecodingError,
+)
 BACKOFF_BASE_SECONDS = 1.0
 BACKOFF_CAP_SECONDS = 60.0
 BACKOFF_JITTER_SECONDS = 0.5
@@ -68,17 +79,21 @@ def _to_decimal(value: object) -> Decimal:
     decoded some other way, and goes via str() so it recovers the shortest
     representation rather than the binary expansion.
     """
-    if isinstance(value, Decimal):
-        return value
     if isinstance(value, bool):
         raise TypeError(f"{value!r} is a bool, not a price")
-    if isinstance(value, int):
-        return Decimal(value)
-    if isinstance(value, float):
-        return Decimal(str(value))
-    if isinstance(value, str):
-        return Decimal(value)
-    raise TypeError(f"cannot read {value!r} as a decimal")
+    if isinstance(value, Decimal):
+        number = value
+    elif isinstance(value, int):
+        number = Decimal(value)
+    elif isinstance(value, (float, str)):
+        number = Decimal(str(value))
+    else:
+        raise TypeError(f"cannot read {value!r} as a decimal")
+    # NaN and Infinity are legal Decimals and legal numeric values in Postgres,
+    # where NaN passes every CHECK on the candle tables, so they stop here.
+    if not number.is_finite():
+        raise ValueError(f"{value!r} is not a finite number")
+    return number
 
 
 def parse_candles(payload: object, product_code: str) -> list[Candle]:
@@ -145,7 +160,9 @@ def _retry_after_seconds(response: requests.Response) -> float | None:
         seconds = float(header.strip())
     except (AttributeError, ValueError):
         return None
-    if seconds < 0:
+    # Zero, a negative, or a non-finite value is not a usable delay; the
+    # caller falls back to its own backoff.
+    if not math.isfinite(seconds) or seconds <= 0:
         return None
     return min(seconds, MAX_RETRY_AFTER_SECONDS)
 
@@ -158,9 +175,9 @@ def fetch_window(
 ) -> list[Candle]:
     """Fetch one inclusive [window_start, window_end] candle window.
 
-    Retries rate limiting, 5xx, and the transport-level failures that a long
-    backfill actually hits (a dropped connection, a read timeout). Other 4xx
-    responses are fatal on the first try.
+    Retries rate limiting, 408, 5xx, and the transport-level failures that a
+    long backfill actually hits (a dropped connection, a read timeout, a
+    response cut off mid-body). Other 4xx responses are fatal on the first try.
     """
     url = f"{API_BASE}/products/{product_code}/candles"
     params = {
@@ -173,7 +190,7 @@ def fetch_window(
     for attempt in range(MAX_ATTEMPTS):
         try:
             response = session.get(url, params=params, timeout=REQUEST_TIMEOUT_SECONDS)
-        except (requests.ConnectionError, requests.Timeout) as exc:
+        except RETRY_EXCEPTIONS as exc:
             last_error = exc
             delay = _backoff_seconds(attempt)
             log.warning(

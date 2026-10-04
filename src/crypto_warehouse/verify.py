@@ -21,8 +21,9 @@ log = logging.getLogger(__name__)
 
 def run_verify() -> int:
     """Execute the verify script. Returns a process exit code."""
-    # autocommit: the checks write nothing, and it keeps a failed check from
-    # leaving the session in an aborted transaction on the way out.
+    # autocommit: the checks write nothing that persists, and it keeps a
+    # failed check from leaving the session in an aborted transaction on the
+    # way out.
     with closing(config.connect(autocommit=True)) as conn:
         conn.notices = sqlfiles.NoticeLogger()
         try:

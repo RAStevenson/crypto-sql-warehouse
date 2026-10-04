@@ -63,9 +63,10 @@ CREATE TABLE core.assets (
 );
 
 -- -----------------------------------------------------------------------------
--- raw.ingest_runs: one row per (product, window) fetch attempt.
+-- raw.ingest_runs: one row per product per run, covering every window the
+-- run fetched.
 --
--- This table is the incremental-loading watermark and the audit trail in one.
+-- This table is the audit trail of the incremental load.
 -- The pipeline reads MAX(ts_utc) from core to decide where to resume, but
 -- ingest_runs records what was attempted, what succeeded, and how many rows
 -- moved. It is the first thing I would query when a load looks wrong.

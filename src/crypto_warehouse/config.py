@@ -39,7 +39,6 @@ def load_dsn() -> str:
     DATABASE_URL in the shell still wins.
     """
     load_dotenv(ENV_FILE)
-    load_dotenv()
     dsn = os.environ.get("DATABASE_URL")
     if not dsn:
         raise ConfigError(
@@ -50,9 +49,8 @@ def load_dsn() -> str:
 
 
 def connect(dsn: str | None = None, *, autocommit: bool = False):
-    """Open a connection. autocommit=True is required for REFRESH ...
-    CONCURRENTLY and for anything else that refuses to run inside a
-    transaction block."""
+    """Open a connection. autocommit=True is for statements that refuse to run
+    inside a transaction block, such as CREATE DATABASE."""
     conn = psycopg2.connect(dsn or load_dsn())
     conn.autocommit = autocommit
     return conn

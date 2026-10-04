@@ -4,7 +4,7 @@
 
 The same mart refresh statements that run_ingest.py issues after a load, for
 when the marts need rebuilding without a load. They refresh CONCURRENTLY, so
-readers are never blocked and the connection runs with autocommit.
+readers are never blocked, and the three refreshes commit together.
 """
 
 import sys

@@ -4,13 +4,14 @@ render the report.
     python scripts/run_ingest.py
     python scripts/run_analysis.py
 
-Reads marts.daily_metrics, keeps the dates where every asset has a non-null
-log return, and writes the panel description, per-asset volatility, the
+Reads marts.daily_metrics, keeps the dates where every asset has a
+non-null log return, and writes the panel description, per-asset volatility, the
 correlation matrix and the equal-weight diversification result to
 reports/metrics.json, plus four figures under reports/figures/. It then runs
 scripts/run_build_report.py, which reads that file at render time; nothing is
-transcribed by hand between the two. --no-report skips the render, and the
-builder also runs standalone for iterating on the report's prose without
+transcribed by hand between the two. --no-report skips the render, and so does
+a --metrics or --figures path other than the default. The builder also runs
+standalone for iterating on the report's prose without
 touching the database.
 """
 
@@ -77,11 +78,20 @@ def main() -> int:
 
     if args.no_report:
         log.info("report skipped; render it with: python scripts/run_build_report.py")
-    elif Path(args.metrics).resolve() != METRICS_PATH.resolve():
+    elif (
+        Path(args.metrics).resolve() != METRICS_PATH.resolve()
+        or Path(args.figures).resolve() != FIGURES_DIR.resolve()
+    ):
+        # The report builder reads the default metrics file and the default
+        # figures directory. Rendering after writing either one elsewhere
+        # would pair new numbers with old figures, or the reverse.
         log.info(
-            "report not built: run_build_report.py reads %s and this run wrote %s",
+            "report not built: run_build_report.py reads %s and %s, and this run wrote "
+            "%s and %s",
             METRICS_PATH,
+            FIGURES_DIR,
             args.metrics,
+            args.figures,
         )
     else:
         # Separate process on purpose: the report builder is its own entry
