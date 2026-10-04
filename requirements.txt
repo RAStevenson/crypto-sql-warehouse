@@ -6,8 +6,9 @@
 #   python scripts/run_ingest.py
 #   python scripts/run_analysis.py
 #
-# 2026-08-03: verified against PostgreSQL 17 on Windows, full test suite green
-# with no database and no network.
+# 2026-08-03: the runtime pins verified against PostgreSQL 17 on Windows, full
+# test suite green with no database and no network. The development pins at
+# the bottom are dated by their own comment.
 #
 # pyproject.toml carries looser floors (psycopg2-binary>=2.9 and so on) for
 # anyone installing this as a dependency. This file is the pin that says which
@@ -24,8 +25,11 @@ python-dotenv==1.2.2
 numpy==1.26.3
 matplotlib==3.11.1
 
-# Development only: test suite and linter. The tests stub the HTTP session
-# rather than pulling in requests-mock or responses; a fake with three methods
-# is less to install and less to explain than another dependency.
+# Development only: the test runner, the linter, and the type checker (added
+# 2026-10-04). Pinned so the checks on a reader's machine and on the CI runner match the ones
+# here. The tests stub the HTTP session rather than pulling in requests-mock
+# or responses; a fake with three methods is less to install and less to
+# explain than another dependency.
 pytest==9.1.1
+pyright==1.1.414
 ruff==0.15.21
