@@ -147,7 +147,9 @@ END $$;
 -- inner join can only see rows that exist on both sides. A core row with no
 -- raw backing (hand-edited, or promoted from a run whose raw rows were later
 -- removed) and a raw bucket that was never promoted are both invisible to
--- it, so a membership check runs in each direction beside it.
+-- it, so a membership check runs in each direction beside it. A bucket the
+-- loader left in raw because core's constraints reject it fails here too,
+-- as never promoted or, when core holds an earlier copy, as a mismatch.
 DO $$
 DECLARE
     mismatched bigint;

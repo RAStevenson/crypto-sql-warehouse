@@ -92,7 +92,7 @@ def main() -> int:
         # figures directory. Rendering after writing either one elsewhere
         # would pair new numbers with old figures, or the reverse.
         log.info(
-            "report not built: run_build_report.py reads %s and %s, and this run wrote "
+            "report not built: the report builder reads %s and %s, and this run wrote "
             "%s and %s",
             METRICS_PATH,
             FIGURES_DIR,

@@ -465,7 +465,7 @@ ORDER BY a.symbol, e.ts;
 -- that on its own.
 --
 -- The bound is > max - 90, not >= max - 90. The inclusive form spans 91
--- distinct dates. On this data it still reported 90, because the earliest
+-- distinct dates. Measured 2026-08-04 it still reported 90, because the earliest
 -- of them had a NULL log_return, which is luck rather than logic. The
 -- window is anchored on the latest date that has a return, because the
 -- newest row is normally the day still being loaded and has none.

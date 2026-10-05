@@ -196,9 +196,9 @@ CREATE UNIQUE INDEX daily_metrics_pk ON marts.daily_metrics (asset_id, trade_dat
 -- over 90.
 --
 -- The window predicate is trade_date > max - 90, not >= max - 90. The
--- inclusive form spans 91 distinct dates. On this data it still reported 90,
--- because the earliest of them had a NULL log_return; that is an accident,
--- not a design. Strict > gives exactly 90 candidate dates.
+-- inclusive form spans 91 distinct dates. Measured 2026-08-04 it still
+-- reported 90, because the earliest of them had a NULL log_return; that is
+-- an accident, not a design. Strict > gives exactly 90 candidate dates.
 --
 -- The window is anchored on the latest date that has a return, not on
 -- max(trade_date). The newest row is normally the day still being loaded,
