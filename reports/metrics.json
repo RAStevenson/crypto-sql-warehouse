@@ -1,8 +1,8 @@
 {
   "panel": {
     "first_date": "2026-04-10",
-    "last_date": "2026-10-03",
-    "n_days": 175,
+    "last_date": "2026-10-04",
+    "n_days": 176,
     "n_assets": 6,
     "symbols": [
       "ADA",
@@ -15,45 +15,45 @@
   },
   "close_path": {
     "first_date": "2026-04-09",
-    "last_date": "2026-10-03",
-    "n_closes": 177
+    "last_date": "2026-10-04",
+    "n_closes": 178
   },
   "assets": [
     {
       "symbol": "ADA",
-      "annualized_volatility": 0.7054237689448591,
+      "annualized_volatility": 0.7092880206696622,
       "max_drawdown": -0.49203539823008846,
-      "total_log_return": -0.04148606232876295
+      "total_log_return": 0.021405759913349254
     },
     {
       "symbol": "BTC",
-      "annualized_volatility": 0.38040480770516366,
+      "annualized_volatility": 0.3803770797616458,
       "max_drawdown": -0.28802996204744147,
-      "total_log_return": 0.16575718284405738
+      "total_log_return": 0.1863698472990265
     },
     {
       "symbol": "DOGE",
-      "annualized_volatility": 0.5653302546601462,
+      "annualized_volatility": 0.5656134796753672,
       "max_drawdown": -0.40201005025125636,
-      "total_log_return": 0.001833972141420226
+      "total_log_return": 0.033969936480604535
     },
     {
       "symbol": "ETH",
-      "annualized_volatility": 0.5252277855660725,
+      "annualized_volatility": 0.5240929432498442,
       "max_drawdown": -0.3531764890631911,
-      "total_log_return": 0.20439202541366353
+      "total_log_return": 0.21910738232223625
     },
     {
       "symbol": "LINK",
-      "annualized_volatility": 0.603782624625092,
+      "annualized_volatility": 0.6021628440195947,
       "max_drawdown": -0.3291340052258305,
-      "total_log_return": 0.45607249561795626
+      "total_log_return": 0.46629356933929955
     },
     {
       "symbol": "SOL",
-      "annualized_volatility": 0.5536838694808807,
+      "annualized_volatility": 0.5525028158882296,
       "max_drawdown": -0.3616474938373051,
-      "total_log_return": 0.3611405999864088
+      "total_log_return": 0.3775616025733948
     }
   ],
   "correlation": {
@@ -68,63 +68,63 @@
     "matrix": [
       [
         0.9999999999999998,
-        0.7618139827606014,
-        0.8076620256203821,
-        0.7327676570088625,
-        0.7323398193388806,
-        0.7653250216278634
+        0.7629805174205411,
+        0.8087997339509293,
+        0.7309953657212162,
+        0.7285676626660392,
+        0.76333285532693
       ],
       [
-        0.7618139827606014,
+        0.7629805174205411,
+        0.9999999999999998,
+        0.7769558329582544,
+        0.8872586609675722,
+        0.7340722716252687,
+        0.8316848410376046
+      ],
+      [
+        0.8087997339509293,
+        0.7769558329582545,
         1.0,
-        0.7756048115414478,
-        0.8875590812446749,
-        0.7348406338739439,
-        0.8317590513713654
+        0.728631211480206,
+        0.743616460516043,
+        0.7434060311983862
       ],
       [
-        0.8076620256203821,
-        0.7756048115414478,
+        0.7309953657212162,
+        0.8872586609675721,
+        0.7286312114802062,
+        0.9999999999999999,
+        0.7923098230955608,
+        0.8302743920977633
+      ],
+      [
+        0.7285676626660391,
+        0.7340722716252687,
+        0.7436164605160429,
+        0.7923098230955608,
         1.0,
-        0.7285202593366795,
-        0.7447021324782899,
-        0.7433158474659128
+        0.7764860539305789
       ],
       [
-        0.7327676570088624,
-        0.887559081244675,
-        0.7285202593366795,
-        1.0,
-        0.7922989604514988,
-        0.8300313853763016
-      ],
-      [
-        0.7323398193388806,
-        0.7348406338739439,
-        0.7447021324782899,
-        0.7922989604514988,
-        1.0,
-        0.776468885528437
-      ],
-      [
-        0.7653250216278635,
-        0.8317590513713653,
-        0.743315847465913,
-        0.8300313853763016,
-        0.776468885528437,
-        0.9999999999999999
+        0.7633328553269298,
+        0.8316848410376048,
+        0.7434060311983862,
+        0.8302743920977633,
+        0.7764860539305789,
+        1.0
       ]
     ],
-    "off_diagonal_min": 0.7285202593366795,
-    "off_diagonal_max": 0.887559081244675,
-    "off_diagonal_mean": 0.7763339703350094,
-    "mean_ci95_low": 0.7097255404713309,
-    "mean_ci95_high": 0.8291849946169926,
+    "off_diagonal_min": 0.7285676626660391,
+    "off_diagonal_max": 0.8872586609675722,
+    "off_diagonal_mean": 0.7759581142661929,
+    "mean_ci95_low": 0.7094709662923041,
+    "mean_ci95_high": 0.8287539841885219,
     "heatmap_scale_low": 0.7000000000000001,
     "heatmap_scale_high": 0.9,
     "least_correlated_pair": [
-      "DOGE",
-      "ETH"
+      "ADA",
+      "LINK"
     ],
     "most_correlated_pair": [
       "BTC",
@@ -134,24 +134,24 @@
   },
   "diversification": {
     "weight_per_asset": 0.16666666666666666,
-    "equal_weight_portfolio_vol": 0.5003783201271901,
-    "average_single_asset_vol": 0.5556421851637023,
-    "zero_correlation_vol": 0.2302723218884789,
-    "risk_removed_actual": 0.0994594480263058,
-    "risk_removed_if_uncorrelated": 0.5855744433431805,
-    "diversification_captured": 0.16984936613433588,
-    "equicorrelation_limit_vol": 0.4895753078425671
+    "equal_weight_portfolio_vol": 0.5002678963368831,
+    "average_single_asset_vol": 0.5556728638773907,
+    "zero_correlation_vol": 0.23035164500958796,
+    "risk_removed_actual": 0.0997078877559382,
+    "risk_removed_if_uncorrelated": 0.5854545723139449,
+    "diversification_captured": 0.17030849611756163,
+    "equicorrelation_limit_vol": 0.489483805865401
   },
   "provenance": {
-    "ohlcv_hourly_rows": 25752,
-    "daily_ohlcv_rows": 1080,
+    "ohlcv_hourly_rows": 25896,
+    "daily_ohlcv_rows": 1086,
     "incomplete_asset_days": 18,
-    "observed_dates": 180,
+    "observed_dates": 181,
     "dates_dropped_from_panel": 5,
     "incomplete_dates": [
       "2026-04-08",
       "2026-05-08",
-      "2026-10-04"
+      "2026-10-05"
     ],
     "dates_without_every_asset": [],
     "dates_after_an_excluded_day": [
@@ -163,19 +163,19 @@
       "2026-04-09",
       "2026-05-08",
       "2026-05-09",
-      "2026-10-04"
+      "2026-10-05"
     ],
     "assets_loaded": 6,
     "server_version": "17.10",
     "mart_correlations_90d": {
       "note": "trailing 90-day window from marts.pairwise_correlations_90d, not the complete-day panel this report is built on",
-      "min": 0.6599293050414581,
-      "max": 0.8782093241801403,
-      "mean": 0.7576134546444097,
+      "min": 0.6525039422662351,
+      "max": 0.8774555402228137,
+      "mean": 0.7564873099922366,
       "n_pairs": 15,
-      "n_days_min": 89,
-      "n_days_max": 89
+      "n_days_min": 90,
+      "n_days_max": 90
     }
   },
-  "generated_at_utc": "2026-10-04T23:13:41Z"
+  "generated_at_utc": "2026-10-05T20:20:52Z"
 }
