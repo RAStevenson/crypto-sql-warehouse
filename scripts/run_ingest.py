@@ -21,8 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import argparse
 import logging
 
-from crypto_warehouse.config import ConfigError, configure_logging
-from crypto_warehouse.ingest import DEFAULT_BACKFILL_DAYS, run_ingest
+from crypto_warehouse.candle_ingest import DEFAULT_BACKFILL_DAYS, run_ingest
+from crypto_warehouse.database_connection import ConfigError, configure_logging
 
 log = logging.getLogger("run_ingest")
 

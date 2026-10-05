@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from .config import REPO_ROOT
+from .database_connection import REPO_ROOT
 
 log = logging.getLogger(__name__)
 

@@ -27,10 +27,10 @@ from typing import NamedTuple
 import psycopg2.extras
 import requests
 
-from . import config, sqlfiles
-from .api import GRANULARITY_SECONDS, fetch_window
-from .config import ConfigError
-from .windows import (
+from . import database_connection, sql_file_runner
+from .coinbase_candles import GRANULARITY_SECONDS, fetch_window
+from .database_connection import ConfigError
+from .fetch_windows import (
     bucket_count,
     floor_hour,
     iter_windows,
@@ -75,7 +75,7 @@ INSERT_RAW_SQL = """
 # would abort the whole upsert, and because the watermark would then never
 # move, every later run for that product too. Such a row is left in raw and
 # logged instead, and verify fails on its bucket until a valid copy loads.
-# tests/test_ingest.py holds this text against the DDL so the two cannot drift.
+# tests/test_candle_ingest.py holds this text against the DDL so the two cannot drift.
 CORE_ROW_CHECKS = """
         r.volume >= 0
         AND r.high >= r.low
@@ -397,7 +397,7 @@ def _rollback_quietly(conn) -> None:
 
 def refresh_marts(conn) -> None:
     """Run sql/03_refresh_marts.sql in one transaction, so the three views change together."""
-    sqlfiles.run_sql_file(conn, sqlfiles.REFRESH_MARTS_FILE)
+    sql_file_runner.run_sql_file(conn, sql_file_runner.REFRESH_MARTS_FILE)
     conn.commit()
 
 
@@ -416,7 +416,7 @@ def run_ingest(
     """
     failures: list[str] = []
 
-    with closing(config.connect()) as conn, requests.Session() as session:
+    with closing(database_connection.connect()) as conn, requests.Session() as session:
         session.headers["User-Agent"] = USER_AGENT
 
         with conn.cursor() as cur:

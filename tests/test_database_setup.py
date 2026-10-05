@@ -1,8 +1,8 @@
-"""The marts-only rebuild in crypto_warehouse.setup_db, against a fake connection."""
+"""The marts-only rebuild in crypto_warehouse.database_setup, against a fake connection."""
 
 from __future__ import annotations
 
-from crypto_warehouse import setup_db
+from crypto_warehouse import database_setup
 
 
 class FakeCursor:
@@ -38,17 +38,19 @@ class FakeConnection:
 
 def run_marts_only(monkeypatch, *, database=True, schema=True):
     conn = FakeConnection()
-    monkeypatch.setattr(setup_db.config, "load_dsn", lambda: "postgresql://x/y")
-    monkeypatch.setattr(setup_db.config, "connect", lambda dsn=None, **kwargs: conn)
-    monkeypatch.setattr(setup_db, "database_exists", lambda dsn: database)
-    monkeypatch.setattr(setup_db, "schema_is_applied", lambda c: schema)
+    monkeypatch.setattr(database_setup.database_connection, "load_dsn", lambda: "postgresql://x/y")
     monkeypatch.setattr(
-        setup_db, "create_database", lambda dsn: conn.log.append("create_database")
+        database_setup.database_connection, "connect", lambda dsn=None, **kwargs: conn
+    )
+    monkeypatch.setattr(database_setup, "database_exists", lambda dsn: database)
+    monkeypatch.setattr(database_setup, "schema_is_applied", lambda c: schema)
+    monkeypatch.setattr(
+        database_setup, "create_database", lambda dsn: conn.log.append("create_database")
     )
     monkeypatch.setattr(
-        setup_db.sqlfiles, "run_sql_file", lambda c, name: c.log.append(f"file {name}")
+        database_setup.sql_file_runner, "run_sql_file", lambda c, name: c.log.append(f"file {name}")
     )
-    return setup_db.run_setup(marts_only=True), conn
+    return database_setup.run_setup(marts_only=True), conn
 
 
 def test_marts_only_drops_and_recreates_the_marts_schema_and_nothing_else(monkeypatch):
@@ -58,7 +60,7 @@ def test_marts_only_drops_and_recreates_the_marts_schema_and_nothing_else(monkey
     assert conn.log == [
         "DROP SCHEMA IF EXISTS marts CASCADE",
         "CREATE SCHEMA marts",
-        f"file {setup_db.sqlfiles.MARTS_FILE}",
+        f"file {database_setup.sql_file_runner.MARTS_FILE}",
         "commit",
     ]
     assert conn.closed

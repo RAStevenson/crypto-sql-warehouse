@@ -10,11 +10,16 @@ from pathlib import Path
 
 import pytest
 
-from crypto_warehouse import ingest
-from crypto_warehouse.api import Candle
-from crypto_warehouse.config import ConfigError
-from crypto_warehouse.ingest import OVERLAP_HOURS, LoadResult, get_watermark, resolve_products
-from crypto_warehouse.windows import HOUR
+from crypto_warehouse import candle_ingest
+from crypto_warehouse.candle_ingest import (
+    OVERLAP_HOURS,
+    LoadResult,
+    get_watermark,
+    resolve_products,
+)
+from crypto_warehouse.coinbase_candles import Candle
+from crypto_warehouse.database_connection import ConfigError
+from crypto_warehouse.fetch_windows import HOUR
 
 NOW = datetime(2026, 8, 3, 14, 27, 41, 123456, tzinfo=UTC)
 NOW_HOUR = NOW.replace(minute=0, second=0, microsecond=0)
@@ -223,8 +228,8 @@ def raw_writes(monkeypatch):
     def record(cur, sql, rows):
         captured.append((" ".join(sql.split()), list(rows)))
 
-    monkeypatch.setattr(ingest.time, "sleep", lambda seconds: None)
-    monkeypatch.setattr(ingest.psycopg2.extras, "execute_values", record)
+    monkeypatch.setattr(candle_ingest.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(candle_ingest.psycopg2.extras, "execute_values", record)
     return captured
 
 
@@ -234,7 +239,7 @@ def serve(monkeypatch, candles):
     def fake_fetch_window(session, product_code, window_start, window_end):
         return list(candles)
 
-    monkeypatch.setattr(ingest, "fetch_window", fake_fetch_window)
+    monkeypatch.setattr(candle_ingest, "fetch_window", fake_fetch_window)
 
 
 def flat_candle(bucket_start):
@@ -249,7 +254,7 @@ def window_of_300_without(missing_offsets):
 
 
 def fetch_300_hour_window(conn):
-    return ingest._fetch_into_raw(
+    return candle_ingest._fetch_into_raw(
         conn, None, "BTC-USD", 42, WINDOW_START, WINDOW_START + 300 * HOUR
     )
 
@@ -267,7 +272,7 @@ def test_fetch_into_raw_writes_each_candle_to_raw_in_ddl_column_order(monkeypatc
     serve(monkeypatch, [candle])
     conn = FakeConnection()
 
-    rows_fetched, _ = ingest._fetch_into_raw(
+    rows_fetched, _ = candle_ingest._fetch_into_raw(
         conn, None, "BTC-USD", 42, WINDOW_START, WINDOW_START + HOUR
     )
 
@@ -325,7 +330,7 @@ def test_fetch_into_raw_drops_candles_outside_the_requested_window(monkeypatch, 
     serve(monkeypatch, [before_the_window, *inside, forming_hour])
 
     with caplog.at_level("WARNING"):
-        rows_fetched, short_windows = ingest._fetch_into_raw(
+        rows_fetched, short_windows = candle_ingest._fetch_into_raw(
             FakeConnection(), None, "BTC-USD", 42, WINDOW_START, current_hour
         )
 
@@ -345,13 +350,13 @@ def test_load_product_marks_the_run_failed_and_reraises_when_the_fetch_raises(mo
     def failing_fetch_window(session, product_code, window_start, window_end):
         raise error
 
-    monkeypatch.setattr(ingest, "fetch_window", failing_fetch_window)
+    monkeypatch.setattr(candle_ingest, "fetch_window", failing_fetch_window)
     # The product has no rows yet, so the one-day cold start gives the fetch a
     # window to fail on. 17 is the id of the run row the load inserts.
     conn = FakeConnection(rows=[(None,), (17,)])
 
     with pytest.raises(type(error)) as caught:
-        ingest.load_product(conn, None, "BTC-USD", backfill_days=1)
+        candle_ingest.load_product(conn, None, "BTC-USD", backfill_days=1)
 
     assert caught.value is error
     assert conn.rollbacks == 1
@@ -378,11 +383,13 @@ def test_run_ingest_keeps_going_after_a_failed_product_and_rolls_back_before_the
             product_code, run_id=5, rows_fetched=10, rows_upserted=10, short_windows=0
         )
 
-    monkeypatch.setattr(ingest.config, "connect", lambda: conn)
-    monkeypatch.setattr(ingest, "resolve_products", lambda cur, requested: ["AAA-USD", "BBB-USD"])
-    monkeypatch.setattr(ingest, "load_product", fake_load_product)
+    monkeypatch.setattr(candle_ingest.database_connection, "connect", lambda: conn)
+    monkeypatch.setattr(
+        candle_ingest, "resolve_products", lambda cur, requested: ["AAA-USD", "BBB-USD"]
+    )
+    monkeypatch.setattr(candle_ingest, "load_product", fake_load_product)
 
-    exit_code = ingest.run_ingest()
+    exit_code = candle_ingest.run_ingest()
 
     assert exit_code == 1
     assert attempts == [("AAA-USD", 0), ("BBB-USD", 1)]
@@ -423,7 +430,7 @@ def test_core_row_checks_repeat_every_check_constraint_on_the_core_table():
         "low <= close",
         "low > 0",
     }
-    assert conditions(ingest.CORE_ROW_CHECKS) == core_check_constraints()
+    assert conditions(candle_ingest.CORE_ROW_CHECKS) == core_check_constraints()
 
 
 def test_the_upsert_shown_in_the_query_file_carries_the_same_row_checks():
@@ -432,13 +439,13 @@ def test_the_upsert_shown_in_the_query_file_carries_the_same_row_checks():
     statement = "\n".join(line for line in q20.splitlines() if not line.startswith("--"))
     where = statement[statement.index("status = 'succeeded')") : statement.index("ORDER BY")]
     shown = conditions(where.split("AND", 1)[1])
-    assert shown == conditions(ingest.CORE_ROW_CHECKS)
+    assert shown == conditions(candle_ingest.CORE_ROW_CHECKS)
 
 
 def test_both_promotion_statements_filter_on_the_row_checks():
-    checks = " ".join(ingest.CORE_ROW_CHECKS.split())
-    assert f"AND ( {checks} )" in " ".join(ingest.UPSERT_SQL.split())
-    assert f"AND NOT ( {checks} )" in " ".join(ingest.REJECTED_ROWS_SQL.split())
+    checks = " ".join(candle_ingest.CORE_ROW_CHECKS.split())
+    assert f"AND ( {checks} )" in " ".join(candle_ingest.UPSERT_SQL.split())
+    assert f"AND NOT ( {checks} )" in " ".join(candle_ingest.REJECTED_ROWS_SQL.split())
 
 
 def test_promote_to_core_warns_about_rows_core_would_reject_and_still_promotes(caplog):
@@ -446,7 +453,7 @@ def test_promote_to_core_warns_about_rows_core_would_reject_and_still_promotes(c
     conn.batches = [[(WINDOW_START,), (WINDOW_START + HOUR,)]]
 
     with caplog.at_level("WARNING"):
-        ingest._promote_to_core(conn, run_id=7, rows_fetched=5)
+        candle_ingest._promote_to_core(conn, run_id=7, rows_fetched=5)
 
     statements = [statement for statement, _ in conn.executed]
     assert statements[0].startswith("SELECT r.bucket_start FROM raw.candles r")
@@ -461,7 +468,7 @@ def test_promote_to_core_is_silent_when_every_row_passes(caplog):
     conn = FakeConnection()
 
     with caplog.at_level("WARNING"):
-        ingest._promote_to_core(conn, run_id=7, rows_fetched=5)
+        candle_ingest._promote_to_core(conn, run_id=7, rows_fetched=5)
 
     assert caplog.text == ""
     assert conn.commits == 1

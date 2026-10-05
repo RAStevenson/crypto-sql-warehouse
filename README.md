@@ -84,7 +84,7 @@ In a terminal, run the following.
    report:
 
    ```
-   python scripts/run_analysis.py
+   python scripts/run_diversification_analysis.py
    ```
 
 The first run of `run_ingest.py` fetches every active product at hourly grain.
@@ -137,14 +137,15 @@ Every argument of every script, mirroring `--help`:
   days (default 365).
 - `run_add_asset.py --no-backfill` registers the asset only, and the next
   ingest run loads it. It cannot be combined with `--backfill-days`.
-- `run_analysis.py --metrics PATH` sets the output path for the metrics file
-  (default `reports/metrics.json`). Any other path skips the report, because
-  the report builder reads only the default.
-- `run_analysis.py --figures DIR` sets the output directory for the PNG
-  figures (default `reports/figures`). Any other directory skips the report
-  too, because the report builder embeds only the figures in the default directory.
-- `run_analysis.py --no-report` skips rendering the HTML and PDF report after
-  the metrics and figures.
+- `run_diversification_analysis.py --metrics PATH` sets the output path for
+  the metrics file (default `reports/metrics.json`). Any other path skips the
+  report, because the report builder reads only the default.
+- `run_diversification_analysis.py --figures DIR` sets the output directory
+  for the PNG figures (default `reports/figures`). Any other directory skips
+  the report too, because the report builder embeds only the figures in the
+  default directory.
+- `run_diversification_analysis.py --no-report` skips rendering the HTML and
+  PDF report after the metrics and figures.
 - Every script except `run_build_report.py` accepts `--verbose` for
   debug-level logging. `run_refresh_marts.py` and `run_verify.py` take no
   other arguments, and `run_build_report.py` takes none at all.
@@ -345,7 +346,8 @@ scripts/run_add_asset.py      validate, register, and backfill a new asset
 scripts/scheduled_ingest.cmd  the Task Scheduler entry point, logs to logs/
 scripts/run_verify.py         run the assertions, nonzero exit on failure
 scripts/run_refresh_marts.py  refresh the marts layer
-scripts/run_analysis.py       compute reports/metrics.json, figures, and the report
+scripts/run_diversification_analysis.py
+                              compute reports/metrics.json, figures, and the report
 scripts/run_build_report.py   render the report from metrics.json
 src/crypto_warehouse/         the package the scripts import
 sql/01_schema.sql             schema DDL with design rationale in comments

@@ -16,8 +16,8 @@ import argparse
 import logging
 from contextlib import closing
 
-from crypto_warehouse.config import ConfigError, configure_logging, connect
-from crypto_warehouse.ingest import refresh_marts
+from crypto_warehouse.candle_ingest import refresh_marts
+from crypto_warehouse.database_connection import ConfigError, configure_logging, connect
 
 log = logging.getLogger("run_refresh_marts")
 

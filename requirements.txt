@@ -4,7 +4,7 @@
 #   pip install -r requirements.txt
 #   python scripts/run_setup.py
 #   python scripts/run_ingest.py
-#   python scripts/run_analysis.py
+#   python scripts/run_diversification_analysis.py
 #
 # 2026-08-03: the runtime pins verified against PostgreSQL 17 on Windows, full
 # test suite green with no database and no network. The development pins at
@@ -21,7 +21,8 @@ python-dotenv==1.2.2
 # The analysis layer. numpy does the covariance arithmetic behind
 # reports/metrics.json and matplotlib renders the four figures the report
 # embeds. The ingestion pipeline does not touch either, so a load-only install
-# can drop these two lines; scripts/run_analysis.py cannot.
+# can drop these two lines. scripts/run_diversification_analysis.py needs both,
+# and scripts/run_build_report.py needs numpy.
 numpy==1.26.3
 matplotlib==3.11.1
 

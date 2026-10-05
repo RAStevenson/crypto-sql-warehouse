@@ -15,9 +15,9 @@ from datetime import UTC, datetime, timedelta
 import requests
 from psycopg2 import errors as pg_errors
 
-from .api import fetch_window
-from .config import ConfigError
-from .windows import floor_hour
+from .coinbase_candles import fetch_window
+from .database_connection import ConfigError
+from .fetch_windows import floor_hour
 
 log = logging.getLogger(__name__)
 
