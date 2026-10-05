@@ -86,14 +86,46 @@ def drop_schemas(conn) -> None:
             )
 
 
-def run_setup(*, reset: bool = False) -> int:
+def rebuild_marts(conn) -> None:
+    """Drop the marts schema and re-create it from sql/02_marts.sql, leaving
+    raw and core untouched.
+
+    This does not commit, so a DDL error leaves the old marts in place.
+    """
+    log.warning("dropping schema marts and rebuilding it from sql/%s", sqlfiles.MARTS_FILE)
+    with conn.cursor() as cur:
+        cur.execute("DROP SCHEMA IF EXISTS marts CASCADE")
+        cur.execute("CREATE SCHEMA marts")
+    sqlfiles.run_sql_file(conn, sqlfiles.MARTS_FILE)
+
+
+def run_setup(*, reset: bool = False, marts_only: bool = False) -> int:
     """Create the database if needed, apply the schema and mart DDL, and return
     a process exit code.
 
     A schema that is already applied returns 1 unless reset is set, in which
-    case the schemas are dropped and rebuilt.
+    case the schemas are dropped and rebuilt. With marts_only, only the marts
+    schema is dropped and rebuilt, which is how a changed mart definition
+    reaches a loaded warehouse.
     """
     dsn = config.load_dsn()
+
+    if marts_only:
+        if not database_exists(dsn):
+            log.error("the database does not exist; run scripts/run_setup.py with no flag first")
+            return 1
+        with closing(config.connect(dsn)) as conn:
+            if not schema_is_applied(conn):
+                log.error(
+                    "core.assets does not exist, so there is nothing to rebuild the "
+                    "marts from; run scripts/run_setup.py with no flag first"
+                )
+                return 1
+            rebuild_marts(conn)
+            conn.commit()
+        log.info("marts rebuilt; raw and core were not touched")
+        return 0
+
     created = create_database(dsn)
 
     with closing(config.connect(dsn)) as conn:

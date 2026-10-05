@@ -139,10 +139,10 @@ ORDER BY avg_daily_dollar_volume DESC;
 --
 -- The "full calendar month" wording matters, because the load starts and
 -- ends mid-month, so the first and last calendar months are always partial.
--- An earlier version of this query ranked those partial months against
--- whole ones and reported a 7-day fragment as four of the six "best
--- months", because a 7-day window has far less room to give back a gain
--- than a 31-day one. days_present is carried through the CTEs and compared
+-- Ranked against whole months, a partial month can rank first: on this data
+-- a 7-day fragment came out as four of the six "best months", because a
+-- 7-day window has far less room to give back a gain than a 31-day one.
+-- days_present is carried through the CTEs and compared
 -- against the calendar length of the month, and only months with every day
 -- present are ranked. It counts complete days, so the current month does
 -- not qualify on its last day while that day is still loading. Both columns
@@ -251,9 +251,9 @@ ORDER BY a.symbol, r.rn;
 -- ROW_NUMBER is reproducible and the top-6-per-asset cut always returns the
 -- same rows; w_tie leaves the tie intact so RANK and DENSE_RANK still have
 -- something to demonstrate. Filtering on row_num rather than a global LIMIT
--- is what makes all six assets appear: the previous LIMIT 40 was consumed
--- entirely by ADA, and the cut landed inside a tie group, so the rows
--- returned changed between runs.
+-- is what makes all six assets appear: on this data a global LIMIT 40 was
+-- consumed entirely by ADA, and without the tiebreak the cut landed inside a
+-- tie group, so the rows returned changed between runs.
 WITH ranked AS (
     SELECT
         m.asset_id,
@@ -465,15 +465,16 @@ ORDER BY a.symbol, e.ts;
 -- that on its own.
 --
 -- The bound is > max - 90, not >= max - 90. The inclusive form spans 91
--- distinct dates; it previously reported 90 only because the earliest
--- log_return happened to be NULL, which is luck rather than logic. The
--- window is anchored on max(trade_date), normally the day still being
--- loaded, so shared_days tops out at 89 under a daily load.
+-- distinct dates. On this data it still reported 90, because the earliest
+-- of them had a NULL log_return, which is luck rather than logic. The
+-- window is anchored on the latest date that has a return, because the
+-- newest row is normally the day still being loaded and has none.
 WITH r AS (
     SELECT asset_id, trade_date, log_return
     FROM marts.daily_metrics
     WHERE log_return IS NOT NULL
-      AND trade_date > (SELECT max(trade_date) FROM marts.daily_metrics) - 90
+      AND trade_date > (SELECT max(trade_date) FROM marts.daily_metrics
+                        WHERE log_return IS NOT NULL) - 90
 )
 SELECT
     aa.symbol                             AS asset_a,
@@ -582,6 +583,11 @@ ORDER BY a.symbol;
 -- because ON CONFLICT cannot update the same row twice in one statement.
 -- The ORDER BY ends on raw_id DESC, a unique column, so the newest copy of
 -- each bucket is the one kept and the statement is deterministic.
+-- The WHERE conditions after the run_id filter repeat core's CHECK
+-- constraints, so a raw row they would reject is left out. Without them one
+-- bad candle aborts the whole statement, and the same candle aborts every
+-- later run for that product. The verify script fails on a bucket left out
+-- this way.
 --
 -- (Illustrative: run against a real run_id, e.g. the latest succeeded run.)
 INSERT INTO core.ohlcv_hourly
@@ -594,6 +600,11 @@ SELECT DISTINCT ON (a.asset_id, r.bucket_start)
 FROM raw.candles r
 JOIN core.assets a ON a.product_code = r.product_code
 WHERE r.run_id = (SELECT max(run_id) FROM raw.ingest_runs WHERE status = 'succeeded')
+  AND r.volume >= 0
+  AND r.high >= r.low
+  AND r.high >= r.open AND r.high >= r.close
+  AND r.low <= r.open AND r.low <= r.close
+  AND r.low > 0
 ORDER BY a.asset_id, r.bucket_start, r.raw_id DESC
 ON CONFLICT (asset_id, ts_utc) DO UPDATE
 SET open = EXCLUDED.open,

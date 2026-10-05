@@ -196,16 +196,18 @@ CREATE UNIQUE INDEX daily_metrics_pk ON marts.daily_metrics (asset_id, trade_dat
 -- over 90.
 --
 -- The window predicate is trade_date > max - 90, not >= max - 90. The
--- inclusive form spans 91 distinct dates and only looked like 90 because the
--- earliest log_return happened to be NULL; that is an accident, not a
--- design. Strict > gives exactly 90 candidate dates.
+-- inclusive form spans 91 distinct dates. On this data it still reported 90,
+-- because the earliest of them had a NULL log_return; that is an accident,
+-- not a design. Strict > gives exactly 90 candidate dates.
+--
+-- The window is anchored on the latest date that has a return, not on
+-- max(trade_date). The newest row is normally the day still being loaded,
+-- whose log_return is NULL, and a window anchored there spends one of its 90
+-- dates on a day that cannot contribute, so n_days never exceeds 89.
 --
 -- Only complete days contribute, because log_return is NULL on incomplete
--- ones by construction, so n_days comes in under 90 when the window contains
--- a gap. Under a daily load that is the normal case: the window is anchored
--- on max(trade_date), which is the day still being loaded, so one of the 90
--- candidate dates never has a return and n_days tops out at 89. That is
--- reported rather than hidden.
+-- ones by construction, so n_days still comes in under 90 when the window
+-- contains a gap. That is reported rather than hidden.
 -- -----------------------------------------------------------------------------
 CREATE MATERIALIZED VIEW marts.pairwise_correlations_90d AS
 SELECT
@@ -221,7 +223,8 @@ JOIN marts.daily_metrics rb
  AND rb.asset_id   > ra.asset_id
 JOIN core.assets aa ON aa.asset_id = ra.asset_id
 JOIN core.assets ab ON ab.asset_id = rb.asset_id
-WHERE ra.trade_date > (SELECT max(trade_date) FROM marts.daily_metrics) - 90
+WHERE ra.trade_date > (SELECT max(trade_date) FROM marts.daily_metrics
+                       WHERE log_return IS NOT NULL) - 90
   AND ra.log_return IS NOT NULL
   AND rb.log_return IS NOT NULL
 GROUP BY ra.asset_id, rb.asset_id, aa.symbol, ab.symbol;
@@ -237,15 +240,15 @@ CREATE UNIQUE INDEX pairwise_correlations_pk
 -- because they become Tableau field names. Long format, one row per asset
 -- per day, which Tableau prefers over one-column-per-asset wide format.
 --
--- No completeness filter here. An earlier version dropped rows with
--- hours_present < 20, which meant a day could vanish from a dashboard with
--- nothing to indicate it had ever existed. Completeness is now a property of
--- the row (is_complete, hours_present) rather than a filter buried in a
--- view: incomplete days arrive with their observed OHLCV and NULL derived
--- metrics, so a line chart of ma_30d or simple_return breaks visibly at the
--- gap instead of interpolating over it. Dashboards that want bars only for
--- clean days filter on is_complete, and that choice is then visible in the
--- workbook rather than invisible in the warehouse.
+-- No completeness filter here. Dropping partial days (a filter such as
+-- hours_present < 20) would let a day vanish from a dashboard with nothing to
+-- indicate it had ever existed. Completeness is a property of the row
+-- (is_complete, hours_present) rather than a filter buried in a view:
+-- incomplete days arrive with their observed OHLCV and NULL derived metrics,
+-- so a line chart of ma_30d or simple_return breaks visibly at the gap
+-- instead of interpolating over it. Dashboards that want bars only for clean
+-- days filter on is_complete, and that choice is then visible in the workbook
+-- rather than invisible in the warehouse.
 --
 -- drawdown_from_peak here inherits the caveat from daily_metrics: the peak
 -- is the highest close in the loaded window, not an all-time high.
