@@ -25,9 +25,15 @@ import argparse
 import logging
 
 import psycopg2
+import psycopg2.errors
 
 from crypto_warehouse.database_connection import ConfigError, configure_logging
-from crypto_warehouse.diversification_metrics import FIGURES_DIR, METRICS_PATH, run_analysis
+from crypto_warehouse.diversification_metrics import (
+    FIGURES_DIR,
+    METRICS_PATH,
+    PanelDataError,
+    run_analysis,
+)
 from crypto_warehouse.report_generator import build_report
 
 log = logging.getLogger("run_diversification_analysis")
@@ -61,12 +67,21 @@ def main() -> int:
     except ConfigError as exc:
         log.error("%s", exc)
         return 2
-    except psycopg2.Error as exc:
-        log.error("database error: %s", str(exc).strip())
-        log.error("run scripts/run_setup.py and scripts/run_ingest.py first")
+    except psycopg2.OperationalError:
+        log.error("could not reach the database", exc_info=True)
+        log.error(
+            "nothing was written; start the server or fix DATABASE_URL in .env, then rerun"
+        )
         return 1
-    except ValueError as exc:
+    except psycopg2.errors.UndefinedTable:
+        log.error("a warehouse table is missing", exc_info=True)
+        log.error(
+            "nothing was written; run scripts/run_setup.py and scripts/run_ingest.py first"
+        )
+        return 1
+    except PanelDataError as exc:
         log.error("%s", exc)
+        log.error("nothing was written")
         return 1
 
     div = metrics["diversification"]
@@ -106,12 +121,11 @@ def main() -> int:
         # is not cited.
         try:
             build_report()
-        except (Exception, SystemExit) as exc:
+        except (Exception, SystemExit):
+            log.error("the report build failed", exc_info=True)
             log.error(
-                "the metrics and figures were written, but the report build failed "
-                "(%s: %s); fix the cause and rerun python scripts/run_build_report.py",
-                type(exc).__name__,
-                exc,
+                "the metrics and figures were written, but the report was not; fix the "
+                "cause above and rerun python scripts/run_build_report.py"
             )
             return 1
     return 0

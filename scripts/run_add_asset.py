@@ -90,9 +90,23 @@ def main() -> int:
         symbol = (args.symbol or base).strip().upper()
         name = args.name or symbol
 
-        with requests.Session() as session:
-            session.headers["User-Agent"] = USER_AGENT
-            probe_product(session, code)
+        # Only the probe touches the network, so only the probe's failures are
+        # reported as a failed probe. ConfigError subclasses RuntimeError and
+        # is re-raised to the outer handler, which prints its own message.
+        try:
+            with requests.Session() as session:
+                session.headers["User-Agent"] = USER_AGENT
+                probe_product(session, code)
+        except ConfigError:
+            raise
+        except (requests.RequestException, RuntimeError, CandlePayloadError):
+            log.error("%s: the Coinbase probe failed", code, exc_info=True)
+            log.error(
+                "%s was not registered and nothing was written; check the product code "
+                "and rerun",
+                code,
+            )
+            return 2
 
         with closing(connect()) as conn:
             with conn.cursor() as cur:
@@ -107,9 +121,6 @@ def main() -> int:
         log.info("%s registered as asset_id %d (symbol %s)", code, asset_id, symbol)
     except ConfigError as exc:
         log.error("%s", exc)
-        return 2
-    except (requests.RequestException, RuntimeError, CandlePayloadError) as exc:
-        log.error("%s: Coinbase did not answer for this product: %s", args.product_code, exc)
         return 2
 
     if args.no_backfill:
