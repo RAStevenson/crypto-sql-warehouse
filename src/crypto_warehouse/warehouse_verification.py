@@ -14,7 +14,7 @@ from contextlib import closing
 
 import psycopg2
 
-from . import config, sqlfiles
+from . import database_connection, sql_file_runner
 
 log = logging.getLogger(__name__)
 
@@ -25,10 +25,10 @@ def run_verify() -> int:
     # autocommit: the checks write nothing that persists, and it keeps a
     # failed check from leaving the session in an aborted transaction on the
     # way out.
-    with closing(config.connect(autocommit=True)) as conn:
-        conn.notices = sqlfiles.NoticeLogger()
+    with closing(database_connection.connect(autocommit=True)) as conn:
+        conn.notices = sql_file_runner.NoticeLogger()
         try:
-            sqlfiles.run_sql_file(conn, sqlfiles.VERIFY_FILE)
+            sql_file_runner.run_sql_file(conn, sql_file_runner.VERIFY_FILE)
         except psycopg2.Error as exc:
             # message_primary is the RAISE EXCEPTION text; str(exc) carries the
             # CONTEXT lines too, which say which DO block raised.
@@ -37,5 +37,8 @@ def run_verify() -> int:
             log.error("full server report:\n%s", str(exc).strip())
             return 1
 
-    log.info("verification passed: every check in sql/%s raised no exception", sqlfiles.VERIFY_FILE)
+    log.info(
+        "verification passed: every check in sql/%s raised no exception",
+        sql_file_runner.VERIFY_FILE,
+    )
     return 0

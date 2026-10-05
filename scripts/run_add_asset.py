@@ -8,8 +8,8 @@ The product code is validated against Coinbase before anything is written; it
 has to answer with at least one candle in the trailing probe window. The
 default run then backfills the standard year of history and refreshes the
 marts, so the new asset appears in marts.tableau_daily_extract in the same
-run. The committed report's numbers do not move until run_analysis.py is
-rerun.
+run. The committed report's numbers do not move until
+run_diversification_analysis.py is rerun.
 
 Deactivating an asset is one statement and needs no script:
 
@@ -27,10 +27,10 @@ from contextlib import closing
 
 import requests
 
-from crypto_warehouse.api import CandlePayloadError
-from crypto_warehouse.assets import insert_asset, parse_product_code, probe_product
-from crypto_warehouse.config import ConfigError, configure_logging, connect
-from crypto_warehouse.ingest import DEFAULT_BACKFILL_DAYS, USER_AGENT, run_ingest
+from crypto_warehouse.asset_registration import insert_asset, parse_product_code, probe_product
+from crypto_warehouse.candle_ingest import DEFAULT_BACKFILL_DAYS, USER_AGENT, run_ingest
+from crypto_warehouse.coinbase_candles import CandlePayloadError
+from crypto_warehouse.database_connection import ConfigError, configure_logging, connect
 
 log = logging.getLogger("run_add_asset")
 

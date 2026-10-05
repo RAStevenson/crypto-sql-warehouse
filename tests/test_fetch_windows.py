@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
-from crypto_warehouse.windows import (
+from crypto_warehouse.fetch_windows import (
     HOUR,
     MAX_CANDLES_PER_REQUEST,
     floor_hour,

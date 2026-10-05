@@ -25,8 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import argparse
 import logging
 
-from crypto_warehouse.config import ConfigError, configure_logging
-from crypto_warehouse.setup_db import run_setup
+from crypto_warehouse.database_connection import ConfigError, configure_logging
+from crypto_warehouse.database_setup import run_setup
 
 log = logging.getLogger("run_setup")
 

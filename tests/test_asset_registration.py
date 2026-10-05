@@ -12,14 +12,14 @@ import pytest
 import requests
 from psycopg2 import errors as pg_errors
 
-from crypto_warehouse.assets import (
+from crypto_warehouse.asset_registration import (
     PROBE_HOURS,
     insert_asset,
     parse_product_code,
     probe_product,
 )
-from crypto_warehouse.config import ConfigError
-from crypto_warehouse.windows import floor_hour
+from crypto_warehouse.database_connection import ConfigError
+from crypto_warehouse.fetch_windows import floor_hour
 
 # One real candle row in wire order, enough for the probe to count.
 CANDLE_PAYLOAD = "[[1782871200, 58566.2, 59077.93, 58668.85, 58991.99, 350.09989392]]"

@@ -263,7 +263,7 @@ def diversification_bars(div: dict, path: Path) -> Path:
 def write_all(panel, close_path, metrics: dict, figures_dir: Path) -> list[Path]:
     """Render all four figures from a panel, its close path, and its metrics, and
     return the paths written."""
-    from .analysis import drawdown_paths
+    from .diversification_metrics import drawdown_paths
 
     corr = np.array(metrics["correlation"]["matrix"], dtype=float)
     vols = np.array([a["annualized_volatility"] for a in metrics["assets"]], dtype=float)

@@ -34,7 +34,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .config import REPO_ROOT, connect
+from .database_connection import REPO_ROOT, connect
 
 log = logging.getLogger(__name__)
 
@@ -251,7 +251,7 @@ def off_diagonal(matrix: np.ndarray) -> np.ndarray:
     return matrix[mask]
 
 
-# Defined here rather than in plots.py because the report's caption quotes the
+# Defined here rather than in report_figures.py because the report's caption quotes the
 # heatmap's color range. The bounds are computed once and stored in the
 # metrics, so the caption and the image cannot state different ranges.
 def scale_bounds(values: np.ndarray, step: float = 0.05) -> tuple[float, float]:
@@ -319,7 +319,7 @@ def diversification(covariance: np.ndarray) -> dict[str, float]:
     average_vol = float(asset_vols.mean())
     # Zero correlation is the reference because long spot positions in one
     # sector do not supply negative covariance. A portfolio with negative
-    # covariances falls below it, which test_analysis.py checks.
+    # covariances falls below it, which test_diversification_metrics.py checks.
     independent_vol = portfolio_volatility(np.diag(np.diag(covariance)), weights)
     risk_removed_actual = 1.0 - portfolio_vol / average_vol
     risk_removed_if_uncorrelated = 1.0 - independent_vol / average_vol
@@ -475,7 +475,7 @@ def fetch_provenance(conn, panel: Panel) -> dict:
 
 def run_analysis(metrics_path: Path = METRICS_PATH, figures_dir: Path = FIGURES_DIR) -> dict:
     """Query the warehouse, write metrics.json and the figures, return metrics."""
-    from . import plots
+    from . import report_figures
 
     with closing(connect()) as conn:
         panel = build_panel(fetch_returns(conn))
@@ -495,7 +495,7 @@ def run_analysis(metrics_path: Path = METRICS_PATH, figures_dir: Path = FIGURES_
     )
 
     figures_dir.mkdir(parents=True, exist_ok=True)
-    written = plots.write_all(panel, close_path, metrics, figures_dir)
+    written = report_figures.write_all(panel, close_path, metrics, figures_dir)
     for path in written:
         log.info("wrote %s", path)
 

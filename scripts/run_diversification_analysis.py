@@ -2,18 +2,18 @@
 render the report.
 
     python scripts/run_ingest.py
-    python scripts/run_analysis.py
+    python scripts/run_diversification_analysis.py
 
 Reads marts.daily_metrics, keeps the dates where every active asset has a
 non-null log return, and writes the panel description, per-asset volatility,
 drawdown and total return from the complete-day closes, the correlation
 matrix, the equal-weight diversification result, and row counts for
-provenance to reports/metrics.json, plus four figures under reports/figures/. It then runs
-scripts/run_build_report.py, which reads that file at render time; nothing is
-transcribed by hand between the two. --no-report skips the render, and so does
-a --metrics or --figures path other than the default. The builder also runs
-standalone for iterating on the report's prose without
-touching the database.
+provenance to reports/metrics.json, plus four figures under reports/figures/. It then calls
+the report builder in crypto_warehouse.report_generator, which reads that file
+at render time; nothing is transcribed by hand between the two. --no-report
+skips the render, and so does a --metrics or --figures path other than the
+default. scripts/run_build_report.py runs the builder alone, for iterating on
+the report's prose without touching the database.
 """
 
 import sys
@@ -23,21 +23,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import argparse
 import logging
-import subprocess
 
 import psycopg2
 
-from crypto_warehouse.analysis import FIGURES_DIR, METRICS_PATH, run_analysis
-from crypto_warehouse.config import ConfigError, configure_logging
+from crypto_warehouse.database_connection import ConfigError, configure_logging
+from crypto_warehouse.diversification_metrics import FIGURES_DIR, METRICS_PATH, run_analysis
+from crypto_warehouse.report_generator import build_report
 
-log = logging.getLogger("run_analysis")
+log = logging.getLogger("run_diversification_analysis")
 
 
 def main() -> int:
     """Run the analysis, log the main results, render the report when both
     output paths are the defaults, and return a process exit code."""
     parser = argparse.ArgumentParser(
-        prog="run_analysis.py",
+        prog="run_diversification_analysis.py",
         description=(
             "Compute the diversification metrics and figures from marts.daily_metrics, "
             "then render the report."
@@ -100,11 +100,20 @@ def main() -> int:
             args.figures,
         )
     else:
-        # Separate process on purpose: the report builder is its own entry
-        # script, and a report-build failure should not read as an analysis
-        # failure.
-        report_script = Path(__file__).resolve().parent / "run_build_report.py"
-        subprocess.run([sys.executable, str(report_script)], check=True)
+        # A report-build failure should not read as an analysis failure, so
+        # it is caught here and logged as its own error. SystemExit is caught
+        # too, because the builder exits with a message when a figure or table
+        # is not cited.
+        try:
+            build_report()
+        except (Exception, SystemExit) as exc:
+            log.error(
+                "the metrics and figures were written, but the report build failed "
+                "(%s: %s); fix the cause and rerun python scripts/run_build_report.py",
+                type(exc).__name__,
+                exc,
+            )
+            return 1
     return 0
 
 

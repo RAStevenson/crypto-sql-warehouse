@@ -10,8 +10,13 @@ from decimal import Decimal
 import pytest
 import requests
 
-from crypto_warehouse import api
-from crypto_warehouse.api import Candle, CandlePayloadError, fetch_window, parse_candles
+from crypto_warehouse import coinbase_candles
+from crypto_warehouse.coinbase_candles import (
+    Candle,
+    CandlePayloadError,
+    fetch_window,
+    parse_candles,
+)
 
 # One window of BTC-USD as the endpoint actually returned it, kept verbatim as
 # a JSON string so the test exercises the same decode path the client uses.
@@ -61,8 +66,8 @@ def no_sleep(monkeypatch):
     """Record backoff sleeps instead of taking them, and pin the jitter to 0
     so the sequence is exact."""
     slept: list[float] = []
-    monkeypatch.setattr(api.time, "sleep", slept.append)
-    monkeypatch.setattr(api.random, "uniform", lambda low, high: 0.0)
+    monkeypatch.setattr(coinbase_candles.time, "sleep", slept.append)
+    monkeypatch.setattr(coinbase_candles.random, "uniform", lambda low, high: 0.0)
     return slept
 
 
@@ -270,18 +275,18 @@ def test_fetch_window_caps_a_retry_after_larger_than_the_maximum(no_sleep):
 
     fetch_window(session, "BTC-USD", *window())
 
-    assert no_sleep == [api.MAX_RETRY_AFTER_SECONDS]
-    assert api.MAX_RETRY_AFTER_SECONDS < 86400
+    assert no_sleep == [coinbase_candles.MAX_RETRY_AFTER_SECONDS]
+    assert coinbase_candles.MAX_RETRY_AFTER_SECONDS < 86400
 
 
 def test_fetch_window_gives_up(no_sleep):
-    session = FakeSession([FakeResponse(429) for _ in range(api.MAX_ATTEMPTS)])
+    session = FakeSession([FakeResponse(429) for _ in range(coinbase_candles.MAX_ATTEMPTS)])
 
     with pytest.raises(RuntimeError) as caught:
         fetch_window(session, "BTC-USD", *window())
 
     assert "BTC-USD" in str(caught.value)
-    assert len(session.calls) == api.MAX_ATTEMPTS
+    assert len(session.calls) == coinbase_candles.MAX_ATTEMPTS
     # One sleep fewer than attempts: backing off after the last attempt only
     # makes the failure slower.
     assert no_sleep == [1.0, 2.0, 4.0, 8.0]
@@ -339,12 +344,12 @@ def test_fetch_window_retries_transport_failures(no_sleep, error):
 
 
 def test_fetch_window_gives_up_on_repeated_timeouts(no_sleep):
-    session = FakeSession([requests.Timeout("read timed out")] * api.MAX_ATTEMPTS)
+    session = FakeSession([requests.Timeout("read timed out")] * coinbase_candles.MAX_ATTEMPTS)
 
     with pytest.raises(RuntimeError):
         fetch_window(session, "BTC-USD", *window())
 
-    assert len(session.calls) == api.MAX_ATTEMPTS
+    assert len(session.calls) == coinbase_candles.MAX_ATTEMPTS
     assert no_sleep == [1.0, 2.0, 4.0, 8.0]
 
 
