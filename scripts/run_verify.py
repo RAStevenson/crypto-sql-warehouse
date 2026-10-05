@@ -3,8 +3,9 @@
     python scripts/run_verify.py
 
 Each check is a DO block that raises on failure, so this exits nonzero when
-one fails and prints the message that names it. The checks hold after any
-successful load that refreshed the marts, including an ordinary daily one.
+one fails and prints the message that names it. The checks hold after an
+ordinary daily load. They fail when a product's load failed, when a candle
+was left out of core, or when the marts were not refreshed.
 """
 
 import sys

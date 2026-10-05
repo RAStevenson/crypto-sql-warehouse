@@ -112,6 +112,10 @@ Every argument of every script, mirroring `--help`:
 
 - `run_setup.py --reset` drops the raw, core, and marts schemas before
   applying the DDL. It deletes all stored data.
+- `run_setup.py --rebuild-marts` drops and re-creates only the marts schema
+  from `sql/02_marts.sql`. Use it to apply a changed mart definition to a
+  warehouse that already holds data. Raw and core keep their data. It cannot
+  be combined with `--reset`.
 - `run_ingest.py --backfill-days N` sets how far back to reach, in days
   (default 365). For a product with no rows yet it is the depth of the first
   load. Passing it explicitly also makes it a floor on an existing product's
@@ -229,10 +233,18 @@ duplicate rows per product per run in append-only `raw.candles`, three from
 the overlap and one from re-fetching the watermark hour itself. Three hours is a guess at
 Coinbase's revision window, not a measured bound.
 
+A candle that would break one of core's constraints, such as a low of zero, is
+left in raw and logged, and the rest of the run loads. If it were not left
+out of core, that one candle would abort its product's upsert on that run and on
+every later one, because the watermark could never move past it. The cost is
+an hour missing from core for that product, and `run_verify.py` fails on that
+hour until a valid copy of the candle is loaded.
+
 Prices are stored as `numeric(20,8)` and volumes as `numeric(30,8)`. The API
 returns JSON numbers,
-which Python would ordinarily parse as float64, so the client parses them
-straight to `Decimal` instead and psycopg2 adapts that to `numeric`. Exactness
+which Python would ordinarily parse as float64, a type that cannot hold most
+decimal prices exactly. The client parses them straight to `Decimal` instead,
+and psycopg2 adapts that to `numeric`. Exactness
 holds end to end rather than starting at the database boundary.
 
 Queries are written to be independent of the session timezone, and the reason
@@ -308,8 +320,8 @@ psql -d crypto_warehouse -c "\copy (SELECT * FROM marts.tableau_daily_extract OR
 ## Limitations
 
 One exchange and one quote currency, so there is no cross-venue check on a
-suspicious print. The correlation mart is a fixed trailing 90 days off the
-latest `trade_date`, not a rolling series. `dollar_volume_approx` multiplies
+suspicious print. The correlation mart is a fixed 90 days ending on the
+latest day that has a return, not a rolling series. `dollar_volume_approx` multiplies
 daily volume by the daily close rather than a traded average price. Measured
 against volume times `(H+L+C)/3` over the data loaded as of 2026-08-04, the
 error is -0.04 percent on average and ranges from -4.16 to +3.14 percent. The

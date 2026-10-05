@@ -70,7 +70,29 @@ INSERT_RAW_SQL = """
     VALUES %s
 """
 
-UPSERT_SQL = """
+# The conditions core.ohlcv_hourly enforces with CHECK constraints, written
+# against r, the alias of raw.candles. One raw row that fails any of them
+# would abort the whole upsert, and because the watermark would then never
+# move, every later run for that product too. Such a row is left in raw and
+# logged instead, and verify fails on its bucket until a valid copy loads.
+# tests/test_ingest.py holds this text against the DDL so the two cannot drift.
+CORE_ROW_CHECKS = """
+        r.volume >= 0
+        AND r.high >= r.low
+        AND r.high >= r.open AND r.high >= r.close
+        AND r.low <= r.open AND r.low <= r.close
+        AND r.low > 0
+"""
+
+REJECTED_ROWS_SQL = f"""
+    SELECT r.bucket_start
+    FROM raw.candles r
+    WHERE r.run_id = %s
+      AND NOT ({CORE_ROW_CHECKS}      )
+    ORDER BY r.bucket_start
+"""
+
+UPSERT_SQL = f"""
     INSERT INTO core.ohlcv_hourly
         (asset_id, ts_utc, open, high, low, close, volume, source_run_id)
     SELECT DISTINCT ON (a.asset_id, r.bucket_start)
@@ -79,6 +101,7 @@ UPSERT_SQL = """
     FROM raw.candles r
     JOIN core.assets a ON a.product_code = r.product_code
     WHERE r.run_id = %s
+      AND ({CORE_ROW_CHECKS}      )
     ORDER BY a.asset_id, r.bucket_start, r.raw_id DESC
     ON CONFLICT (asset_id, ts_utc) DO UPDATE
     SET open = EXCLUDED.open,
@@ -281,9 +304,19 @@ def _promote_to_core(conn, run_id: int, rows_fetched: int) -> int:
     """Upsert this run's raw rows into core, mark the run succeeded, and return
     the number of rows inserted or updated.
 
-    Both statements commit in one transaction.
+    A raw row that core's constraints would reject is skipped with a warning.
     """
     with conn.cursor() as cur:
+        cur.execute(REJECTED_ROWS_SQL, (run_id,))
+        rejected = [row[0] for row in cur.fetchall()]
+        if rejected:
+            log.warning(
+                "run %d: %d raw candle(s) fail core's constraints and stay in raw only, "
+                "the first at %s; scripts/run_verify.py will fail on these buckets",
+                run_id,
+                len(rejected),
+                rejected[0].isoformat(),
+            )
         cur.execute(UPSERT_SQL, (run_id,))
         rows_upserted = cur.rowcount
         cur.execute(

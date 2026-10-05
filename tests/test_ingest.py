@@ -3,8 +3,10 @@ the load path against a fake connection. No database and no network."""
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -179,6 +181,9 @@ class FakeCursor:
     def fetchone(self):
         return self.conn.rows.pop(0)
 
+    def fetchall(self):
+        return self.conn.batches.pop(0) if self.conn.batches else []
+
 
 class FakeConnection:
     """Enough of a psycopg2 connection for the loader: it counts commits and
@@ -187,6 +192,7 @@ class FakeConnection:
 
     def __init__(self, rows=()):
         self.rows = list(rows)
+        self.batches: list[list[tuple]] = []
         self.executed: list[tuple[str, object]] = []
         self.log: list[str] = []
         self.commits = 0
@@ -381,3 +387,81 @@ def test_run_ingest_keeps_going_after_a_failed_product_and_rolls_back_before_the
     assert exit_code == 1
     assert attempts == [("AAA-USD", 0), ("BBB-USD", 1)]
     assert conn.closed
+
+
+# --------------------------------------------------------------------------
+# promotion to core, and the rows it leaves in raw
+# --------------------------------------------------------------------------
+REPO = Path(__file__).resolve().parents[1]
+
+
+def conditions(sql_text: str) -> set[str]:
+    """The individual comparisons in a block of AND-ed conditions, with the
+    raw alias and repeated spaces removed so two spellings compare equal."""
+    flat = " ".join(sql_text.replace("r.", "").split())
+    return {part.strip() for part in re.split(r"\bAND\b", flat) if part.strip()}
+
+
+def core_check_constraints() -> set[str]:
+    """Every CHECK comparison the DDL declares on core.ohlcv_hourly."""
+    ddl = (REPO / "sql" / "01_schema.sql").read_text(encoding="utf-8")
+    table = ddl[ddl.index("CREATE TABLE core.ohlcv_hourly") :]
+    table = table[: table.index(");")]
+    found: set[str] = set()
+    for body in re.findall(r"CHECK \(([^()]*)\)", table):
+        found |= conditions(body)
+    return found
+
+
+def test_core_row_checks_repeat_every_check_constraint_on_the_core_table():
+    assert core_check_constraints() == {
+        "volume >= 0",
+        "high >= low",
+        "high >= open",
+        "high >= close",
+        "low <= open",
+        "low <= close",
+        "low > 0",
+    }
+    assert conditions(ingest.CORE_ROW_CHECKS) == core_check_constraints()
+
+
+def test_the_upsert_shown_in_the_query_file_carries_the_same_row_checks():
+    queries = (REPO / "sql" / "04_queries.sql").read_text(encoding="utf-8")
+    q20 = queries[queries.index("-- Q20 ") :]
+    statement = "\n".join(line for line in q20.splitlines() if not line.startswith("--"))
+    where = statement[statement.index("status = 'succeeded')") : statement.index("ORDER BY")]
+    shown = conditions(where.split("AND", 1)[1])
+    assert shown == conditions(ingest.CORE_ROW_CHECKS)
+
+
+def test_both_promotion_statements_filter_on_the_row_checks():
+    checks = " ".join(ingest.CORE_ROW_CHECKS.split())
+    assert f"AND ( {checks} )" in " ".join(ingest.UPSERT_SQL.split())
+    assert f"AND NOT ( {checks} )" in " ".join(ingest.REJECTED_ROWS_SQL.split())
+
+
+def test_promote_to_core_warns_about_rows_core_would_reject_and_still_promotes(caplog):
+    conn = FakeConnection()
+    conn.batches = [[(WINDOW_START,), (WINDOW_START + HOUR,)]]
+
+    with caplog.at_level("WARNING"):
+        ingest._promote_to_core(conn, run_id=7, rows_fetched=5)
+
+    statements = [statement for statement, _ in conn.executed]
+    assert statements[0].startswith("SELECT r.bucket_start FROM raw.candles r")
+    assert statements[1].startswith("INSERT INTO core.ohlcv_hourly")
+    assert "status = 'succeeded'" in statements[2]
+    assert conn.commits == 1
+    assert "2 raw candle(s) fail core's constraints" in caplog.text
+    assert WINDOW_START.isoformat() in caplog.text
+
+
+def test_promote_to_core_is_silent_when_every_row_passes(caplog):
+    conn = FakeConnection()
+
+    with caplog.at_level("WARNING"):
+        ingest._promote_to_core(conn, run_id=7, rows_fetched=5)
+
+    assert caplog.text == ""
+    assert conn.commits == 1

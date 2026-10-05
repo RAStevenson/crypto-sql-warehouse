@@ -1,5 +1,6 @@
--- Smoke test: structural invariants the warehouse must satisfy after any
--- successful load that refreshed the marts.
+-- Smoke test: structural invariants the warehouse must satisfy after a load
+-- in which every product succeeded, no candle was left out of core, and the
+-- marts were refreshed.
 --
 -- Usage:
 --   psql -d crypto_warehouse -v ON_ERROR_STOP=1 -f sql/05_verify.sql
@@ -9,27 +10,27 @@
 -- checks print a NOTICE with the numbers they saw.
 --
 -- The design rule these checks follow is that an assertion is only worth
--- having if it fails on the bad state it claims to detect. Checks 1 to 3
--- were rewritten after constructing each failure case inside a transaction
--- and watching the previous version pass, and every assertion added since
--- was run against its own constructed failure the same way.
+-- having if it fails on the bad state it claims to detect. Where a check
+-- has a simpler form, the comment below names it and what that form gets
+-- wrong.
 
 -- Check 1: no asset-specific gaps in the hourly series.
 -- Hours missing for EVERY asset that has history at that hour are exchange
--- outages and allowed; an hour missing for only some of them would mean the
--- pipeline dropped data, which is a bug.
+-- outages and allowed; an hour missing for only some of them means the
+-- pipeline dropped data, the loader left a candle in raw because core's
+-- constraints reject it, or the product had no trades that hour (see below).
 --
 -- The denominator is computed PER HOUR from the same LATERAL expansion that
 -- produces the numerator, rather than from a separate count of active
--- assets. The old version counted core.assets WHERE is_active and compared
--- that to a missing-count derived from core.ohlcv_hourly, so the two sides
--- described different populations:
---   - adding a new active asset with no candles yet raised the denominator
---     to 7 while no hour could ever reach 7 missing, turning 5 genuine
---     outage hours into a reported pipeline bug;
---   - marking an asset inactive while it kept its history lowered the
---     denominator to 5 while real outages showed 6 missing, so those hours
---     matched neither FILTER and vanished from both counters.
+-- assets. Counting core.assets WHERE is_active and comparing that to a
+-- missing-count derived from core.ohlcv_hourly puts two different
+-- populations on the two sides:
+--   - a new active asset with no candles yet raises the denominator to 7
+--     while no hour can ever reach 7 missing, which turns 5 genuine outage
+--     hours into a reported pipeline bug;
+--   - an asset marked inactive that keeps its history lowers the
+--     denominator to 5 while real outages show 6 missing, so those hours
+--     match neither FILTER and vanish from both counters.
 -- Counting expected and missing in the same GROUP BY makes both impossible,
 -- and the >= in the outage filter means nothing can fall between the two.
 --
@@ -71,7 +72,7 @@ BEGIN
     FROM by_hour;
 
     IF partial_gap_hours > 0 THEN
-        RAISE EXCEPTION 'gap check failed: % hour(s) missing for only some assets (pipeline bug, not outage)',
+        RAISE EXCEPTION 'gap check failed: % hour(s) missing for only some assets (dropped by the pipeline, rejected by core constraints, or not traded; not an outage)',
             partial_gap_hours;
     END IF;
 
@@ -103,10 +104,10 @@ END $$;
 -- Check 2: the daily rollup covers exactly the (asset, day) pairs present in
 -- the hourly facts. No dropped days, no invented ones.
 --
--- This compares SETS, not cardinalities. The old version compared
--- count(marts.daily_ohlcv) against count(DISTINCT (asset, day)) in core, so
--- deleting one real day and inventing one fake day left both integers equal
--- and the check passed on a mart that was wrong in two places at once. The
+-- This compares SETS, not cardinalities. Comparing count(marts.daily_ohlcv)
+-- against count(DISTINCT (asset, day)) in core leaves both integers equal
+-- when one real day is deleted and one fake day invented, so that form
+-- passes on a mart that is wrong in two places at once. The
 -- EXCEPT runs in both directions and reports which side is at fault.
 DO $$
 DECLARE
@@ -142,12 +143,11 @@ END $$;
 
 -- Check 3: core matches raw, in value and in membership.
 --
--- Three assertions, because the value comparison alone was an INNER JOIN and
--- an inner join can only see rows that exist on both sides. A core row with
--- no raw backing (hand-edited, or promoted from a run whose raw rows were
--- later removed) and a raw bucket that was never promoted were both
--- invisible to it. The value check is kept as-is and the two membership
--- checks are added around it.
+-- Three assertions, because the value comparison is an INNER JOIN and an
+-- inner join can only see rows that exist on both sides. A core row with no
+-- raw backing (hand-edited, or promoted from a run whose raw rows were later
+-- removed) and a raw bucket that was never promoted are both invisible to
+-- it, so a membership check runs in each direction beside it.
 DO $$
 DECLARE
     mismatched bigint;
@@ -211,13 +211,13 @@ END $$;
 -- earlier succeeded run had already promoted. Raw keeps every copy, so the
 -- comparison needs no second run and holds after an ordinary daily load.
 --
--- This replaces a count-based version (the latest run upserted at most one
--- row) that was valid only straight after two back-to-back runs. On any
--- other day it failed on a healthy warehouse, and because a failed check
--- aborts the script, the checks after it never ran.
+-- A count-based form (the latest run upserted at most one row) is valid only
+-- straight after two back-to-back runs. On any other day it fails on a
+-- healthy warehouse, and because a failed check aborts the script, the
+-- checks after it never run.
 --
--- rows_upserted IS NULL stays an explicit failure. A succeeded run that
--- never recorded how many rows it moved is a broken run record.
+-- rows_upserted IS NULL is an explicit failure. A succeeded run that never
+-- recorded how many rows it moved is a broken run record.
 DO $$
 DECLARE
     rewritten bigint;
