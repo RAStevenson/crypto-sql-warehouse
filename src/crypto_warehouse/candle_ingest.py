@@ -393,7 +393,11 @@ def _rollback_quietly(conn) -> None:
     try:
         conn.rollback()
     except Exception:
-        log.warning("rollback after a failure also failed", exc_info=True)
+        log.warning(
+            "rollback after a failure also failed; the connection is likely gone, so "
+            "the products after this one will fail too",
+            exc_info=True,
+        )
 
 
 def refresh_marts(conn) -> None:

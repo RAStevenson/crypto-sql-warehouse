@@ -123,6 +123,11 @@ class Panel:
         return len(self.symbols)
 
 
+class PanelDataError(ValueError):
+    """Raised when the loaded data cannot support the analysis, with a message
+    saying what is missing."""
+
+
 @dataclass(frozen=True)
 class ClosePath:
     """Holds the daily closes on every day of the panel's window that is complete
@@ -147,15 +152,17 @@ def build_panel(rows: list[tuple[dt.date, str, float]]) -> Panel:
         by_date[trade_date][symbol] = float(value)
     symbols = sorted({symbol for _, symbol, _ in rows})
     if not symbols:
-        raise ValueError("no non-null log returns found; load the warehouse first")
+        raise PanelDataError("no non-null log returns found; load the warehouse first")
     if len(symbols) < 2:
-        raise ValueError(
+        raise PanelDataError(
             f"only {symbols[0]} has returns; a diversification analysis needs at "
             "least two active assets"
         )
     dates = sorted(d for d, obs in by_date.items() if len(obs) == len(symbols))
     if not dates:
-        raise ValueError(f"no date carries all {len(symbols)} symbols; the panel would be empty")
+        raise PanelDataError(
+            f"no date carries all {len(symbols)} symbols; the panel would be empty"
+        )
 
     # The panel is the intersection of every asset's dates, so one asset with
     # a shorter history shortens it for all. Warn when that happens.
@@ -196,7 +203,7 @@ def build_close_path(rows: list[tuple[dt.date, str, float]], panel: Panel) -> Cl
     )
     before = [d for d in shared if d < panel.dates[0]]
     if not before:
-        raise ValueError("no complete close precedes the panel's first return")
+        raise PanelDataError("no complete close precedes the panel's first return")
     dates = [before[-1], *(d for d in shared if d >= panel.dates[0])]
     closes = np.array([[by_date[d][s] for s in panel.symbols] for d in dates], dtype=float)
     return ClosePath(dates=dates, closes=closes)
@@ -349,14 +356,19 @@ def panel_metrics(panel: Panel, close_path: ClosePath) -> dict:
     """Compute the panel, close-path, per-asset, correlation, and diversification
     figures the report reads and return them as a dict.
 
-    Raises ValueError when an asset's returns do not vary over the panel,
-    because its correlations are undefined.
+    Raises PanelDataError when the panel is too short for a correlation
+    interval, or when an asset's returns do not vary over it.
     """
+    if panel.n_days <= 3:
+        raise PanelDataError(
+            f"the panel has {panel.n_days} day(s) where every asset has a return; "
+            "the analysis needs at least 4, so load more history first"
+        )
     returns = panel.returns
     vols = annualized_volatility(returns)
     constant = [s for s, v in zip(panel.symbols, vols, strict=True) if v == 0.0]
     if constant:
-        raise ValueError(
+        raise PanelDataError(
             f"{', '.join(constant)} did not move over the panel; a correlation with "
             "a constant price is undefined"
         )

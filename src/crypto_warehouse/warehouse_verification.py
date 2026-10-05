@@ -13,6 +13,7 @@ import logging
 from contextlib import closing
 
 import psycopg2
+import psycopg2.errors
 
 from . import database_connection, sql_file_runner
 
@@ -20,8 +21,11 @@ log = logging.getLogger(__name__)
 
 
 def run_verify() -> int:
-    """Run sql/05_verify.sql and return 0 if it completed or 1 if a check or any
-    other statement raised a database error."""
+    """Run sql/05_verify.sql and return 0 if every check passed or 1 if one
+    failed.
+
+    Any database error other than a failed check is raised.
+    """
     # autocommit: the checks write nothing that persists, and it keeps a
     # failed check from leaving the session in an aborted transaction on the
     # way out.
@@ -29,12 +33,17 @@ def run_verify() -> int:
         conn.notices = sql_file_runner.NoticeLogger()
         try:
             sql_file_runner.run_sql_file(conn, sql_file_runner.VERIFY_FILE)
-        except psycopg2.Error as exc:
-            # message_primary is the RAISE EXCEPTION text; str(exc) carries the
-            # CONTEXT lines too, which say which DO block raised.
+        except psycopg2.errors.RaiseException as exc:
+            # A failed check is a RAISE EXCEPTION in a DO block. str(exc)
+            # carries the server's CONTEXT lines, which name the block, so
+            # it is printed in full before the one-line summary.
             primary = getattr(exc.diag, "message_primary", None) or str(exc)
-            log.error("verification FAILED: %s", primary)
             log.error("full server report:\n%s", str(exc).strip())
+            log.error(
+                "verification FAILED: %s; the checks after it in sql/%s did not run",
+                primary,
+                sql_file_runner.VERIFY_FILE,
+            )
             return 1
 
     log.info(

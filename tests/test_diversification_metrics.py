@@ -544,3 +544,18 @@ def test_scale_bounds_rounds_outward_to_the_step(values, expected):
     low, high = diversification_metrics.scale_bounds(np.array(values))
     assert low == pytest.approx(expected[0])
     assert high == pytest.approx(expected[1])
+
+
+def test_build_panel_raises_a_panel_data_error_that_is_still_a_value_error():
+    with pytest.raises(diversification_metrics.PanelDataError) as raised:
+        diversification_metrics.build_panel([])
+    assert isinstance(raised.value, ValueError)
+
+
+def test_panel_metrics_refuses_a_panel_too_short_for_a_correlation_interval():
+    d = dates(3)
+    symbols = ["AAA", "BBB"]
+    returns = np.array([[0.01, 0.02], [0.03, -0.01], [-0.02, 0.04]])
+    panel, path = panel_and_path(d, symbols, returns)
+    with pytest.raises(diversification_metrics.PanelDataError, match="needs at least 4"):
+        diversification_metrics.panel_metrics(panel, path)
