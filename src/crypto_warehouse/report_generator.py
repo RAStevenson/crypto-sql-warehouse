@@ -929,7 +929,7 @@ PostgreSQL {prov["server_version"]}.</p>
 
 <footer>
 <p>Generated from <code>reports/metrics.json</code> by
-<code>scripts/run_build_report.py</code>. Panel {panel["first_date"]} to
+<code>src/crypto_warehouse/report_generator.py</code>. Panel {panel["first_date"]} to
 {panel["last_date"]}, {n_days} complete days, {n_assets} assets,
 {n_days * n_assets:,} asset-days.</p>
 </footer>

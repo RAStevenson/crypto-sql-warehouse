@@ -8,7 +8,8 @@ Flow per product:
   1. Watermark: MAX(ts_utc) in core.ohlcv_hourly, minus a re-fetch overlap.
   2. Fetch [watermark, current hour) in 300-hour windows into raw.candles,
      committing each window.
-  3. One INSERT ... ON CONFLICT statement promotes the run's raw rows to core.
+  3. One INSERT ... ON CONFLICT statement promotes the run's raw rows to core,
+     leaving out any row core's constraints would reject.
   4. The run row in raw.ingest_runs records what happened.
 
 Idempotency comes from two properties: core's primary key (asset_id, ts_utc) is

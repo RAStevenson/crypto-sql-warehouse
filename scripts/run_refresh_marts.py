@@ -1,10 +1,12 @@
-"""Rebuild the materialized views in sql/03_refresh_marts.sql.
+"""Refresh the materialized views named in sql/03_refresh_marts.sql.
 
     python scripts/run_refresh_marts.py
 
 The same mart refresh statements that run_ingest.py issues after a load, for
-when the marts need rebuilding without a load. They refresh CONCURRENTLY, so
-readers are never blocked, and the three refreshes commit together.
+when the marts need refreshing without a load. They refresh CONCURRENTLY, so
+readers are never blocked, and the three refreshes commit together. A refresh
+does not apply a changed mart definition; scripts/run_setup.py --rebuild-marts
+does.
 """
 
 import sys
