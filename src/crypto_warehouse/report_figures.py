@@ -20,42 +20,42 @@ import numpy as np
 from matplotlib.figure import Figure
 
 # Okabe-Ito, in a fixed order so an asset keeps its color across regenerations.
-SERIES = ["#0072b2", "#d55e00", "#009e73", "#e69f00", "#cc79a7", "#56b4e9"]
-INK = "#0b0b0b"
-SECONDARY = "#52514e"
-MUTED = "#898781"
-GRID = "#e1e0d9"
-AXIS = "#c3c2b7"
-SURFACE = "#fcfcfb"
-BLANK = "#e8e7e1"
+OKABE_ITO_PALETTE = ["#0072b2", "#d55e00", "#009e73", "#e69f00", "#cc79a7", "#56b4e9"]
+TEXT_COLOR = "#0b0b0b"
+LABEL_COLOR = "#52514e"
+MUTED_COLOR = "#898781"
+GRID_COLOR = "#e1e0d9"
+AXIS_COLOR = "#c3c2b7"
+BACKGROUND_COLOR = "#fcfcfb"
+MASKED_CELL_COLOR = "#e8e7e1"
 
-CORRELATION_HEATMAP = "correlation_heatmap.png"
-ASSET_VOLATILITY = "asset_volatility.png"
-DRAWDOWN_CURVES = "drawdown_curves.png"
-DIVERSIFICATION = "diversification.png"
+CORRELATION_HEATMAP_FILENAME = "correlation_heatmap.png"
+ASSET_VOLATILITY_FILENAME = "asset_volatility.png"
+DRAWDOWN_CURVES_FILENAME = "drawdown_curves.png"
+DIVERSIFICATION_FILENAME = "diversification.png"
 
 
 def apply_style() -> None:
     """Set the matplotlib defaults that every figure shares."""
     plt.rcParams.update(
         {
-            "figure.facecolor": SURFACE,
-            "axes.facecolor": SURFACE,
-            "savefig.facecolor": SURFACE,
-            "axes.edgecolor": AXIS,
+            "figure.facecolor": BACKGROUND_COLOR,
+            "axes.facecolor": BACKGROUND_COLOR,
+            "savefig.facecolor": BACKGROUND_COLOR,
+            "axes.edgecolor": AXIS_COLOR,
             "axes.linewidth": 1.0,
             "axes.spines.top": False,
             "axes.spines.right": False,
             "axes.grid": True,
-            "grid.color": GRID,
+            "grid.color": GRID_COLOR,
             "grid.linewidth": 0.8,
             "axes.axisbelow": True,
-            "text.color": INK,
-            "axes.labelcolor": SECONDARY,
-            "xtick.color": MUTED,
-            "ytick.color": MUTED,
-            "xtick.labelcolor": SECONDARY,
-            "ytick.labelcolor": SECONDARY,
+            "text.color": TEXT_COLOR,
+            "axes.labelcolor": LABEL_COLOR,
+            "xtick.color": MUTED_COLOR,
+            "ytick.color": MUTED_COLOR,
+            "xtick.labelcolor": LABEL_COLOR,
+            "ytick.labelcolor": LABEL_COLOR,
             "font.family": "sans-serif",
             "font.sans-serif": ["Segoe UI", "DejaVu Sans", "sans-serif"],
             "font.size": 10,
@@ -65,7 +65,7 @@ def apply_style() -> None:
     )
 
 
-def _save(fig: Figure, path: Path) -> Path:
+def _save_figure(fig: Figure, path: Path) -> Path:
     """Save the figure to path, creating its directory if needed, close the
     figure, and return the path."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -98,7 +98,7 @@ def correlation_heatmap(
     masked_correlations = np.ma.masked_array(correlations, mask=~off_diagonal_mask)
 
     colormap = matplotlib.colormaps["RdBu_r"].copy()
-    colormap.set_bad(BLANK)
+    colormap.set_bad(MASKED_CELL_COLOR)
 
     fig, ax = plt.subplots(figsize=(6.4, 5.4))
     heatmap_image = ax.imshow(
@@ -114,7 +114,7 @@ def correlation_heatmap(
     for i in range(n_symbols):
         for j in range(n_symbols):
             if i == j:
-                ax.text(j, i, "1.00", ha="center", va="center", fontsize=9, color=MUTED)
+                ax.text(j, i, "1.00", ha="center", va="center", fontsize=9, color=MUTED_COLOR)
                 continue
             rgba = colormap((correlations[i, j] - scale_low) / (scale_high - scale_low))
             luminance = 0.299 * rgba[0] + 0.587 * rgba[1] + 0.114 * rgba[2]
@@ -125,7 +125,7 @@ def correlation_heatmap(
                 ha="center",
                 va="center",
                 fontsize=9.5,
-                color="#ffffff" if luminance < 0.55 else INK,
+                color="#ffffff" if luminance < 0.55 else TEXT_COLOR,
             )
 
     colorbar = fig.colorbar(heatmap_image, ax=ax, fraction=0.046, pad=0.04)
@@ -133,7 +133,7 @@ def correlation_heatmap(
         f"daily log-return correlation ({scale_low:.2f} to {scale_high:.2f})"
     )
     colorbar.outline.set_visible(False)
-    return _save(fig, path)
+    return _save_figure(fig, path)
 
 
 def volatility_bars(
@@ -147,7 +147,7 @@ def volatility_bars(
     values = volatilities[order]
 
     fig, ax = plt.subplots(figsize=(7.0, 3.8))
-    bars = ax.barh(labels, values, color=SERIES[0], height=0.62, zorder=3)
+    bars = ax.barh(labels, values, color=OKABE_ITO_PALETTE[0], height=0.62, zorder=3)
     for bar, value in zip(bars, values, strict=True):
         ax.annotate(
             f"{value:.3f}",
@@ -156,13 +156,13 @@ def volatility_bars(
             textcoords="offset points",
             va="center",
             fontsize=9,
-            color=SECONDARY,
+            color=LABEL_COLOR,
             # An opaque patch above the average line, so the line passes
             # behind a label it would otherwise cut through.
-            bbox={"facecolor": SURFACE, "edgecolor": "none", "pad": 1.5},
+            bbox={"facecolor": BACKGROUND_COLOR, "edgecolor": "none", "pad": 1.5},
             zorder=5,
         )
-    ax.axvline(average, color=SERIES[1], linewidth=1.4, linestyle=(0, (4, 3)), zorder=4)
+    ax.axvline(average, color=OKABE_ITO_PALETTE[1], linewidth=1.4, linestyle=(0, (4, 3)), zorder=4)
     # Headroom above the top bar so the average label has clear background
     # instead of sitting on a filled bar in a second color.
     ax.set_ylim(-0.6, len(labels) - 0.05)
@@ -173,14 +173,14 @@ def volatility_bars(
         xytext=(5, -12),
         textcoords="offset points",
         fontsize=9,
-        color=SERIES[1],
+        color=OKABE_ITO_PALETTE[1],
         va="top",
     )
     ax.set_xlabel("annualized volatility (sample stdev of daily log returns x sqrt(365))")
     ax.grid(axis="x")
     ax.grid(axis="y", visible=False)
     ax.margins(x=0.14)
-    return _save(fig, path)
+    return _save_figure(fig, path)
 
 
 def drawdown_curves(
@@ -200,12 +200,12 @@ def drawdown_curves(
         ax.plot(
             plot_dates,
             drawdowns[:, i],
-            color=SERIES[i % len(SERIES)],
+            color=OKABE_ITO_PALETTE[i % len(OKABE_ITO_PALETTE)],
             linewidth=1.6,
             zorder=3,
             label=symbol,
         )
-    ax.axhline(0.0, color=MUTED, linewidth=1.0, zorder=2)
+    ax.axhline(0.0, color=MUTED_COLOR, linewidth=1.0, zorder=2)
     ax.set_ylabel("drawdown from running peak")
     ax.yaxis.set_major_formatter(lambda drawdown, _: f"{100 * drawdown:.0f}%")
     # The legend sits above the axes. The curves cross the whole plot area
@@ -215,7 +215,7 @@ def drawdown_curves(
     ax.grid(axis="y")
     ax.grid(axis="x", visible=False)
     fig.autofmt_xdate()
-    return _save(fig, path)
+    return _save_figure(fig, path)
 
 
 def diversification_bars(diversification: dict, path: Path) -> Path:
@@ -232,7 +232,7 @@ def diversification_bars(diversification: dict, path: Path) -> Path:
         diversification["equal_weight_portfolio_vol"],
         diversification["zero_correlation_vol"],
     ]
-    colors = [MUTED, SERIES[0], SERIES[2]]
+    colors = [MUTED_COLOR, OKABE_ITO_PALETTE[0], OKABE_ITO_PALETTE[2]]
 
     fig, ax = plt.subplots(figsize=(6.6, 4.4))
     bars = ax.bar(labels, values, color=colors, width=0.56, zorder=3)
@@ -244,7 +244,7 @@ def diversification_bars(diversification: dict, path: Path) -> Path:
             textcoords="offset points",
             ha="center",
             fontsize=10,
-            color=SECONDARY,
+            color=LABEL_COLOR,
         )
     ax.annotate(
         f"{100 * diversification['risk_removed_actual']:.1f}% removed",
@@ -253,7 +253,7 @@ def diversification_bars(diversification: dict, path: Path) -> Path:
         textcoords="offset points",
         ha="center",
         fontsize=9.5,
-        color=SERIES[0],
+        color=OKABE_ITO_PALETTE[0],
     )
     ax.annotate(
         f"{100 * diversification['risk_removed_if_uncorrelated']:.1f}% removable",
@@ -262,16 +262,16 @@ def diversification_bars(diversification: dict, path: Path) -> Path:
         textcoords="offset points",
         ha="center",
         fontsize=9.5,
-        color=SERIES[2],
+        color=OKABE_ITO_PALETTE[2],
     )
     ax.set_ylabel("annualized volatility")
     ax.set_ylim(0, max(values) * 1.28)
     ax.grid(axis="y")
     ax.grid(axis="x", visible=False)
-    return _save(fig, path)
+    return _save_figure(fig, path)
 
 
-def write_all(panel, close_path, metrics: dict, figures_dir: Path) -> list[Path]:
+def write_figures(panel, close_path, metrics: dict, figures_dir: Path) -> list[Path]:
     """Render all four figures from a panel, its close path, and its metrics, and
     return the paths written."""
     from .diversification_metrics import drawdown_paths
@@ -287,19 +287,19 @@ def write_all(panel, close_path, metrics: dict, figures_dir: Path) -> list[Path]
             correlations,
             metrics["correlation"]["heatmap_scale_low"],
             metrics["correlation"]["heatmap_scale_high"],
-            figures_dir / CORRELATION_HEATMAP,
+            figures_dir / CORRELATION_HEATMAP_FILENAME,
         ),
         volatility_bars(
             panel.symbols,
             volatilities,
             diversification["average_single_asset_vol"],
-            figures_dir / ASSET_VOLATILITY,
+            figures_dir / ASSET_VOLATILITY_FILENAME,
         ),
         drawdown_curves(
             close_path.dates,
             panel.symbols,
             drawdown_paths(np.diff(np.log(close_path.closes), axis=0)),
-            figures_dir / DRAWDOWN_CURVES,
+            figures_dir / DRAWDOWN_CURVES_FILENAME,
         ),
-        diversification_bars(diversification, figures_dir / DIVERSIFICATION),
+        diversification_bars(diversification, figures_dir / DIVERSIFICATION_FILENAME),
     ]

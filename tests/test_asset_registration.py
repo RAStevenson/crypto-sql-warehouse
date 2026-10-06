@@ -18,7 +18,7 @@ from crypto_warehouse.asset_registration import (
     parse_product_code,
     probe_product,
 )
-from crypto_warehouse.database_connection import ConfigError
+from crypto_warehouse.database_connection import OperatorError
 from crypto_warehouse.fetch_windows import floor_hour
 
 # One real candle row in wire order, enough for the probe to count.
@@ -70,7 +70,7 @@ def test_parse_strips_whitespace():
     ["XRPUSD", "XRP-USD-PERP", "-USD", "XRP-", "XRP/USD", "", "XR P-USD"],
 )
 def test_parse_rejects_malformed_codes(bad):
-    with pytest.raises(ConfigError):
+    with pytest.raises(OperatorError):
         parse_product_code(bad)
 
 
@@ -104,7 +104,7 @@ def test_probe_asks_for_exactly_the_trailing_probe_hours_ending_on_the_current_h
 
 def test_probe_rejects_a_200_with_no_candles():
     session = FakeSession(FakeResponse(text="[]"))
-    with pytest.raises(ConfigError, match=f"last {PROBE_HOURS} hours"):
+    with pytest.raises(OperatorError, match=f"last {PROBE_HOURS} hours"):
         probe_product(session, "XRP-USD")
 
 
@@ -149,7 +149,7 @@ def test_insert_passes_the_row_and_returns_the_id():
 
 def test_insert_translates_a_unique_collision_into_plain_instructions():
     cursor = FakeCursor(error=pg_errors.UniqueViolation("duplicate key"))
-    with pytest.raises(ConfigError, match="is_active = true"):
+    with pytest.raises(OperatorError, match="is_active = true"):
         insert_asset(
             cursor,
             symbol="BTC",

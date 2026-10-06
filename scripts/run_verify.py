@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import argparse
 import logging
 
-from crypto_warehouse.database_connection import ConfigError, configure_logging
+from crypto_warehouse.database_connection import OperatorError, configure_logging
 from crypto_warehouse.warehouse_verification import run_verify
 
 log = logging.getLogger("run_verify")
@@ -34,7 +34,7 @@ def main() -> int:
     configure_logging(args.verbose)
     try:
         return run_verify()
-    except (ConfigError, FileNotFoundError) as error:
+    except (OperatorError, FileNotFoundError) as error:
         log.error("%s", error)
         return 2
 

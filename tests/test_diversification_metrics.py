@@ -101,7 +101,7 @@ def test_equicorrelation_limit_matches_the_closed_form():
     # report quotes this to say what another name of the same kind would add,
     # so pin it to the algebra.
     volatility, correlation = 0.5, 0.64
-    diversification_result = diversification_metrics.diversification(
+    diversification_result = diversification_metrics.equal_weight_diversification(
         equicorrelated_covariance(6, volatility, correlation)
     )
     assert diversification_result["equicorrelation_limit_vol"] == pytest.approx(
@@ -114,7 +114,7 @@ def test_equicorrelation_limit_is_approached_from_above_as_n_grows():
     limit = volatility * np.sqrt(correlation)
     previous = None
     for n_assets in (2, 4, 8, 32, 256):
-        vol = diversification_metrics.diversification(
+        vol = diversification_metrics.equal_weight_diversification(
             equicorrelated_covariance(n_assets, volatility, correlation)
         )["equal_weight_portfolio_vol"]
         assert vol > limit
@@ -127,14 +127,14 @@ def test_equicorrelation_limit_is_approached_from_above_as_n_grows():
 def test_equicorrelation_limit_is_the_asset_itself_when_everything_moves_together():
     # A correlation of 1 means the basket never beats one name, so the limit is
     # the single-asset volatility.
-    diversification_result = diversification_metrics.diversification(
+    diversification_result = diversification_metrics.equal_weight_diversification(
         equicorrelated_covariance(5, 0.4, 1.0)
     )
     assert diversification_result["equicorrelation_limit_vol"] == pytest.approx(0.4)
 
 
 def test_equicorrelation_limit_is_zero_when_assets_are_independent():
-    diversification_result = diversification_metrics.diversification(
+    diversification_result = diversification_metrics.equal_weight_diversification(
         equicorrelated_covariance(5, 0.4, 0.0)
     )
     assert diversification_result["equicorrelation_limit_vol"] == pytest.approx(0.0)
@@ -148,7 +148,7 @@ def test_equal_weights_sum_to_one():
 
 
 # --------------------------------------------------------------------------
-# diversification
+# equal_weight_diversification
 # --------------------------------------------------------------------------
 
 
@@ -157,7 +157,7 @@ def test_perfectly_correlated_panel_captures_no_diversification():
     equal-weight portfolio volatility equals the weighted average of the single
     asset volatilities and nothing is removed."""
     covariance = diversification_metrics.annualized_covariance(collinear_panel())
-    diversification_result = diversification_metrics.diversification(covariance)
+    diversification_result = diversification_metrics.equal_weight_diversification(covariance)
     assert diversification_result["equal_weight_portfolio_vol"] == pytest.approx(
         diversification_result["average_single_asset_vol"]
     )
@@ -172,7 +172,7 @@ def test_uncorrelated_panel_captures_all_available_diversification():
     covariance = diversification_metrics.annualized_covariance(orthogonal_panel())
     off_diagonal_values = diversification_metrics.off_diagonal(covariance)
     assert np.allclose(off_diagonal_values, 0.0)
-    diversification_result = diversification_metrics.diversification(covariance)
+    diversification_result = diversification_metrics.equal_weight_diversification(covariance)
     assert diversification_result["equal_weight_portfolio_vol"] == pytest.approx(
         diversification_result["zero_correlation_vol"]
     )
@@ -182,7 +182,7 @@ def test_uncorrelated_panel_captures_all_available_diversification():
 def test_diversification_captured_sits_between_the_two_extremes():
     """A panel that is neither collinear nor orthogonal lands strictly inside."""
     returns = orthogonal_panel() + collinear_panel(scales=(0.01, 0.01, 0.01))
-    diversification_result = diversification_metrics.diversification(
+    diversification_result = diversification_metrics.equal_weight_diversification(
         diversification_metrics.annualized_covariance(returns)
     )
     assert 0.0 < diversification_result["diversification_captured"] < 1.0
@@ -193,11 +193,11 @@ def test_diversification_captured_sits_between_the_two_extremes():
     )
 
 
-def test_diversification_reports_equal_weights():
+def test_equal_weight_diversification_reports_equal_weights():
     covariance = diversification_metrics.annualized_covariance(orthogonal_panel())
-    assert diversification_metrics.diversification(covariance)["weight_per_asset"] == pytest.approx(
-        1 / 3
-    )
+    assert diversification_metrics.equal_weight_diversification(covariance)[
+        "weight_per_asset"
+    ] == pytest.approx(1 / 3)
 
 
 def test_zero_correlation_volatility_matches_the_closed_form():
@@ -206,14 +206,14 @@ def test_zero_correlation_volatility_matches_the_closed_form():
     covariance = np.diag([0.04, 0.09, 0.16])
     expected = np.sqrt(0.04 + 0.09 + 0.16) / 3
     assert (
-        diversification_metrics.diversification(covariance)["zero_correlation_vol"]
+        diversification_metrics.equal_weight_diversification(covariance)["zero_correlation_vol"]
         == pytest.approx(expected)
     )
 
 
 def test_identical_assets_leave_the_portfolio_where_it_started():
     covariance = np.full((4, 4), 0.09)
-    diversification_result = diversification_metrics.diversification(covariance)
+    diversification_result = diversification_metrics.equal_weight_diversification(covariance)
     assert diversification_result["equal_weight_portfolio_vol"] == pytest.approx(0.3)
     assert diversification_result["average_single_asset_vol"] == pytest.approx(0.3)
     assert diversification_result["risk_removed_actual"] == pytest.approx(0.0, abs=1e-12)
@@ -559,7 +559,7 @@ def test_panel_metrics_output_is_json_serializable():
 
 
 # --------------------------------------------------------------------------
-# fisher_interval and scale_bounds
+# fisher_interval and round_range_outward
 # --------------------------------------------------------------------------
 
 
@@ -594,8 +594,8 @@ def test_fisher_interval_needs_more_than_three_observations():
         ([0.31, 0.66], (0.30, 0.70)),
     ],
 )
-def test_scale_bounds_rounds_outward_to_the_step(values, expected):
-    low, high = diversification_metrics.scale_bounds(np.array(values))
+def test_round_range_outward_rounds_to_the_step(values, expected):
+    low, high = diversification_metrics.round_range_outward(np.array(values))
     assert low == pytest.approx(expected[0])
     assert high == pytest.approx(expected[1])
 

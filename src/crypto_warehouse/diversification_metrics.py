@@ -104,7 +104,7 @@ FROM marts.pairwise_correlations_90d
 
 
 @dataclass(frozen=True)
-class Panel:
+class ReturnPanel:
     """Holds daily log returns as a matrix with one row per date, one column
     per symbol, and no missing entries."""
 
@@ -140,8 +140,8 @@ class ClosePath:
     closes: np.ndarray
 
 
-def build_panel(rows: list[tuple[datetime.date, str, float]]) -> Panel:
-    """Build a Panel from (date, symbol, log_return) rows, keeping only the dates
+def build_panel(rows: list[tuple[datetime.date, str, float]]) -> ReturnPanel:
+    """Build a ReturnPanel from (date, symbol, log_return) rows, keeping only the dates
     on which every symbol in the input has a return.
 
     Raises ValueError when fewer than two symbols have returns or when no date
@@ -199,10 +199,10 @@ def build_panel(rows: list[tuple[datetime.date, str, float]]) -> Panel:
         [[by_date[trade_date][symbol] for symbol in symbols] for trade_date in dates],
         dtype=float,
     )
-    return Panel(dates=dates, symbols=symbols, returns=returns)
+    return ReturnPanel(dates=dates, symbols=symbols, returns=returns)
 
 
-def build_close_path(rows: list[tuple[datetime.date, str, float]], panel: Panel) -> ClosePath:
+def build_close_path(rows: list[tuple[datetime.date, str, float]], panel: ReturnPanel) -> ClosePath:
     """Build the panel's ClosePath from (date, symbol, close) rows, keeping every
     date on which all panel symbols have a close, from the last such date
     before the panel's first return through the panel's last date.
@@ -234,7 +234,7 @@ def build_close_path(rows: list[tuple[datetime.date, str, float]], panel: Panel)
 
 
 def classify_excluded_dates(
-    observed: list[tuple[datetime.date, int, int]], panel: Panel
+    observed: list[tuple[datetime.date, int, int]], panel: ReturnPanel
 ) -> dict[str, list[datetime.date]]:
     """Return the observed dates the panel leaves out, grouped under partial_bar,
     not_every_asset, or after_excluded_day.
@@ -285,7 +285,7 @@ def off_diagonal(matrix: np.ndarray) -> np.ndarray:
 # Defined here rather than in report_figures.py because the report's caption quotes the
 # heatmap's color range. The bounds are computed once and stored in the
 # metrics, so the caption and the image cannot state different ranges.
-def scale_bounds(values: np.ndarray, step: float = 0.05) -> tuple[float, float]:
+def round_range_outward(values: np.ndarray, step: float = 0.05) -> tuple[float, float]:
     """Return the (low, high) range of the values, rounded outward to multiples of step."""
     low = float(np.floor(values.min() / step) * step)
     high = float(np.ceil(values.max() / step) * step)
@@ -342,7 +342,7 @@ def equal_weights(n_assets: int) -> np.ndarray:
     return np.full(n_assets, 1.0 / n_assets)
 
 
-def diversification(covariance: np.ndarray) -> dict[str, float]:
+def equal_weight_diversification(covariance: np.ndarray) -> dict[str, float]:
     """Compare an equal-weight portfolio's volatility with two references and
     return the resulting figures as a dict.
 
@@ -382,7 +382,7 @@ def diversification(covariance: np.ndarray) -> dict[str, float]:
     }
 
 
-def panel_metrics(panel: Panel, close_path: ClosePath) -> dict:
+def panel_metrics(panel: ReturnPanel, close_path: ClosePath) -> dict:
     """Compute the panel, close-path, per-asset, correlation, and diversification
     figures the report reads and return them as a dict.
 
@@ -429,7 +429,7 @@ def panel_metrics(panel: Panel, close_path: ClosePath) -> dict:
     mean_interval_low, mean_interval_high = fisher_interval(
         float(off_diagonal_values.mean()), panel.n_days
     )
-    scale_low, scale_high = scale_bounds(off_diagonal_values)
+    scale_low, scale_high = round_range_outward(off_diagonal_values)
 
     return {
         "panel": {
@@ -467,7 +467,7 @@ def panel_metrics(panel: Panel, close_path: ClosePath) -> dict:
             "most_correlated_pair": pair_name(most_correlated_index),
             "n_pairs": len(pair_correlations),
         },
-        "diversification": diversification(annualized_covariance(returns)),
+        "diversification": equal_weight_diversification(annualized_covariance(returns)),
     }
 
 
@@ -485,7 +485,7 @@ def fetch_closes(connection) -> list[tuple[datetime.date, str, float]]:
         return [(row[0], row[1], float(row[2])) for row in cursor.fetchall()]
 
 
-def fetch_provenance(connection, panel: Panel) -> dict:
+def fetch_provenance(connection, panel: ReturnPanel) -> dict:
     """Row counts, the excluded dates with their reasons, and the mart's own correlations."""
     with connection.cursor() as cursor:
         cursor.execute(PROVENANCE_QUERY)
@@ -534,7 +534,9 @@ def fetch_provenance(connection, panel: Panel) -> dict:
     }
 
 
-def run_analysis(metrics_path: Path = METRICS_PATH, figures_dir: Path = FIGURES_DIR) -> dict:
+def run_diversification_analysis(
+    metrics_path: Path = METRICS_PATH, figures_dir: Path = FIGURES_DIR
+) -> dict:
     """Query the warehouse, write metrics.json and the figures, return metrics."""
     from . import report_figures
 
@@ -559,7 +561,7 @@ def run_analysis(metrics_path: Path = METRICS_PATH, figures_dir: Path = FIGURES_
     )
 
     figures_dir.mkdir(parents=True, exist_ok=True)
-    figure_paths = report_figures.write_all(panel, close_path, metrics, figures_dir)
+    figure_paths = report_figures.write_figures(panel, close_path, metrics, figures_dir)
     for path in figure_paths:
         log.info("wrote %s", path)
 

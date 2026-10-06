@@ -22,7 +22,7 @@ import argparse
 import logging
 
 from crypto_warehouse.candle_ingest import DEFAULT_BACKFILL_DAYS, run_ingest
-from crypto_warehouse.database_connection import ConfigError, configure_logging
+from crypto_warehouse.database_connection import OperatorError, configure_logging
 
 log = logging.getLogger("run_ingest")
 
@@ -87,10 +87,10 @@ def main() -> int:
         return run_ingest(
             products=args.products,
             backfill_days=backfill_days,
-            apply_floor=args.backfill_days is not None,
+            extend_to_backfill_days=args.backfill_days is not None,
             refresh=not args.no_refresh_marts,
         )
-    except (ConfigError, FileNotFoundError) as error:
+    except (OperatorError, FileNotFoundError) as error:
         log.error("%s", error)
         return 2
 

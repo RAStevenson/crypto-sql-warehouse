@@ -30,7 +30,7 @@ import requests
 from crypto_warehouse.asset_registration import insert_asset, parse_product_code, probe_product
 from crypto_warehouse.candle_ingest import DEFAULT_BACKFILL_DAYS, USER_AGENT, run_ingest
 from crypto_warehouse.coinbase_candles import CandlePayloadError
-from crypto_warehouse.database_connection import ConfigError, configure_logging, connect
+from crypto_warehouse.database_connection import OperatorError, configure_logging, connect
 
 log = logging.getLogger("run_add_asset")
 
@@ -91,13 +91,13 @@ def main() -> int:
         asset_name = args.name or symbol
 
         # Only the probe touches the network, so only the probe's failures are
-        # reported as a failed probe. ConfigError subclasses RuntimeError and
+        # reported as a failed probe. OperatorError subclasses RuntimeError and
         # is re-raised to the outer handler, which prints its own message.
         try:
             with requests.Session() as session:
                 session.headers["User-Agent"] = USER_AGENT
                 probe_product(session, product_code)
-        except ConfigError:
+        except OperatorError:
             raise
         except (requests.RequestException, RuntimeError, CandlePayloadError):
             log.error("%s: the Coinbase probe failed", product_code, exc_info=True)
@@ -119,7 +119,7 @@ def main() -> int:
                 )
             connection.commit()
         log.info("%s registered as asset_id %d (symbol %s)", product_code, asset_id, symbol)
-    except ConfigError as error:
+    except OperatorError as error:
         log.error("%s", error)
         return 2
 
@@ -130,7 +130,7 @@ def main() -> int:
     exit_code = run_ingest(
         products=[product_code],
         backfill_days=backfill_days,
-        apply_floor=False,
+        extend_to_backfill_days=False,
         refresh=True,
     )
     if exit_code != 0:

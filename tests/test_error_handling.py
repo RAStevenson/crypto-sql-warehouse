@@ -18,7 +18,7 @@ import psycopg2.errors
 import pytest
 
 from crypto_warehouse import diversification_metrics, warehouse_verification
-from crypto_warehouse.database_connection import ConfigError
+from crypto_warehouse.database_connection import OperatorError
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 
@@ -40,7 +40,7 @@ def error_records(caplog) -> list[logging.LogRecord]:
 # scripts/run_diversification_analysis.py
 # --------------------------------------------------------------------------
 @pytest.fixture()
-def analysis(monkeypatch):
+def analysis_script(monkeypatch):
     module = load_script("run_diversification_analysis")
     monkeypatch.setattr(sys, "argv", ["run_diversification_analysis.py"])
     return module
@@ -58,14 +58,16 @@ def fake_metrics() -> dict:
     }
 
 
-def test_analysis_reports_an_unreachable_database_with_its_traceback(analysis, monkeypatch, caplog):
+def test_analysis_reports_an_unreachable_database_with_its_traceback(
+    analysis_script, monkeypatch, caplog
+):
     def refuse(*args, **kwargs):
         raise psycopg2.OperationalError("connection refused")
 
-    monkeypatch.setattr(analysis, "run_analysis", refuse)
+    monkeypatch.setattr(analysis_script, "run_diversification_analysis", refuse)
 
     with caplog.at_level(logging.ERROR):
-        assert analysis.main() == 1
+        assert analysis_script.main() == 1
 
     errors = error_records(caplog)
     assert errors[0].exc_info is not None
@@ -74,28 +76,32 @@ def test_analysis_reports_an_unreachable_database_with_its_traceback(analysis, m
     assert "DATABASE_URL" in errors[-1].getMessage()
 
 
-def test_analysis_reports_missing_tables_and_says_to_run_setup(analysis, monkeypatch, caplog):
+def test_analysis_reports_missing_tables_and_says_to_run_setup(
+    analysis_script, monkeypatch, caplog
+):
     def missing(*args, **kwargs):
         raise psycopg2.errors.UndefinedTable('relation "marts.daily_metrics" does not exist')
 
-    monkeypatch.setattr(analysis, "run_analysis", missing)
+    monkeypatch.setattr(analysis_script, "run_diversification_analysis", missing)
 
     with caplog.at_level(logging.ERROR):
-        assert analysis.main() == 1
+        assert analysis_script.main() == 1
 
     errors = error_records(caplog)
     assert errors[0].exc_info is not None
     assert "run_setup.py" in errors[-1].getMessage()
 
 
-def test_analysis_reports_thin_data_and_says_nothing_was_written(analysis, monkeypatch, caplog):
+def test_analysis_reports_thin_data_and_says_nothing_was_written(
+    analysis_script, monkeypatch, caplog
+):
     def thin(*args, **kwargs):
         raise diversification_metrics.PanelDataError("no non-null log returns found")
 
-    monkeypatch.setattr(analysis, "run_analysis", thin)
+    monkeypatch.setattr(analysis_script, "run_diversification_analysis", thin)
 
     with caplog.at_level(logging.ERROR):
-        assert analysis.main() == 1
+        assert analysis_script.main() == 1
 
     messages = [record.getMessage() for record in error_records(caplog)]
     assert messages == ["no non-null log returns found", "nothing was written"]
@@ -110,27 +116,29 @@ def test_analysis_reports_thin_data_and_says_nothing_was_written(analysis, monke
     ],
     ids=["KeyError", "ValueError", "other database error"],
 )
-def test_analysis_lets_an_unexpected_error_through(analysis, monkeypatch, unexpected):
+def test_analysis_lets_an_unexpected_error_through(analysis_script, monkeypatch, unexpected):
     def fail(*args, **kwargs):
         raise unexpected
 
-    monkeypatch.setattr(analysis, "run_analysis", fail)
+    monkeypatch.setattr(analysis_script, "run_diversification_analysis", fail)
 
     with pytest.raises(type(unexpected)):
-        analysis.main()
+        analysis_script.main()
 
 
 def test_a_failed_report_build_prints_the_traceback_then_what_was_written(
-    analysis, monkeypatch, caplog
+    analysis_script, monkeypatch, caplog
 ):
     def broken_build():
         raise KeyError("provenance")
 
-    monkeypatch.setattr(analysis, "run_analysis", lambda *args: fake_metrics())
-    monkeypatch.setattr(analysis, "build_report", broken_build)
+    monkeypatch.setattr(
+        analysis_script, "run_diversification_analysis", lambda *args: fake_metrics()
+    )
+    monkeypatch.setattr(analysis_script, "build_report", broken_build)
 
     with caplog.at_level(logging.ERROR):
-        assert analysis.main() == 1
+        assert analysis_script.main() == 1
 
     errors = error_records(caplog)
     assert errors[0].exc_info is not None
@@ -141,16 +149,18 @@ def test_a_failed_report_build_prints_the_traceback_then_what_was_written(
 
 
 def test_a_report_build_that_exits_with_a_message_is_reported_the_same_way(
-    analysis, monkeypatch, caplog
+    analysis_script, monkeypatch, caplog
 ):
     def uncited():
         raise SystemExit("not cited from body prose: Table 3")
 
-    monkeypatch.setattr(analysis, "run_analysis", lambda *args: fake_metrics())
-    monkeypatch.setattr(analysis, "build_report", uncited)
+    monkeypatch.setattr(
+        analysis_script, "run_diversification_analysis", lambda *args: fake_metrics()
+    )
+    monkeypatch.setattr(analysis_script, "build_report", uncited)
 
     with caplog.at_level(logging.ERROR):
-        assert analysis.main() == 1
+        assert analysis_script.main() == 1
 
     assert "not cited from body prose: Table 3" in caplog.text
     assert "the metrics and figures were written" in error_records(caplog)[-1].getMessage()
@@ -160,14 +170,14 @@ def test_a_report_build_that_exits_with_a_message_is_reported_the_same_way(
 # scripts/run_add_asset.py
 # --------------------------------------------------------------------------
 @pytest.fixture()
-def add_asset(monkeypatch):
+def add_asset_script(monkeypatch):
     module = load_script("run_add_asset")
     monkeypatch.setattr(sys, "argv", ["run_add_asset.py", "XRP-USD", "--no-backfill"])
     return module
 
 
 def test_a_failed_probe_prints_the_traceback_then_says_nothing_was_written(
-    add_asset, monkeypatch, caplog
+    add_asset_script, monkeypatch, caplog
 ):
     def gave_up(session, product_code):
         raise RuntimeError("XRP-USD: gave up fetching after 5 attempts")
@@ -175,11 +185,11 @@ def test_a_failed_probe_prints_the_traceback_then_says_nothing_was_written(
     def must_not_connect():
         raise AssertionError("the database must not be reached after a failed probe")
 
-    monkeypatch.setattr(add_asset, "probe_product", gave_up)
-    monkeypatch.setattr(add_asset, "connect", must_not_connect)
+    monkeypatch.setattr(add_asset_script, "probe_product", gave_up)
+    monkeypatch.setattr(add_asset_script, "connect", must_not_connect)
 
     with caplog.at_level(logging.ERROR):
-        assert add_asset.main() == 2
+        assert add_asset_script.main() == 2
 
     errors = error_records(caplog)
     assert errors[0].exc_info is not None
@@ -187,30 +197,32 @@ def test_a_failed_probe_prints_the_traceback_then_says_nothing_was_written(
     assert "XRP-USD was not registered and nothing was written" in errors[-1].getMessage()
 
 
-def test_a_probe_that_finds_no_candles_prints_its_own_message(add_asset, monkeypatch, caplog):
+def test_a_probe_that_finds_no_candles_prints_its_own_message(
+    add_asset_script, monkeypatch, caplog
+):
     def empty(session, product_code):
-        raise ConfigError("XRP-USD: Coinbase answered but returned no candles")
+        raise OperatorError("XRP-USD: Coinbase answered but returned no candles")
 
-    monkeypatch.setattr(add_asset, "probe_product", empty)
+    monkeypatch.setattr(add_asset_script, "probe_product", empty)
 
     with caplog.at_level(logging.ERROR):
-        assert add_asset.main() == 2
+        assert add_asset_script.main() == 2
 
     messages = [record.getMessage() for record in error_records(caplog)]
     assert messages == ["XRP-USD: Coinbase answered but returned no candles"]
 
 
 def test_a_database_error_after_the_probe_is_not_reported_as_a_probe_failure(
-    add_asset, monkeypatch
+    add_asset_script, monkeypatch
 ):
     def refuse():
         raise psycopg2.OperationalError("connection refused")
 
-    monkeypatch.setattr(add_asset, "probe_product", lambda session, product_code: 3)
-    monkeypatch.setattr(add_asset, "connect", refuse)
+    monkeypatch.setattr(add_asset_script, "probe_product", lambda session, product_code: 3)
+    monkeypatch.setattr(add_asset_script, "connect", refuse)
 
     with pytest.raises(psycopg2.OperationalError):
-        add_asset.main()
+        add_asset_script.main()
 
 
 # --------------------------------------------------------------------------

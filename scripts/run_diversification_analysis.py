@@ -27,12 +27,12 @@ import logging
 import psycopg2
 import psycopg2.errors
 
-from crypto_warehouse.database_connection import ConfigError, configure_logging
+from crypto_warehouse.database_connection import OperatorError, configure_logging
 from crypto_warehouse.diversification_metrics import (
     FIGURES_DIR,
     METRICS_PATH,
     PanelDataError,
-    run_analysis,
+    run_diversification_analysis,
 )
 from crypto_warehouse.report_generator import build_report
 
@@ -63,8 +63,8 @@ def main() -> int:
 
     configure_logging(args.verbose)
     try:
-        metrics = run_analysis(Path(args.metrics), Path(args.figures))
-    except ConfigError as error:
+        metrics = run_diversification_analysis(Path(args.metrics), Path(args.figures))
+    except OperatorError as error:
         log.error("%s", error)
         return 2
     except psycopg2.OperationalError:

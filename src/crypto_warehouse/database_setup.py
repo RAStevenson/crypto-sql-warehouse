@@ -15,7 +15,7 @@ import psycopg2
 from psycopg2 import sql as pgsql
 
 from . import database_connection, sql_file_runner
-from .database_connection import ConfigError
+from .database_connection import OperatorError
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ def create_database(database_url: str) -> bool:
     """Create database_url's database if it is missing and return True if one
     was created.
 
-    Raises ConfigError when the database is missing and database_url is not a URL
+    Raises OperatorError when the database is missing and database_url is not a URL
     that database_connection.split_database_name can point at the maintenance database.
     """
     if database_exists(database_url):
@@ -50,7 +50,7 @@ def create_database(database_url: str) -> bool:
 
     split_url = database_connection.split_database_name(database_url)
     if split_url is None:
-        raise ConfigError(
+        raise OperatorError(
             "the target database does not exist and DATABASE_URL is not a "
             "postgresql:// URL this can rewrite. Create the database by hand "
             "and re-run."
@@ -111,7 +111,7 @@ def run_setup(*, reset: bool = False, marts_only: bool = False) -> int:
     schema is dropped and rebuilt, which is how a changed mart definition
     reaches a loaded warehouse.
     """
-    database_url = database_connection.load_dsn()
+    database_url = database_connection.load_database_url()
 
     if marts_only:
         if not database_exists(database_url):
