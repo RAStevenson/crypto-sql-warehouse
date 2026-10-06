@@ -39,7 +39,7 @@ from .fetch_windows import (
     missing_buckets,
 )
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 USER_AGENT = "crypto-sql-warehouse (portfolio project)"
 
@@ -150,7 +150,7 @@ def resolve_products(cursor, requested: list[str] | None) -> list[str]:
         # direct instruction and backfilling a delisted asset is a real use.
         inactive = sorted(code for code, active in found.items() if not active)
         if inactive:
-            log.warning(
+            logger.warning(
                 "loading inactive asset(s) %s because --products named them explicitly",
                 inactive,
             )
@@ -218,7 +218,7 @@ def _mark_run_failed(connection, run_id: int) -> None:
         # The error is not re-raised, because on a dead connection even the
         # rollback raises, and that error would replace the exception that
         # explains the failure.
-        log.warning(
+        logger.warning(
             "could not mark run %s failed; it stays 'running' in raw.ingest_runs",
             run_id,
             exc_info=True,
@@ -245,7 +245,7 @@ def _fetch_into_raw(
             and candle.bucket_start < current_hour
         ]
         if len(candles) != len(fetched):
-            log.warning(
+            logger.warning(
                 "%s: dropped %d candle(s) outside the requested window %s..%s",
                 product_code,
                 len(fetched) - len(candles),
@@ -262,7 +262,7 @@ def _fetch_into_raw(
             missing and len(missing) >= max(1, int(expected * SHORT_WINDOW_TOLERANCE))
         ):
             short_windows += 1
-            log.warning(
+            logger.warning(
                 "%s: window %s..%s is missing %d of %d buckets, longest gap %d hour(s) "
                 "starting %s",
                 product_code,
@@ -314,7 +314,7 @@ def _promote_to_core(connection, run_id: int, rows_fetched: int) -> int:
         cursor.execute(REJECTED_ROWS_SQL, (run_id,))
         rejected = [row[0] for row in cursor.fetchall()]
         if rejected:
-            log.warning(
+            logger.warning(
                 "run %d: %d raw candle(s) fail core's constraints and stay in raw only, "
                 "the first at %s; scripts/run_verify.py will fail on these buckets",
                 run_id,
@@ -387,7 +387,7 @@ def load_product(
         raise
 
     if short_windows:
-        log.warning(
+        logger.warning(
             "%s: %d window(s) came back materially short; run %d may have holes",
             product_code,
             short_windows,
@@ -401,7 +401,7 @@ def _rollback_quietly(connection) -> None:
     try:
         connection.rollback()
     except Exception:
-        log.warning(
+        logger.warning(
             "rollback after a failure also failed; the connection is likely gone, so "
             "the products after this one will fail too",
             exc_info=True,
@@ -437,10 +437,10 @@ def run_ingest(
         connection.commit()
 
         if not targets:
-            log.warning("no products to load; core.assets has no active rows")
+            logger.warning("no products to load; core.assets has no active rows")
             return 0
 
-        log.info("loading %d product(s): %s", len(targets), ", ".join(targets))
+        logger.info("loading %d product(s): %s", len(targets), ", ".join(targets))
         for product_code in targets:
             try:
                 load_result = load_product(
@@ -452,13 +452,13 @@ def run_ingest(
                 )
             except Exception as error:
                 failures.append(product_code)
-                log.error("%s: load failed: %s", product_code, error, exc_info=True)
+                logger.error("%s: load failed: %s", product_code, error, exc_info=True)
                 # A failure before the run row exists never reaches the
                 # rollback in _mark_run_failed, and an aborted transaction
                 # would fail every product after this one.
                 _rollback_quietly(connection)
                 continue
-            log.info(
+            logger.info(
                 "%s: fetched %d, upserted %d (run %d)",
                 load_result.product_code,
                 load_result.rows_fetched,
@@ -473,12 +473,12 @@ def run_ingest(
                 refresh_marts(connection)
             except Exception as error:
                 failures.append("refresh-marts")
-                log.error("mart refresh failed: %s", error, exc_info=True)
+                logger.error("mart refresh failed: %s", error, exc_info=True)
                 _rollback_quietly(connection)
 
     if failures:
-        log.error("finished with %d failure(s): %s", len(failures), ", ".join(failures))
+        logger.error("finished with %d failure(s): %s", len(failures), ", ".join(failures))
         return 1
 
-    log.info("all %d product(s) loaded", len(targets))
+    logger.info("all %d product(s) loaded", len(targets))
     return 0

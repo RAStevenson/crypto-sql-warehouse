@@ -18,13 +18,13 @@ DAY = datetime.timedelta(days=1)
 START = datetime.date(2026, 1, 1)
 
 
-def dates(n_days: int) -> list[datetime.date]:
+def consecutive_dates(n_days: int) -> list[datetime.date]:
     return [START + i * DAY for i in range(n_days)]
 
 
 # Three Walsh vectors: zero mean, mutually orthogonal, so their sample
 # covariance is exactly diagonal with no appeal to a random seed.
-WALSH = np.array(
+WALSH_VECTORS = np.array(
     [
         [1, -1, 1, -1, 1, -1, 1, -1],
         [1, 1, -1, -1, 1, 1, -1, -1],
@@ -35,7 +35,7 @@ WALSH = np.array(
 
 
 def orthogonal_panel(scales=(0.01, 0.02, 0.03)) -> np.ndarray:
-    return WALSH * np.array(scales)
+    return WALSH_VECTORS * np.array(scales)
 
 
 def collinear_panel(scales=(1.0, 2.0, 3.0)) -> np.ndarray:
@@ -170,7 +170,7 @@ def test_perfectly_correlated_panel_captures_no_diversification():
 
 def test_uncorrelated_panel_captures_all_available_diversification():
     covariance = diversification_metrics.annualized_covariance(orthogonal_panel())
-    off_diagonal_values = diversification_metrics.off_diagonal(covariance)
+    off_diagonal_values = diversification_metrics.off_diagonal_entries(covariance)
     assert np.allclose(off_diagonal_values, 0.0)
     diversification_result = diversification_metrics.equal_weight_diversification(covariance)
     assert diversification_result["equal_weight_portfolio_vol"] == pytest.approx(
@@ -251,9 +251,9 @@ def test_correlation_matrix_has_a_unit_diagonal_and_is_symmetric():
     assert np.allclose(correlations, correlations.T)
 
 
-def test_off_diagonal_returns_every_entry_but_the_diagonal():
+def test_off_diagonal_entries_returns_every_entry_but_the_diagonal():
     matrix = np.arange(16, dtype=float).reshape(4, 4)
-    off_diagonal_values = diversification_metrics.off_diagonal(matrix)
+    off_diagonal_values = diversification_metrics.off_diagonal_entries(matrix)
     assert len(off_diagonal_values) == 12
     assert (
         0.0 not in off_diagonal_values
@@ -305,8 +305,8 @@ def test_drawdown_paths_start_at_zero_and_agree_with_max_drawdown():
 # --------------------------------------------------------------------------
 
 
-def test_build_panel_keeps_only_dates_where_every_symbol_reports():
-    day_list = dates(3)
+def test_build_return_panel_keeps_only_dates_where_every_symbol_reports():
+    day_list = consecutive_dates(3)
     rows = [
         (day_list[0], "AAA", 0.01),
         (day_list[0], "BBB", 0.02),
@@ -314,7 +314,7 @@ def test_build_panel_keeps_only_dates_where_every_symbol_reports():
         (day_list[2], "AAA", 0.04),
         (day_list[2], "BBB", 0.05),
     ]
-    panel = diversification_metrics.build_panel(rows)
+    panel = diversification_metrics.build_return_panel(rows)
     assert panel.dates == [day_list[0], day_list[2]]
     assert panel.symbols == ["AAA", "BBB"]
     assert panel.n_days == 2
@@ -322,30 +322,30 @@ def test_build_panel_keeps_only_dates_where_every_symbol_reports():
     assert np.allclose(panel.returns, [[0.01, 0.02], [0.04, 0.05]])
 
 
-def test_build_panel_orders_columns_by_symbol_and_rows_by_date():
-    day_list = dates(2)
+def test_build_return_panel_orders_columns_by_symbol_and_rows_by_date():
+    day_list = consecutive_dates(2)
     rows = [
         (day_list[1], "ZZZ", 0.04),
         (day_list[0], "ZZZ", 0.02),
         (day_list[1], "AAA", 0.03),
         (day_list[0], "AAA", 0.01),
     ]
-    panel = diversification_metrics.build_panel(rows)
+    panel = diversification_metrics.build_return_panel(rows)
     assert panel.symbols == ["AAA", "ZZZ"]
     assert panel.dates == [day_list[0], day_list[1]]
     assert np.allclose(panel.returns, [[0.01, 0.02], [0.03, 0.04]])
 
 
-def test_build_panel_rejects_an_empty_input():
+def test_build_return_panel_rejects_an_empty_input():
     with pytest.raises(ValueError, match="no non-null log returns"):
-        diversification_metrics.build_panel([])
+        diversification_metrics.build_return_panel([])
 
 
-def test_build_panel_rejects_a_panel_with_no_common_date():
-    day_list = dates(2)
+def test_build_return_panel_rejects_a_panel_with_no_common_date():
+    day_list = consecutive_dates(2)
     rows = [(day_list[0], "AAA", 0.01), (day_list[1], "BBB", 0.02)]
     with pytest.raises(ValueError, match="would be empty"):
-        diversification_metrics.build_panel(rows)
+        diversification_metrics.build_return_panel(rows)
 
 
 def close_rows(day_list, symbols, returns, start_level=100.0):
@@ -366,41 +366,41 @@ def panel_and_path(day_list, symbols, returns):
         for i in range(len(day_list))
         for j in range(len(symbols))
     ]
-    panel = diversification_metrics.build_panel(rows)
+    panel = diversification_metrics.build_return_panel(rows)
     return panel, diversification_metrics.build_close_path(
         close_rows(day_list, symbols, returns), panel
     )
 
 
-def test_build_panel_rejects_a_single_asset():
-    day_list = dates(3)
+def test_build_return_panel_rejects_a_single_asset():
+    day_list = consecutive_dates(3)
     rows = [(day_list[i], "AAA", 0.01 * (i + 1)) for i in range(3)]
     with pytest.raises(ValueError, match="at least two active assets"):
-        diversification_metrics.build_panel(rows)
+        diversification_metrics.build_return_panel(rows)
 
 
-def test_build_panel_warns_when_one_asset_shortens_the_panel(caplog):
-    day_list = dates(4)
+def test_build_return_panel_warns_when_one_asset_shortens_the_panel(caplog):
+    day_list = consecutive_dates(4)
     rows = [(day_list[i], "AAA", 0.01) for i in range(4)] + [
         (day_list[i], "BBB", 0.02) for i in range(2, 4)
     ]
     with caplog.at_level("WARNING"):
-        panel = diversification_metrics.build_panel(rows)
+        panel = diversification_metrics.build_return_panel(rows)
     assert panel.dates == [day_list[2], day_list[3]]
     assert "do not share one history" in caplog.text
     assert "BBB" in caplog.text
 
 
-def test_build_panel_is_silent_when_every_asset_shares_one_history(caplog):
-    day_list = dates(3)
+def test_build_return_panel_is_silent_when_every_asset_shares_one_history(caplog):
+    day_list = consecutive_dates(3)
     rows = [(day_list[i], symbol, 0.01) for i in range(3) for symbol in ("AAA", "BBB")]
     with caplog.at_level("WARNING"):
-        diversification_metrics.build_panel(rows)
+        diversification_metrics.build_return_panel(rows)
     assert caplog.text == ""
 
 
 def test_build_close_path_starts_at_the_close_before_the_first_return():
-    day_list = dates(3)
+    day_list = consecutive_dates(3)
     symbols = ["AAA", "BBB"]
     returns = np.array([[0.01, 0.02], [0.03, -0.01], [-0.02, 0.04]])
     _, close_path = panel_and_path(day_list, symbols, returns)
@@ -411,7 +411,7 @@ def test_build_close_path_starts_at_the_close_before_the_first_return():
 def test_build_close_path_keeps_complete_days_the_panel_excludes():
     """A day after a gap has no return, so the panel drops it, but its close
     is real and the path has to pass through it."""
-    day_list = dates(5)
+    day_list = consecutive_dates(5)
     symbols = ["AAA", "BBB"]
     # returns exist on day_list[0], day_list[1], day_list[4]; day_list[2] is a
     # partial day (no close row at all here) and day_list[3] is the complete day
@@ -421,7 +421,7 @@ def test_build_close_path_keeps_complete_days_the_panel_excludes():
         for day in (day_list[0], day_list[1], day_list[4])
         for symbol in symbols
     ]
-    panel = diversification_metrics.build_panel(return_rows)
+    panel = diversification_metrics.build_return_panel(return_rows)
     levels = {
         day_list[0] - DAY: 100.0,
         day_list[0]: 101.0,
@@ -441,9 +441,9 @@ def test_build_close_path_keeps_complete_days_the_panel_excludes():
 
 
 def test_build_close_path_needs_a_close_before_the_first_return():
-    day_list = dates(2)
+    day_list = consecutive_dates(2)
     symbols = ["AAA", "BBB"]
-    panel = diversification_metrics.build_panel(
+    panel = diversification_metrics.build_return_panel(
         [(day, symbol, 0.01) for day in day_list for symbol in symbols]
     )
     closes = [(day, symbol, 100.0) for day in day_list for symbol in symbols]
@@ -455,7 +455,7 @@ def test_panel_metrics_drawdown_and_total_return_follow_the_closes_across_an_exc
     """The defect this pins: summing only the panel's returns cuts the move
     across an excluded date out of the path. Here both assets halve across the
     excluded stretch, and that fall has to show up."""
-    day_list = dates(7)
+    day_list = consecutive_dates(7)
     symbols = ["AAA", "BBB"]
     panel_days = (day_list[0], day_list[1], day_list[4], day_list[5], day_list[6])
     pairs = [(0.01, 0.02), (0.02, -0.01), (0.03, 0.01), (-0.01, 0.02), (0.02, 0.03)]
@@ -464,7 +464,7 @@ def test_panel_metrics_drawdown_and_total_return_follow_the_closes_across_an_exc
         for day, pair in zip(panel_days, pairs, strict=True)
         for symbol, log_return in zip(symbols, pair, strict=True)
     ]
-    panel = diversification_metrics.build_panel(return_rows)
+    panel = diversification_metrics.build_return_panel(return_rows)
     levels = {
         day_list[0] - DAY: 100.0, day_list[0]: 110.0, day_list[1]: 120.0,  # the peak
         day_list[3]: 60.0,  # complete day after the excluded day_list[2]: the trough
@@ -485,7 +485,7 @@ def test_panel_metrics_drawdown_and_total_return_follow_the_closes_across_an_exc
 
 
 def test_panel_metrics_rejects_an_asset_that_never_moved():
-    day_list = dates(6)
+    day_list = consecutive_dates(6)
     symbols = ["AAA", "BBB"]
     returns = np.column_stack([np.array([0.01, -0.02, 0.03, 0.01, -0.01, 0.02]), np.zeros(6)])
     panel, close_path = panel_and_path(day_list, symbols, returns)
@@ -494,9 +494,9 @@ def test_panel_metrics_rejects_an_asset_that_never_moved():
 
 
 def test_classify_excluded_dates_sorts_each_date_into_its_reason():
-    day_list = dates(6)
+    day_list = consecutive_dates(6)
     panel_days = (day_list[1], day_list[4], day_list[5])
-    panel = diversification_metrics.build_panel(
+    panel = diversification_metrics.build_return_panel(
         [(day, symbol, 0.01) for day in panel_days for symbol in ("AAA", "BBB")]
     )
     observed = [
@@ -515,8 +515,8 @@ def test_classify_excluded_dates_sorts_each_date_into_its_reason():
 
 
 def test_classify_excluded_dates_counts_a_partial_bar_first_when_an_asset_is_also_absent():
-    day_list = dates(2)
-    panel = diversification_metrics.build_panel(
+    day_list = consecutive_dates(2)
+    panel = diversification_metrics.build_return_panel(
         [(day_list[1], symbol, 0.01) for symbol in ("AAA", "BBB")]
     )
     assert diversification_metrics.classify_excluded_dates(
@@ -529,7 +529,7 @@ def test_classify_excluded_dates_counts_a_partial_bar_first_when_an_asset_is_als
 
 
 def test_panel_metrics_reports_the_panel_it_was_given():
-    day_list = dates(8)
+    day_list = consecutive_dates(8)
     returns = orthogonal_panel()
     symbols = ["AAA", "BBB", "CCC"]
     metrics = diversification_metrics.panel_metrics(*panel_and_path(day_list, symbols, returns))
@@ -548,7 +548,7 @@ def test_panel_metrics_output_is_json_serializable():
     may be a numpy scalar that json refuses to write."""
     import json
 
-    day_list = dates(8)
+    day_list = consecutive_dates(8)
     returns = orthogonal_panel()
     symbols = ["AAA", "BBB", "CCC"]
     serialized_metrics = json.dumps(
@@ -600,14 +600,14 @@ def test_round_range_outward_rounds_to_the_step(values, expected):
     assert high == pytest.approx(expected[1])
 
 
-def test_build_panel_raises_a_panel_data_error_that_is_still_a_value_error():
+def test_build_return_panel_raises_a_panel_data_error_that_is_still_a_value_error():
     with pytest.raises(diversification_metrics.PanelDataError) as raised:
-        diversification_metrics.build_panel([])
+        diversification_metrics.build_return_panel([])
     assert isinstance(raised.value, ValueError)
 
 
 def test_panel_metrics_refuses_a_panel_too_short_for_a_correlation_interval():
-    day_list = dates(3)
+    day_list = consecutive_dates(3)
     symbols = ["AAA", "BBB"]
     returns = np.array([[0.01, 0.02], [0.03, -0.01], [-0.02, 0.04]])
     panel, close_path = panel_and_path(day_list, symbols, returns)

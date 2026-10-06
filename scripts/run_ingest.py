@@ -24,10 +24,10 @@ import logging
 from crypto_warehouse.candle_ingest import DEFAULT_BACKFILL_DAYS, run_ingest
 from crypto_warehouse.database_connection import OperatorError, configure_logging
 
-log = logging.getLogger("run_ingest")
+logger = logging.getLogger("run_ingest")
 
 
-def positive_int(value: str) -> int:
+def positive_day_count(value: str) -> int:
     """Return a command-line value as a whole number of days, raising an argparse
     error when it is below 1."""
     number = int(value)
@@ -44,7 +44,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--backfill-days",
-        type=positive_int,
+        type=positive_day_count,
         default=None,
         help=(
             f"How far back to reach, in days (default {DEFAULT_BACKFILL_DAYS}). "
@@ -91,7 +91,7 @@ def main() -> int:
             refresh=not args.no_refresh_marts,
         )
     except (OperatorError, FileNotFoundError) as error:
-        log.error("%s", error)
+        logger.error("%s", error)
         return 2
 
 

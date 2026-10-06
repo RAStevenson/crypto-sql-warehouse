@@ -19,7 +19,7 @@ from .coinbase_candles import fetch_window
 from .database_connection import OperatorError
 from .fetch_windows import floor_hour
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 # How far back the validation probe looks. Wide enough that a real but thinly
 # traded product with some zero-trade hours still shows a candle; an empty
@@ -63,7 +63,7 @@ def probe_product(session: requests.Session, product_code: str) -> int:
             f"the last {PROBE_HOURS} hours; refusing to add a product with "
             "no ingestible history"
         )
-    log.info(
+    logger.info(
         "%s: probe returned %d candle(s) in the trailing %d hours",
         product_code,
         len(candles),

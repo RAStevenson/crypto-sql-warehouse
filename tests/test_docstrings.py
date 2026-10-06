@@ -11,13 +11,13 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[1]
-PRODUCT = sorted((REPO / "src" / "crypto_warehouse").glob("*.py")) + sorted(
-    (REPO / "scripts").glob("*.py")
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PRODUCT_FILES = sorted((REPO_ROOT / "src" / "crypto_warehouse").glob("*.py")) + sorted(
+    (REPO_ROOT / "scripts").glob("*.py")
 )
 
 
-def _bare(path: Path) -> list[str]:
+def _undocumented_definitions(path: Path) -> list[str]:
     """Names of every definition in the file, the module included, with no docstring."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
     bare_definitions = []
@@ -32,9 +32,11 @@ def _bare(path: Path) -> list[str]:
 
 def test_every_definition_has_a_docstring() -> None:
     """Fail naming every bare definition, so the fix is a list and not a hunt."""
-    assert PRODUCT, "no product files found"
+    assert PRODUCT_FILES, "no product files found"
     offenders = {
-        product_file.name: _bare(product_file) for product_file in PRODUCT if _bare(product_file)
+        product_file.name: _undocumented_definitions(product_file)
+        for product_file in PRODUCT_FILES
+        if _undocumented_definitions(product_file)
     }
     assert not offenders, "definitions without a docstring:\n" + "\n".join(
         f"  {file_name}: {', '.join(names)}" for file_name, names in offenders.items()

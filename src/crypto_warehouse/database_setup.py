@@ -17,9 +17,9 @@ from psycopg2 import sql as pgsql
 from . import database_connection, sql_file_runner
 from .database_connection import OperatorError
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
-SCHEMAS = ("marts", "core", "raw")  # drop order: dependents first
+WAREHOUSE_SCHEMAS = ("marts", "core", "raw")  # drop order: dependents first
 
 
 def database_exists(database_url: str) -> bool:
@@ -57,14 +57,14 @@ def create_database(database_url: str) -> bool:
         )
     maintenance_url, database = split_url
 
-    log.info("database %r does not exist, creating it", database)
+    logger.info("database %r does not exist, creating it", database)
     # CREATE DATABASE cannot run inside a transaction block, hence autocommit.
     with (
         closing(database_connection.connect(maintenance_url, autocommit=True)) as connection,
         connection.cursor() as cursor,
     ):
         cursor.execute(pgsql.SQL("CREATE DATABASE {}").format(pgsql.Identifier(database)))
-    log.info("created database %r", database)
+    logger.info("created database %r", database)
     return True
 
 
@@ -81,9 +81,9 @@ def drop_schemas(connection) -> None:
     This does not commit, so the caller can commit the drop together with the
     rebuild and a DDL error leaves the old schemas in place.
     """
-    log.warning("dropping schemas %s and everything in them", ", ".join(SCHEMAS))
+    logger.warning("dropping schemas %s and everything in them", ", ".join(WAREHOUSE_SCHEMAS))
     with connection.cursor() as cursor:
-        for schema in SCHEMAS:
+        for schema in WAREHOUSE_SCHEMAS:
             cursor.execute(
                 pgsql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(pgsql.Identifier(schema))
             )
@@ -95,7 +95,9 @@ def rebuild_marts(connection) -> None:
 
     This does not commit, so a DDL error leaves the old marts in place.
     """
-    log.warning("dropping schema marts and rebuilding it from sql/%s", sql_file_runner.MARTS_FILE)
+    logger.warning(
+        "dropping schema marts and rebuilding it from sql/%s", sql_file_runner.MARTS_FILE
+    )
     with connection.cursor() as cursor:
         cursor.execute("DROP SCHEMA IF EXISTS marts CASCADE")
         cursor.execute("CREATE SCHEMA marts")
@@ -115,18 +117,18 @@ def run_setup(*, reset: bool = False, marts_only: bool = False) -> int:
 
     if marts_only:
         if not database_exists(database_url):
-            log.error("the database does not exist; run scripts/run_setup.py with no flag first")
+            logger.error("the database does not exist; run scripts/run_setup.py with no flag first")
             return 1
         with closing(database_connection.connect(database_url)) as connection:
             if not schema_is_applied(connection):
-                log.error(
+                logger.error(
                     "core.assets does not exist, so there is nothing to rebuild the "
                     "marts from; run scripts/run_setup.py with no flag first"
                 )
                 return 1
             rebuild_marts(connection)
             connection.commit()
-        log.info("marts rebuilt; raw and core were not touched")
+        logger.info("marts rebuilt; raw and core were not touched")
         return 0
 
     created = create_database(database_url)
@@ -134,7 +136,7 @@ def run_setup(*, reset: bool = False, marts_only: bool = False) -> int:
     with closing(database_connection.connect(database_url)) as connection:
         if schema_is_applied(connection) and not created:
             if not reset:
-                log.error(
+                logger.error(
                     "core.assets already exists; the schema is applied. "
                     "Re-run with --reset to drop schemas raw, core and marts "
                     "and rebuild them, which deletes every stored candle."
@@ -150,5 +152,5 @@ def run_setup(*, reset: bool = False, marts_only: bool = False) -> int:
         sql_file_runner.run_sql_file(connection, sql_file_runner.MARTS_FILE)
         connection.commit()
 
-    log.info("setup complete; run scripts/run_ingest.py next")
+    logger.info("setup complete; run scripts/run_ingest.py next")
     return 0

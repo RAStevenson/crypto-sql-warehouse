@@ -17,7 +17,7 @@ import psycopg2.errors
 
 from . import database_connection, sql_file_runner
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def run_verify() -> int:
@@ -38,15 +38,15 @@ def run_verify() -> int:
             # carries the server's CONTEXT lines, which name the block, so
             # it is printed in full before the one-line summary.
             primary_message = getattr(error.diag, "message_primary", None) or str(error)
-            log.error("full server report:\n%s", str(error).strip())
-            log.error(
+            logger.error("full server report:\n%s", str(error).strip())
+            logger.error(
                 "verification FAILED: %s; the checks after it in sql/%s did not run",
                 primary_message,
                 sql_file_runner.VERIFY_FILE,
             )
             return 1
 
-    log.info(
+    logger.info(
         "verification passed: every check in sql/%s raised no exception",
         sql_file_runner.VERIFY_FILE,
     )

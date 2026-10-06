@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .database_connection import REPO_ROOT
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 SQL_DIR = REPO_ROOT / "sql"
 
@@ -35,7 +35,7 @@ class NoticeLogger(list):
 
     def append(self, notice: str) -> None:
         """Log one server notice instead of storing it."""
-        log.info("postgres: %s", notice.strip())
+        logger.info("postgres: %s", notice.strip())
 
 
 def sql_path(name: str) -> Path:
@@ -60,6 +60,6 @@ def run_sql_file(connection, name: str) -> None:
     This does not commit, so the caller controls the transaction.
     """
     path = sql_path(name)
-    log.info("executing sql/%s", path.name)
+    logger.info("executing sql/%s", path.name)
     with connection.cursor() as cursor:
         cursor.execute(path.read_text(encoding="utf-8"))
