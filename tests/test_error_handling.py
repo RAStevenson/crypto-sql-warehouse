@@ -135,9 +135,9 @@ def test_a_failed_report_build_prints_the_traceback_then_what_was_written(
     errors = error_records(caplog)
     assert errors[0].exc_info is not None
     assert "KeyError" in caplog.text
-    last = errors[-1].getMessage()
-    assert "the metrics and figures were written" in last
-    assert "run_build_report.py" in last
+    last_message = errors[-1].getMessage()
+    assert "the metrics and figures were written" in last_message
+    assert "run_build_report.py" in last_message
 
 
 def test_a_report_build_that_exits_with_a_message_is_reported_the_same_way(
@@ -169,7 +169,7 @@ def add_asset(monkeypatch):
 def test_a_failed_probe_prints_the_traceback_then_says_nothing_was_written(
     add_asset, monkeypatch, caplog
 ):
-    def gave_up(session, code):
+    def gave_up(session, product_code):
         raise RuntimeError("XRP-USD: gave up fetching after 5 attempts")
 
     def must_not_connect():
@@ -188,7 +188,7 @@ def test_a_failed_probe_prints_the_traceback_then_says_nothing_was_written(
 
 
 def test_a_probe_that_finds_no_candles_prints_its_own_message(add_asset, monkeypatch, caplog):
-    def empty(session, code):
+    def empty(session, product_code):
         raise ConfigError("XRP-USD: Coinbase answered but returned no candles")
 
     monkeypatch.setattr(add_asset, "probe_product", empty)
@@ -206,7 +206,7 @@ def test_a_database_error_after_the_probe_is_not_reported_as_a_probe_failure(
     def refuse():
         raise psycopg2.OperationalError("connection refused")
 
-    monkeypatch.setattr(add_asset, "probe_product", lambda session, code: 3)
+    monkeypatch.setattr(add_asset, "probe_product", lambda session, product_code: 3)
     monkeypatch.setattr(add_asset, "connect", refuse)
 
     with pytest.raises(psycopg2.OperationalError):
@@ -227,7 +227,7 @@ class FakeConnection:
 
 
 def run_verify_raising(monkeypatch, error: Exception) -> int:
-    def run_sql_file(conn, name):
+    def run_sql_file(connection, name):
         raise error
 
     monkeypatch.setattr(

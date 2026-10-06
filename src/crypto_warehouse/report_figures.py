@@ -8,7 +8,7 @@ reader who cannot separate two hues can still read the number.
 
 from __future__ import annotations
 
-import datetime as dt
+import datetime
 from pathlib import Path
 
 import matplotlib
@@ -76,27 +76,34 @@ def _save(fig: Figure, path: Path) -> Path:
 
 
 def correlation_heatmap(
-    symbols: list[str], corr: np.ndarray, vmin: float, vmax: float, path: Path
+    symbols: list[str],
+    correlations: np.ndarray,
+    scale_low: float,
+    scale_high: float,
+    path: Path,
 ) -> Path:
     """Draw the correlation matrix as an annotated heatmap, save it, and return
     the path.
 
-    The color axis runs from vmin to vmax, which the caller takes from the
-    metrics so that the image and the report's caption state the same range.
+    The color axis runs from scale_low to scale_high, which the caller takes
+    from the metrics so that the image and the report's caption state the same
+    range.
     """
     apply_style()
     n_symbols = len(symbols)
     # The scale covers the observed off-diagonal range, because on -1 to 1
     # every cell would render in nearly the same tone. The diagonal is masked
     # because a self-correlation of 1 would otherwise dominate the scale.
-    off_mask = ~np.eye(n_symbols, dtype=bool)
-    shown = np.ma.masked_array(corr, mask=~off_mask)
+    off_diagonal_mask = ~np.eye(n_symbols, dtype=bool)
+    masked_correlations = np.ma.masked_array(correlations, mask=~off_diagonal_mask)
 
-    cmap = matplotlib.colormaps["RdBu_r"].copy()
-    cmap.set_bad(BLANK)
+    colormap = matplotlib.colormaps["RdBu_r"].copy()
+    colormap.set_bad(BLANK)
 
     fig, ax = plt.subplots(figsize=(6.4, 5.4))
-    mesh = ax.imshow(shown, cmap=cmap, vmin=vmin, vmax=vmax)
+    heatmap_image = ax.imshow(
+        masked_correlations, cmap=colormap, vmin=scale_low, vmax=scale_high
+    )
     ax.set_xticks(range(n_symbols), symbols)
     ax.set_yticks(range(n_symbols), symbols)
     ax.grid(visible=False)
@@ -109,38 +116,42 @@ def correlation_heatmap(
             if i == j:
                 ax.text(j, i, "1.00", ha="center", va="center", fontsize=9, color=MUTED)
                 continue
-            rgba = cmap((corr[i, j] - vmin) / (vmax - vmin))
+            rgba = colormap((correlations[i, j] - scale_low) / (scale_high - scale_low))
             luminance = 0.299 * rgba[0] + 0.587 * rgba[1] + 0.114 * rgba[2]
             ax.text(
                 j,
                 i,
-                f"{corr[i, j]:.2f}",
+                f"{correlations[i, j]:.2f}",
                 ha="center",
                 va="center",
                 fontsize=9.5,
                 color="#ffffff" if luminance < 0.55 else INK,
             )
 
-    bar = fig.colorbar(mesh, ax=ax, fraction=0.046, pad=0.04)
-    bar.set_label(f"daily log-return correlation ({vmin:.2f} to {vmax:.2f})")
-    bar.outline.set_visible(False)
+    colorbar = fig.colorbar(heatmap_image, ax=ax, fraction=0.046, pad=0.04)
+    colorbar.set_label(
+        f"daily log-return correlation ({scale_low:.2f} to {scale_high:.2f})"
+    )
+    colorbar.outline.set_visible(False)
     return _save(fig, path)
 
 
-def volatility_bars(symbols: list[str], vols: np.ndarray, average: float, path: Path) -> Path:
+def volatility_bars(
+    symbols: list[str], volatilities: np.ndarray, average: float, path: Path
+) -> Path:
     """Draw each asset's annualized volatility as sorted bars with the average
     marked, save the figure, and return the path."""
     apply_style()
-    order = np.argsort(vols)
+    order = np.argsort(volatilities)
     labels = [symbols[i] for i in order]
-    values = vols[order]
+    values = volatilities[order]
 
     fig, ax = plt.subplots(figsize=(7.0, 3.8))
     bars = ax.barh(labels, values, color=SERIES[0], height=0.62, zorder=3)
-    for rect, value in zip(bars, values, strict=True):
+    for bar, value in zip(bars, values, strict=True):
         ax.annotate(
             f"{value:.3f}",
-            (value, rect.get_y() + rect.get_height() / 2),
+            (value, bar.get_y() + bar.get_height() / 2),
             xytext=(5, 0),
             textcoords="offset points",
             va="center",
@@ -173,7 +184,7 @@ def volatility_bars(symbols: list[str], vols: np.ndarray, average: float, path: 
 
 
 def drawdown_curves(
-    dates: list[dt.date], symbols: list[str], paths_matrix: np.ndarray, out_path: Path
+    dates: list[datetime.date], symbols: list[str], drawdowns: np.ndarray, path: Path
 ) -> Path:
     """Draw every asset's drawdown from its running peak on one axis, save the
     figure, and return the path."""
@@ -188,7 +199,7 @@ def drawdown_curves(
     for i, symbol in enumerate(symbols):
         ax.plot(
             plot_dates,
-            paths_matrix[:, i],
+            drawdowns[:, i],
             color=SERIES[i % len(SERIES)],
             linewidth=1.6,
             zorder=3,
@@ -204,10 +215,10 @@ def drawdown_curves(
     ax.grid(axis="y")
     ax.grid(axis="x", visible=False)
     fig.autofmt_xdate()
-    return _save(fig, out_path)
+    return _save(fig, path)
 
 
-def diversification_bars(div: dict, path: Path) -> Path:
+def diversification_bars(diversification: dict, path: Path) -> Path:
     """Draw the average single-asset, equal-weight, and zero-correlation
     volatilities as three bars, save the figure, and return the path."""
     apply_style()
@@ -217,18 +228,18 @@ def diversification_bars(div: dict, path: Path) -> Path:
         "same variances,\nzero correlation",
     ]
     values = [
-        div["average_single_asset_vol"],
-        div["equal_weight_portfolio_vol"],
-        div["zero_correlation_vol"],
+        diversification["average_single_asset_vol"],
+        diversification["equal_weight_portfolio_vol"],
+        diversification["zero_correlation_vol"],
     ]
     colors = [MUTED, SERIES[0], SERIES[2]]
 
     fig, ax = plt.subplots(figsize=(6.6, 4.4))
     bars = ax.bar(labels, values, color=colors, width=0.56, zorder=3)
-    for rect, value in zip(bars, values, strict=True):
+    for bar, value in zip(bars, values, strict=True):
         ax.annotate(
             f"{value:.3f}",
-            (rect.get_x() + rect.get_width() / 2, value),
+            (bar.get_x() + bar.get_width() / 2, value),
             xytext=(0, 4),
             textcoords="offset points",
             ha="center",
@@ -236,7 +247,7 @@ def diversification_bars(div: dict, path: Path) -> Path:
             color=SECONDARY,
         )
     ax.annotate(
-        f"{100 * div['risk_removed_actual']:.1f}% removed",
+        f"{100 * diversification['risk_removed_actual']:.1f}% removed",
         (1, values[1]),
         xytext=(0, 22),
         textcoords="offset points",
@@ -245,7 +256,7 @@ def diversification_bars(div: dict, path: Path) -> Path:
         color=SERIES[0],
     )
     ax.annotate(
-        f"{100 * div['risk_removed_if_uncorrelated']:.1f}% removable",
+        f"{100 * diversification['risk_removed_if_uncorrelated']:.1f}% removable",
         (2, values[2]),
         xytext=(0, 22),
         textcoords="offset points",
@@ -265,19 +276,24 @@ def write_all(panel, close_path, metrics: dict, figures_dir: Path) -> list[Path]
     return the paths written."""
     from .diversification_metrics import drawdown_paths
 
-    corr = np.array(metrics["correlation"]["matrix"], dtype=float)
-    vols = np.array([asset["annualized_volatility"] for asset in metrics["assets"]], dtype=float)
-    div = metrics["diversification"]
+    correlations = np.array(metrics["correlation"]["matrix"], dtype=float)
+    volatilities = np.array(
+        [asset["annualized_volatility"] for asset in metrics["assets"]], dtype=float
+    )
+    diversification = metrics["diversification"]
     return [
         correlation_heatmap(
             panel.symbols,
-            corr,
+            correlations,
             metrics["correlation"]["heatmap_scale_low"],
             metrics["correlation"]["heatmap_scale_high"],
             figures_dir / CORRELATION_HEATMAP,
         ),
         volatility_bars(
-            panel.symbols, vols, div["average_single_asset_vol"], figures_dir / ASSET_VOLATILITY
+            panel.symbols,
+            volatilities,
+            diversification["average_single_asset_vol"],
+            figures_dir / ASSET_VOLATILITY,
         ),
         drawdown_curves(
             close_path.dates,
@@ -285,5 +301,5 @@ def write_all(panel, close_path, metrics: dict, figures_dir: Path) -> list[Path]
             drawdown_paths(np.diff(np.log(close_path.closes), axis=0)),
             figures_dir / DRAWDOWN_CURVES,
         ),
-        diversification_bars(div, figures_dir / DIVERSIFICATION),
+        diversification_bars(diversification, figures_dir / DIVERSIFICATION),
     ]

@@ -24,7 +24,7 @@ portfolio, and it can fail to be positive semidefinite.
 
 from __future__ import annotations
 
-import datetime as dt
+import datetime
 import json
 import logging
 from collections import defaultdict
@@ -108,7 +108,7 @@ class Panel:
     """Holds daily log returns as a matrix with one row per date, one column
     per symbol, and no missing entries."""
 
-    dates: list[dt.date]
+    dates: list[datetime.date]
     symbols: list[str]
     returns: np.ndarray
 
@@ -136,20 +136,20 @@ class ClosePath:
     The first row is the close the panel's first return is measured from.
     """
 
-    dates: list[dt.date]
+    dates: list[datetime.date]
     closes: np.ndarray
 
 
-def build_panel(rows: list[tuple[dt.date, str, float]]) -> Panel:
+def build_panel(rows: list[tuple[datetime.date, str, float]]) -> Panel:
     """Build a Panel from (date, symbol, log_return) rows, keeping only the dates
     on which every symbol in the input has a return.
 
     Raises ValueError when fewer than two symbols have returns or when no date
     carries all of them.
     """
-    by_date: dict[dt.date, dict[str, float]] = defaultdict(dict)
-    for trade_date, symbol, value in rows:
-        by_date[trade_date][symbol] = float(value)
+    by_date: dict[datetime.date, dict[str, float]] = defaultdict(dict)
+    for trade_date, symbol, log_return in rows:
+        by_date[trade_date][symbol] = float(log_return)
     symbols = sorted({symbol for _, symbol, _ in rows})
     if not symbols:
         raise PanelDataError("no non-null log returns found; load the warehouse first")
@@ -158,7 +158,11 @@ def build_panel(rows: list[tuple[dt.date, str, float]]) -> Panel:
             f"only {symbols[0]} has returns; a diversification analysis needs at "
             "least two active assets"
         )
-    dates = sorted(trade_date for trade_date, obs in by_date.items() if len(obs) == len(symbols))
+    dates = sorted(
+        trade_date
+        for trade_date, observations in by_date.items()
+        if len(observations) == len(symbols)
+    )
     if not dates:
         raise PanelDataError(
             f"no date carries all {len(symbols)} symbols; the panel would be empty"
@@ -167,11 +171,15 @@ def build_panel(rows: list[tuple[dt.date, str, float]]) -> Panel:
     # The panel is the intersection of every asset's dates, so one asset with
     # a shorter history shortens it for all. Warn when that happens.
     starts = {
-        symbol: min(trade_date for trade_date, obs in by_date.items() if symbol in obs)
+        symbol: min(
+            trade_date for trade_date, observations in by_date.items() if symbol in observations
+        )
         for symbol in symbols
     }
     ends = {
-        symbol: max(trade_date for trade_date, obs in by_date.items() if symbol in obs)
+        symbol: max(
+            trade_date for trade_date, observations in by_date.items() if symbol in observations
+        )
         for symbol in symbols
     }
     if len(set(starts.values())) > 1 or len(set(ends.values())) > 1:
@@ -194,7 +202,7 @@ def build_panel(rows: list[tuple[dt.date, str, float]]) -> Panel:
     return Panel(dates=dates, symbols=symbols, returns=returns)
 
 
-def build_close_path(rows: list[tuple[dt.date, str, float]], panel: Panel) -> ClosePath:
+def build_close_path(rows: list[tuple[datetime.date, str, float]], panel: Panel) -> ClosePath:
     """Build the panel's ClosePath from (date, symbol, close) rows, keeping every
     date on which all panel symbols have a close, from the last such date
     before the panel's first return through the panel's last date.
@@ -202,18 +210,22 @@ def build_close_path(rows: list[tuple[dt.date, str, float]], panel: Panel) -> Cl
     That includes days the panel excludes, such as the first day after a gap,
     and a ValueError is raised when no close precedes the panel's first return.
     """
-    by_date: dict[dt.date, dict[str, float]] = defaultdict(dict)
-    for trade_date, symbol, value in rows:
-        by_date[trade_date][symbol] = float(value)
-    shared = sorted(
+    by_date: dict[datetime.date, dict[str, float]] = defaultdict(dict)
+    for trade_date, symbol, close in rows:
+        by_date[trade_date][symbol] = float(close)
+    shared_dates = sorted(
         trade_date
-        for trade_date, obs in by_date.items()
-        if trade_date <= panel.dates[-1] and all(symbol in obs for symbol in panel.symbols)
+        for trade_date, observations in by_date.items()
+        if trade_date <= panel.dates[-1]
+        and all(symbol in observations for symbol in panel.symbols)
     )
-    before = [trade_date for trade_date in shared if trade_date < panel.dates[0]]
-    if not before:
+    dates_before_panel = [trade_date for trade_date in shared_dates if trade_date < panel.dates[0]]
+    if not dates_before_panel:
         raise PanelDataError("no complete close precedes the panel's first return")
-    dates = [before[-1], *(trade_date for trade_date in shared if trade_date >= panel.dates[0])]
+    dates = [
+        dates_before_panel[-1],
+        *(trade_date for trade_date in shared_dates if trade_date >= panel.dates[0]),
+    ]
     closes = np.array(
         [[by_date[trade_date][symbol] for symbol in panel.symbols] for trade_date in dates],
         dtype=float,
@@ -222,8 +234,8 @@ def build_close_path(rows: list[tuple[dt.date, str, float]], panel: Panel) -> Cl
 
 
 def classify_excluded_dates(
-    observed: list[tuple[dt.date, int, int]], panel: Panel
-) -> dict[str, list[dt.date]]:
+    observed: list[tuple[datetime.date, int, int]], panel: Panel
+) -> dict[str, list[datetime.date]]:
     """Return the observed dates the panel leaves out, grouped under partial_bar,
     not_every_asset, or after_excluded_day.
 
@@ -231,14 +243,14 @@ def classify_excluded_dates(
     under the first reason that applies, so the last group holds days with
     every bar complete that still lack a return.
     """
-    in_panel = set(panel.dates)
-    reasons: dict[str, list[dt.date]] = {
+    panel_dates = set(panel.dates)
+    reasons: dict[str, list[datetime.date]] = {
         "partial_bar": [],
         "not_every_asset": [],
         "after_excluded_day": [],
     }
     for trade_date, assets_present, partial_bars in observed:
-        if trade_date in in_panel:
+        if trade_date in panel_dates:
             continue
         if partial_bars > 0:
             reasons["partial_bar"].append(trade_date)
@@ -302,8 +314,10 @@ def max_drawdown(returns: np.ndarray) -> np.ndarray:
     The path starts at 1.0 before the first return, and the peak is the running
     maximum within the returns given, not an all-time high.
     """
-    level = np.exp(np.vstack([np.zeros(returns.shape[1]), np.cumsum(returns, axis=0)]))
-    return (level / np.maximum.accumulate(level, axis=0) - 1.0).min(axis=0)
+    cumulative_path = np.exp(
+        np.vstack([np.zeros(returns.shape[1]), np.cumsum(returns, axis=0)])
+    )
+    return (cumulative_path / np.maximum.accumulate(cumulative_path, axis=0) - 1.0).min(axis=0)
 
 
 def drawdown_paths(returns: np.ndarray) -> np.ndarray:
@@ -312,8 +326,10 @@ def drawdown_paths(returns: np.ndarray) -> np.ndarray:
     Length is one row longer than the return matrix, because the path includes
     its own starting point at zero drawdown.
     """
-    level = np.exp(np.vstack([np.zeros(returns.shape[1]), np.cumsum(returns, axis=0)]))
-    return level / np.maximum.accumulate(level, axis=0) - 1.0
+    cumulative_path = np.exp(
+        np.vstack([np.zeros(returns.shape[1]), np.cumsum(returns, axis=0)])
+    )
+    return cumulative_path / np.maximum.accumulate(cumulative_path, axis=0) - 1.0
 
 
 def portfolio_volatility(covariance: np.ndarray, weights: np.ndarray) -> float:
@@ -349,9 +365,9 @@ def diversification(covariance: np.ndarray) -> dict[str, float]:
     # variance is sigma^2 * (1/n_assets + (1 - 1/n_assets) * rho), so volatility
     # tends to sigma * sqrt(rho) as n_assets grows. The report quotes this limit
     # to show what adding more names of the same kind could remove.
-    correlation = covariance / np.outer(asset_vols, asset_vols)
-    off_diagonal = correlation[np.triu_indices(n_assets, k=1)]
-    mean_correlation = float(off_diagonal.mean())
+    correlations = covariance / np.outer(asset_vols, asset_vols)
+    off_diagonal_values = correlations[np.triu_indices(n_assets, k=1)]
+    mean_correlation = float(off_diagonal_values.mean())
     equicorrelation_limit = average_vol * float(np.sqrt(max(mean_correlation, 0.0)))
 
     return {
@@ -379,13 +395,15 @@ def panel_metrics(panel: Panel, close_path: ClosePath) -> dict:
             "the analysis needs at least 4, so load more history first"
         )
     returns = panel.returns
-    vols = annualized_volatility(returns)
-    constant = [
-        symbol for symbol, volatility in zip(panel.symbols, vols, strict=True) if volatility == 0.0
+    volatilities = annualized_volatility(returns)
+    constant_symbols = [
+        symbol
+        for symbol, volatility in zip(panel.symbols, volatilities, strict=True)
+        if volatility == 0.0
     ]
-    if constant:
+    if constant_symbols:
         raise PanelDataError(
-            f"{', '.join(constant)} did not move over the panel; a correlation with "
+            f"{', '.join(constant_symbols)} did not move over the panel; a correlation with "
             "a constant price is undefined"
         )
     # Drawdown and total return follow the closes, not the panel's returns.
@@ -393,23 +411,25 @@ def panel_metrics(panel: Panel, close_path: ClosePath) -> dict:
     # of the path.
     close_changes = np.diff(np.log(close_path.closes), axis=0)
     drawdowns = max_drawdown(close_changes)
-    totals = close_changes.sum(axis=0)
-    corr = correlation_matrix(returns)
-    off = off_diagonal(corr)
+    total_log_returns = close_changes.sum(axis=0)
+    correlations = correlation_matrix(returns)
+    off_diagonal_values = off_diagonal(correlations)
 
     # Which pair is least and which is most correlated, named rather than left as
     # bare numbers the reader has to look for in the matrix.
-    upper = np.triu_indices(panel.n_assets, k=1)
-    pair_values = corr[upper]
-    least_correlated = int(np.argmin(pair_values))
-    most_correlated = int(np.argmax(pair_values))
+    upper_triangle = np.triu_indices(panel.n_assets, k=1)
+    pair_correlations = correlations[upper_triangle]
+    least_correlated_index = int(np.argmin(pair_correlations))
+    most_correlated_index = int(np.argmax(pair_correlations))
 
     def pair_name(index: int) -> list[str]:
         """Return the two symbols of the pair at a position in the upper triangle."""
-        return [panel.symbols[upper[0][index]], panel.symbols[upper[1][index]]]
+        return [panel.symbols[upper_triangle[0][index]], panel.symbols[upper_triangle[1][index]]]
 
-    mean_low, mean_high = fisher_interval(float(off.mean()), panel.n_days)
-    scale_low, scale_high = scale_bounds(off)
+    mean_interval_low, mean_interval_high = fisher_interval(
+        float(off_diagonal_values.mean()), panel.n_days
+    )
+    scale_low, scale_high = scale_bounds(off_diagonal_values)
 
     return {
         "panel": {
@@ -427,61 +447,70 @@ def panel_metrics(panel: Panel, close_path: ClosePath) -> dict:
         "assets": [
             {
                 "symbol": symbol,
-                "annualized_volatility": float(vols[i]),
+                "annualized_volatility": float(volatilities[i]),
                 "max_drawdown": float(drawdowns[i]),
-                "total_log_return": float(totals[i]),
+                "total_log_return": float(total_log_returns[i]),
             }
             for i, symbol in enumerate(panel.symbols)
         ],
         "correlation": {
             "symbols": list(panel.symbols),
-            "matrix": [[float(coefficient) for coefficient in row] for row in corr],
-            "off_diagonal_min": float(off.min()),
-            "off_diagonal_max": float(off.max()),
-            "off_diagonal_mean": float(off.mean()),
-            "mean_ci95_low": mean_low,
-            "mean_ci95_high": mean_high,
+            "matrix": [[float(coefficient) for coefficient in row] for row in correlations],
+            "off_diagonal_min": float(off_diagonal_values.min()),
+            "off_diagonal_max": float(off_diagonal_values.max()),
+            "off_diagonal_mean": float(off_diagonal_values.mean()),
+            "mean_ci95_low": mean_interval_low,
+            "mean_ci95_high": mean_interval_high,
             "heatmap_scale_low": scale_low,
             "heatmap_scale_high": scale_high,
-            "least_correlated_pair": pair_name(least_correlated),
-            "most_correlated_pair": pair_name(most_correlated),
-            "n_pairs": len(pair_values),
+            "least_correlated_pair": pair_name(least_correlated_index),
+            "most_correlated_pair": pair_name(most_correlated_index),
+            "n_pairs": len(pair_correlations),
         },
         "diversification": diversification(annualized_covariance(returns)),
     }
 
 
-def fetch_returns(conn) -> list[tuple[dt.date, str, float]]:
+def fetch_returns(connection) -> list[tuple[datetime.date, str, float]]:
     """Every non-null daily log return of every active asset, as (date, symbol, value)."""
-    with conn.cursor() as cur:
-        cur.execute(RETURNS_QUERY)
-        return [(row[0], row[1], float(row[2])) for row in cur.fetchall()]
+    with connection.cursor() as cursor:
+        cursor.execute(RETURNS_QUERY)
+        return [(row[0], row[1], float(row[2])) for row in cursor.fetchall()]
 
 
-def fetch_closes(conn) -> list[tuple[dt.date, str, float]]:
+def fetch_closes(connection) -> list[tuple[datetime.date, str, float]]:
     """Every complete-day close of every active asset, as (date, symbol, value)."""
-    with conn.cursor() as cur:
-        cur.execute(CLOSES_QUERY)
-        return [(row[0], row[1], float(row[2])) for row in cur.fetchall()]
+    with connection.cursor() as cursor:
+        cursor.execute(CLOSES_QUERY)
+        return [(row[0], row[1], float(row[2])) for row in cursor.fetchall()]
 
 
-def fetch_provenance(conn, panel: Panel) -> dict:
+def fetch_provenance(connection, panel: Panel) -> dict:
     """Row counts, the excluded dates with their reasons, and the mart's own correlations."""
-    with conn.cursor() as cur:
-        cur.execute(PROVENANCE_QUERY)
-        hourly, daily, incomplete, assets, server_version = cur.fetchone()
-        cur.execute(OBSERVED_DATES_QUERY)
-        observed = [(row[0], int(row[1]), int(row[2])) for row in cur.fetchall()]
-        cur.execute(MART_CORRELATION_QUERY)
-        c_min, c_max, c_mean, n_pairs, days_min, days_max = cur.fetchone()
+    with connection.cursor() as cursor:
+        cursor.execute(PROVENANCE_QUERY)
+        hourly_rows, daily_rows, incomplete_asset_days, assets_loaded, server_version = (
+            cursor.fetchone()
+        )
+        cursor.execute(OBSERVED_DATES_QUERY)
+        observed = [(row[0], int(row[1]), int(row[2])) for row in cursor.fetchall()]
+        cursor.execute(MART_CORRELATION_QUERY)
+        (
+            mart_min_correlation,
+            mart_max_correlation,
+            mart_mean_correlation,
+            mart_n_pairs,
+            mart_n_days_min,
+            mart_n_days_max,
+        ) = cursor.fetchone()
     reasons = classify_excluded_dates(observed, panel)
-    excluded = sorted(trade_date for dates in reasons.values() for trade_date in dates)
+    excluded_dates = sorted(trade_date for dates in reasons.values() for trade_date in dates)
     return {
-        "ohlcv_hourly_rows": int(hourly),
-        "daily_ohlcv_rows": int(daily),
-        "incomplete_asset_days": int(incomplete),
+        "ohlcv_hourly_rows": int(hourly_rows),
+        "daily_ohlcv_rows": int(daily_rows),
+        "incomplete_asset_days": int(incomplete_asset_days),
         "observed_dates": len(observed),
-        "dates_dropped_from_panel": len(excluded),
+        "dates_dropped_from_panel": len(excluded_dates),
         "incomplete_dates": [trade_date.isoformat() for trade_date in reasons["partial_bar"]],
         "dates_without_every_asset": [
             trade_date.isoformat() for trade_date in reasons["not_every_asset"]
@@ -489,18 +518,18 @@ def fetch_provenance(conn, panel: Panel) -> dict:
         "dates_after_an_excluded_day": [
             trade_date.isoformat() for trade_date in reasons["after_excluded_day"]
         ],
-        "excluded_dates": [trade_date.isoformat() for trade_date in excluded],
-        "assets_loaded": int(assets),
+        "excluded_dates": [trade_date.isoformat() for trade_date in excluded_dates],
+        "assets_loaded": int(assets_loaded),
         "server_version": str(server_version),
         "mart_correlations_90d": {
             "note": "trailing 90-day window from marts.pairwise_correlations_90d, "
             "not the complete-day panel this report is built on",
-            "min": float(c_min),
-            "max": float(c_max),
-            "mean": float(c_mean),
-            "n_pairs": int(n_pairs),
-            "n_days_min": int(days_min),
-            "n_days_max": int(days_max),
+            "min": float(mart_min_correlation),
+            "max": float(mart_max_correlation),
+            "mean": float(mart_mean_correlation),
+            "n_pairs": int(mart_n_pairs),
+            "n_days_min": int(mart_n_days_min),
+            "n_days_max": int(mart_n_days_max),
         },
     }
 
@@ -509,14 +538,17 @@ def run_analysis(metrics_path: Path = METRICS_PATH, figures_dir: Path = FIGURES_
     """Query the warehouse, write metrics.json and the figures, return metrics."""
     from . import report_figures
 
-    with closing(connect()) as conn:
-        panel = build_panel(fetch_returns(conn))
-        close_path = build_close_path(fetch_closes(conn), panel)
+    with closing(connect()) as connection:
+        panel = build_panel(fetch_returns(connection))
+        close_path = build_close_path(fetch_closes(connection), panel)
         metrics = panel_metrics(panel, close_path)
-        metrics["provenance"] = fetch_provenance(conn, panel)
+        metrics["provenance"] = fetch_provenance(connection, panel)
 
     metrics["generated_at_utc"] = (
-        dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        datetime.datetime.now(datetime.UTC)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
     )
     log.info(
         "panel: %d complete days, %s to %s, %d assets",
@@ -527,8 +559,8 @@ def run_analysis(metrics_path: Path = METRICS_PATH, figures_dir: Path = FIGURES_
     )
 
     figures_dir.mkdir(parents=True, exist_ok=True)
-    written = report_figures.write_all(panel, close_path, metrics, figures_dir)
-    for path in written:
+    figure_paths = report_figures.write_all(panel, close_path, metrics, figures_dir)
+    for path in figure_paths:
         log.info("wrote %s", path)
 
     metrics_path.parent.mkdir(parents=True, exist_ok=True)

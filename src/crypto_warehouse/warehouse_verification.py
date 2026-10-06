@@ -29,19 +29,19 @@ def run_verify() -> int:
     # autocommit: the checks write nothing that persists, and it keeps a
     # failed check from leaving the session in an aborted transaction on the
     # way out.
-    with closing(database_connection.connect(autocommit=True)) as conn:
-        conn.notices = sql_file_runner.NoticeLogger()
+    with closing(database_connection.connect(autocommit=True)) as connection:
+        connection.notices = sql_file_runner.NoticeLogger()
         try:
-            sql_file_runner.run_sql_file(conn, sql_file_runner.VERIFY_FILE)
-        except psycopg2.errors.RaiseException as exc:
-            # A failed check is a RAISE EXCEPTION in a DO block. str(exc)
+            sql_file_runner.run_sql_file(connection, sql_file_runner.VERIFY_FILE)
+        except psycopg2.errors.RaiseException as error:
+            # A failed check is a RAISE EXCEPTION in a DO block. str(error)
             # carries the server's CONTEXT lines, which name the block, so
             # it is printed in full before the one-line summary.
-            primary = getattr(exc.diag, "message_primary", None) or str(exc)
-            log.error("full server report:\n%s", str(exc).strip())
+            primary_message = getattr(error.diag, "message_primary", None) or str(error)
+            log.error("full server report:\n%s", str(error).strip())
             log.error(
                 "verification FAILED: %s; the checks after it in sql/%s did not run",
-                primary,
+                primary_message,
                 sql_file_runner.VERIFY_FILE,
             )
             return 1

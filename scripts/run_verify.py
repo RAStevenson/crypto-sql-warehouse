@@ -34,8 +34,8 @@ def main() -> int:
     configure_logging(args.verbose)
     try:
         return run_verify()
-    except (ConfigError, FileNotFoundError) as exc:
-        log.error("%s", exc)
+    except (ConfigError, FileNotFoundError) as error:
+        log.error("%s", error)
         return 2
 
 

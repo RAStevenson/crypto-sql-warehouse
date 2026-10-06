@@ -37,13 +37,13 @@ def main() -> int:
         prog="run_setup.py",
         description="Create the database and apply sql/01_schema.sql and sql/02_marts.sql.",
     )
-    rebuild = parser.add_mutually_exclusive_group()
-    rebuild.add_argument(
+    rebuild_options = parser.add_mutually_exclusive_group()
+    rebuild_options.add_argument(
         "--reset",
         action="store_true",
         help="Drop schemas raw, core and marts first. Deletes all stored data.",
     )
-    rebuild.add_argument(
+    rebuild_options.add_argument(
         "--rebuild-marts",
         action="store_true",
         help=(
@@ -57,8 +57,8 @@ def main() -> int:
     configure_logging(args.verbose)
     try:
         return run_setup(reset=args.reset, marts_only=args.rebuild_marts)
-    except (ConfigError, FileNotFoundError) as exc:
-        log.error("%s", exc)
+    except (ConfigError, FileNotFoundError) as error:
+        log.error("%s", error)
         return 2
 
 

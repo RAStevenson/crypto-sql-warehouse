@@ -20,14 +20,14 @@ PRODUCT = sorted((REPO / "src" / "crypto_warehouse").glob("*.py")) + sorted(
 def _bare(path: Path) -> list[str]:
     """Names of every definition in the file, the module included, with no docstring."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    out = []
+    bare_definitions = []
     if ast.get_docstring(tree) is None:
-        out.append("<module>")
+        bare_definitions.append("<module>")
     for node in ast.walk(tree):
-        is_def = isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-        if is_def and ast.get_docstring(node) is None:
-            out.append(f"{node.name} (line {node.lineno})")
-    return out
+        is_definition = isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        if is_definition and ast.get_docstring(node) is None:
+            bare_definitions.append(f"{node.name} (line {node.lineno})")
+    return bare_definitions
 
 
 def test_every_definition_has_a_docstring() -> None:
