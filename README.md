@@ -164,13 +164,16 @@ stops ingestion without deleting history.
 
 ## Scheduling
 
-On my machine the loader runs daily through Windows Task Scheduler. The task
-`crypto-warehouse-ingest` calls `scripts/scheduled_ingest.cmd` at 07:10 local
-time. The script runs the default ingest from the repo root and appends its
-log to `logs/`. It uses the Python in the repo's `.venv` when there is one,
-and the `python` on PATH otherwise. Because every run resumes from the watermark, a day the machine was
-off is made up in full by the next run, and `raw.ingest_runs` records what
-each run did. To register the same task, with the repo path substituted:
+On my machine the loader ran daily through Windows Task Scheduler from
+2026-08-10 until 2026-10-05, when I paused the schedule. Until I turn it back
+on, the warehouse loads only when `scripts/run_ingest.py` is run by hand. The
+task `crypto-warehouse-ingest` calls `scripts/scheduled_ingest.cmd` at 07:10
+local time. The script runs the default ingest from the repo root and appends
+its log to `logs/`. It uses the Python in the repo's `.venv` when there is
+one, and the `python` on PATH otherwise. Because every run resumes from the
+watermark, a day the machine was off is made up in full by the next run, and
+`raw.ingest_runs` records what each run did. To register the same task, with
+the repo path substituted:
 
 ```
 $repo = "C:\path\to\crypto-sql-warehouse"
