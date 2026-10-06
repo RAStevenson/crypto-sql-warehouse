@@ -1,4 +1,4 @@
-"""Watermark arithmetic and work-list resolution against a stub cursor, and
+"""Resume-point arithmetic and work-list resolution against a stub cursor, and
 the load path against a fake connection. No database and no network."""
 
 from __future__ import annotations
@@ -14,11 +14,11 @@ from crypto_warehouse import candle_ingest
 from crypto_warehouse.candle_ingest import (
     OVERLAP_HOURS,
     LoadResult,
-    get_watermark,
+    find_resume_point,
     resolve_products,
 )
 from crypto_warehouse.coinbase_candles import Candle
-from crypto_warehouse.database_connection import ConfigError
+from crypto_warehouse.database_connection import OperatorError
 from crypto_warehouse.fetch_windows import HOUR
 
 NOW = datetime(2026, 8, 3, 14, 27, 41, 123456, tzinfo=UTC)
@@ -44,88 +44,94 @@ class StubCursor:
         return rows
 
 
-def watermark(latest_timestamp, backfill_days=365, *, apply_floor=False):
+def resume_point(latest_timestamp, backfill_days=365, *, extend_to_backfill_days=False):
     cursor = StubCursor([(latest_timestamp,)])
-    return get_watermark(cursor, "BTC-USD", backfill_days, apply_floor=apply_floor, now_utc=NOW)
+    return find_resume_point(
+        cursor,
+        "BTC-USD",
+        backfill_days,
+        extend_to_backfill_days=extend_to_backfill_days,
+        now_utc=NOW,
+    )
 
 
-def test_get_watermark_cold_start_uses_backfill_days():
-    assert watermark(None, backfill_days=90) == NOW_HOUR - timedelta(days=90)
+def test_find_resume_point_cold_start_uses_backfill_days():
+    assert resume_point(None, backfill_days=90) == NOW_HOUR - timedelta(days=90)
 
 
-def test_get_watermark_cold_start_is_hour_aligned():
-    resume_point = watermark(None, backfill_days=7)
+def test_find_resume_point_cold_start_is_hour_aligned():
+    fetch_start = resume_point(None, backfill_days=7)
 
-    assert (resume_point.minute, resume_point.second, resume_point.microsecond) == (0, 0, 0)
-    assert resume_point.tzinfo is UTC
+    assert (fetch_start.minute, fetch_start.second, fetch_start.microsecond) == (0, 0, 0)
+    assert fetch_start.tzinfo is UTC
 
 
-def test_get_watermark_populated_subtracts_the_overlap():
+def test_find_resume_point_populated_subtracts_the_overlap():
     latest_timestamp = datetime(2026, 8, 3, 11, tzinfo=UTC)
 
-    assert watermark(latest_timestamp) == latest_timestamp - timedelta(hours=OVERLAP_HOURS)
+    assert resume_point(latest_timestamp) == latest_timestamp - timedelta(hours=OVERLAP_HOURS)
 
 
-def test_get_watermark_returns_the_resume_point_in_utc_when_max_ts_carries_an_offset():
+def test_find_resume_point_returns_the_resume_point_in_utc_when_max_ts_carries_an_offset():
     # psycopg2 hands a timestamp back in the session's time zone. This one is
     # 11:00 UTC written with a +05:30 offset.
     latest_timestamp = datetime(2026, 8, 3, 16, 30, tzinfo=timezone(timedelta(hours=5, minutes=30)))
 
-    resume_point = watermark(latest_timestamp)
+    fetch_start = resume_point(latest_timestamp)
 
-    assert resume_point == datetime(2026, 8, 3, 11, tzinfo=UTC) - timedelta(hours=OVERLAP_HOURS)
-    assert resume_point.tzinfo is UTC
+    assert fetch_start == datetime(2026, 8, 3, 11, tzinfo=UTC) - timedelta(hours=OVERLAP_HOURS)
+    assert fetch_start.tzinfo is UTC
 
 
 @pytest.mark.parametrize("backfill_days", [1, 90, 365, 3650])
-def test_get_watermark_ignores_backfill_days_on_an_ordinary_run(backfill_days):
+def test_find_resume_point_ignores_backfill_days_on_an_ordinary_run(backfill_days):
     """With no --backfill-days on the command line there is no floor, so a
     routine incremental run re-fetches the overlap and nothing more. If the
     floor were always applied, the 365-day default would send every run back a
     full year."""
     latest_timestamp = NOW_HOUR - timedelta(hours=1)
 
-    assert watermark(latest_timestamp, backfill_days=backfill_days) == latest_timestamp - timedelta(
-        hours=OVERLAP_HOURS
-    )
+    assert resume_point(
+        latest_timestamp, backfill_days=backfill_days
+    ) == latest_timestamp - timedelta(hours=OVERLAP_HOURS)
 
 
-def test_get_watermark_honors_the_backfill_floor():
+def test_find_resume_point_honors_the_backfill_floor():
     """Regression: --backfill-days used to be consulted only when a product had
     no rows at all, so --backfill-days 365 against a 90-day warehouse fetched
     nothing extra and exited 0."""
     latest_timestamp = NOW_HOUR - timedelta(days=90)
 
-    resume_point = watermark(latest_timestamp, backfill_days=365, apply_floor=True)
+    fetch_start = resume_point(latest_timestamp, backfill_days=365, extend_to_backfill_days=True)
 
-    assert resume_point == NOW_HOUR - timedelta(days=365)
+    assert fetch_start == NOW_HOUR - timedelta(days=365)
 
 
-def test_get_watermark_floor_reaches_back_from_a_current_watermark():
+def test_find_resume_point_floor_reaches_back_from_a_current_watermark():
     # An up-to-date warehouse plus an explicit --backfill-days 30 still reaches
     # back 30 days: the flag says "cover at least this much", not "cold start
     # only".
     latest_timestamp = NOW_HOUR - timedelta(hours=1)
 
-    resume_point = watermark(latest_timestamp, backfill_days=30, apply_floor=True)
+    fetch_start = resume_point(latest_timestamp, backfill_days=30, extend_to_backfill_days=True)
 
-    assert resume_point == NOW_HOUR - timedelta(days=30)
+    assert fetch_start == NOW_HOUR - timedelta(days=30)
 
 
-def test_get_watermark_floor_does_not_skip_a_stale_watermark():
+def test_find_resume_point_floor_does_not_skip_a_stale_watermark():
     # Newest row is 500 days old. The floor is 365 days back, but resuming
     # there would leave a 135-day hole, so the older resume point is used.
     latest_timestamp = NOW_HOUR - timedelta(days=500)
 
-    resume_point = watermark(latest_timestamp, backfill_days=365, apply_floor=True)
+    fetch_start = resume_point(latest_timestamp, backfill_days=365, extend_to_backfill_days=True)
 
-    assert resume_point == latest_timestamp - timedelta(hours=OVERLAP_HOURS)
+    assert fetch_start == latest_timestamp - timedelta(hours=OVERLAP_HOURS)
 
 
-def test_get_watermark_queries_the_named_product():
+def test_find_resume_point_queries_the_named_product():
     cursor = StubCursor([(None,)])
 
-    get_watermark(cursor, "SOL-USD", 30, now_utc=NOW)
+    find_resume_point(cursor, "SOL-USD", 30, now_utc=NOW)
 
     (_, params) = cursor.executed[0]
     assert params == ("SOL-USD",)
@@ -151,7 +157,7 @@ def test_resolve_products_named_explicitly_overrides_is_active(caplog):
 def test_resolve_products_rejects_unknown_products():
     cursor = StubCursor([("BTC-USD", True)])
 
-    with pytest.raises(ConfigError) as caught:
+    with pytest.raises(OperatorError) as caught:
         resolve_products(cursor, ["BTC-USD", "XYZ-USD"])
 
     assert "XYZ-USD" in str(caught.value)
@@ -375,7 +381,9 @@ def test_run_ingest_keeps_going_after_a_failed_product_and_rolls_back_before_the
     # Each attempt, with the rollback count the connection showed as it began.
     attempts: list[tuple[str, int]] = []
 
-    def fake_load_product(connection, session, product_code, backfill_days, *, apply_floor=False):
+    def fake_load_product(
+        connection, session, product_code, backfill_days, *, extend_to_backfill_days=False
+    ):
         attempts.append((product_code, connection.rollbacks))
         if product_code == "AAA-USD":
             raise RuntimeError("the first product fails")
@@ -444,7 +452,7 @@ def test_the_upsert_shown_in_the_query_file_carries_the_same_row_checks():
 
 def test_both_promotion_statements_filter_on_the_row_checks():
     checks = " ".join(candle_ingest.CORE_ROW_CHECKS.split())
-    assert f"AND ( {checks} )" in " ".join(candle_ingest.UPSERT_SQL.split())
+    assert f"AND ( {checks} )" in " ".join(candle_ingest.UPSERT_CORE_SQL.split())
     assert f"AND NOT ( {checks} )" in " ".join(candle_ingest.REJECTED_ROWS_SQL.split())
 
 

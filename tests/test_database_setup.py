@@ -38,7 +38,7 @@ class FakeConnection:
 
 def run_marts_only(monkeypatch, *, database=True, schema=True):
     connection = FakeConnection()
-    monkeypatch.setattr(database_setup.database_connection, "load_dsn", lambda: "postgresql://x/y")
+    monkeypatch.setattr(database_setup.database_connection, "load_database_url", lambda: "postgresql://x/y")
     monkeypatch.setattr(
         database_setup.database_connection,
         "connect",

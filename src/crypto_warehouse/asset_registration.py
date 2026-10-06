@@ -16,7 +16,7 @@ import requests
 from psycopg2 import errors as pg_errors
 
 from .coinbase_candles import fetch_window
-from .database_connection import ConfigError
+from .database_connection import OperatorError
 from .fetch_windows import floor_hour
 
 log = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ def parse_product_code(product_code: str) -> tuple[str, str]:
     """Split a product code such as 'XRP-USD' into ('XRP', 'USD'), uppercased and
     with surrounding whitespace removed.
 
-    Raises ConfigError for anything not of the form BASE-QUOTE.
+    Raises OperatorError for anything not of the form BASE-QUOTE.
     """
     # Lowercase is normalized, not rejected, because Coinbase treats codes
     # case-insensitively and the seeded codes are uppercase.
@@ -41,7 +41,7 @@ def parse_product_code(product_code: str) -> tuple[str, str]:
     # Checked here because the API answers a malformed code with a 404, which
     # reads as "no such product" and does not name the actual mistake.
     if len(parts) != 2 or not all(part.isalnum() and part for part in parts):
-        raise ConfigError(
+        raise OperatorError(
             f"{product_code!r} is not a Coinbase product code of the form BASE-QUOTE, e.g. XRP-USD"
         )
     return parts[0], parts[1]
@@ -51,14 +51,14 @@ def probe_product(session: requests.Session, product_code: str) -> int:
     """Fetch the trailing PROBE_HOURS of candles for a product and return how
     many came back.
 
-    Raises ConfigError when the answer holds no candles, and an unknown
+    Raises OperatorError when the answer holds no candles, and an unknown
     product raises the client's HTTPError.
     """
     end = floor_hour(datetime.now(UTC))
     start = end - timedelta(hours=PROBE_HOURS)
     candles = fetch_window(session, product_code, start, end)
     if not candles:
-        raise ConfigError(
+        raise OperatorError(
             f"{product_code}: Coinbase answered but returned no candles in "
             f"the last {PROBE_HOURS} hours; refusing to add a product with "
             "no ingestible history"
@@ -82,7 +82,7 @@ def insert_asset(
 ) -> int:
     """Insert the asset row into core.assets and return its asset_id.
 
-    A symbol or product code that already exists raises ConfigError, because
+    A symbol or product code that already exists raises OperatorError, because
     the insert never updates an existing row.
     """
     # The INSERT has no ON CONFLICT clause, because re-adding an existing
@@ -98,7 +98,7 @@ def insert_asset(
             (symbol, product_code, asset_name, quote_currency),
         )
     except pg_errors.UniqueViolation as error:
-        raise ConfigError(
+        raise OperatorError(
             f"{symbol} / {product_code} collides with an existing row in "
             "core.assets. If the asset was soft-disabled, set "
             "is_active = true instead of re-adding it."

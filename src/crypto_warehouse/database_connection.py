@@ -25,22 +25,22 @@ ENV_FILE = REPO_ROOT / ".env"
 MAINTENANCE_DATABASE = "postgres"
 
 
-class ConfigError(RuntimeError):
+class OperatorError(RuntimeError):
     """Raised for a problem the operator has to fix before the pipeline can run."""
 
 
-def load_dsn() -> str:
+def load_database_url() -> str:
     """Return DATABASE_URL from the environment, falling back to the repo's .env file.
 
     A variable already exported takes precedence over the .env value, and
-    ConfigError is raised when neither source sets it.
+    OperatorError is raised when neither source sets it.
     """
     # Read by absolute path, not by searching upward from the working
     # directory, so the scripts behave the same wherever they are launched.
     load_dotenv(ENV_FILE)
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
-        raise ConfigError(
+        raise OperatorError(
             "DATABASE_URL is not set. Copy .env.example to .env and edit it, "
             "or export DATABASE_URL directly."
         )
@@ -54,7 +54,7 @@ def connect(database_url: str | None = None, *, autocommit: bool = False):
     Pass autocommit=True for statements that cannot run inside a transaction
     block, such as CREATE DATABASE.
     """
-    connection = psycopg2.connect(database_url or load_dsn())
+    connection = psycopg2.connect(database_url or load_database_url())
     connection.autocommit = autocommit
     return connection
 

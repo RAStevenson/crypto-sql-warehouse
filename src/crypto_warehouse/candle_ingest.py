@@ -30,7 +30,7 @@ import requests
 
 from . import database_connection, sql_file_runner
 from .coinbase_candles import GRANULARITY_SECONDS, fetch_window
-from .database_connection import ConfigError
+from .database_connection import OperatorError
 from .fetch_windows import (
     bucket_count,
     floor_hour,
@@ -93,7 +93,7 @@ REJECTED_ROWS_SQL = f"""
     ORDER BY r.bucket_start
 """
 
-UPSERT_SQL = f"""
+UPSERT_CORE_SQL = f"""
     INSERT INTO core.ohlcv_hourly
         (asset_id, ts_utc, open, high, low, close, volume, source_run_id)
     SELECT DISTINCT ON (a.asset_id, r.bucket_start)
@@ -135,7 +135,7 @@ def resolve_products(cursor, requested: list[str] | None) -> list[str]:
     or, with none requested, every active asset.
 
     A requested code is loaded even when inactive, with a warning, and one
-    that is missing from core.assets raises ConfigError.
+    that is missing from core.assets raises OperatorError.
     """
     if requested:
         cursor.execute(
@@ -145,7 +145,7 @@ def resolve_products(cursor, requested: list[str] | None) -> list[str]:
         found = dict(cursor.fetchall())
         missing = sorted(set(requested) - set(found))
         if missing:
-            raise ConfigError(f"not in core.assets: {missing}. Add them there first.")
+            raise OperatorError(f"not in core.assets: {missing}. Add them there first.")
         # A named product is loaded even when inactive, because naming it is a
         # direct instruction and backfilling a delisted asset is a real use.
         inactive = sorted(code for code, active in found.items() if not active)
@@ -160,19 +160,19 @@ def resolve_products(cursor, requested: list[str] | None) -> list[str]:
     return [row[0] for row in cursor.fetchall()]
 
 
-def get_watermark(
+def find_resume_point(
     cursor,
     product_code: str,
     backfill_days: int,
     *,
-    apply_floor: bool = False,
+    extend_to_backfill_days: bool = False,
     now_utc: datetime | None = None,
 ) -> datetime:
     """Return the UTC time this product's fetch should start from.
 
     With no rows it is the current hour minus backfill_days, and with rows it
     is MAX(ts_utc) minus the overlap, or the earlier of that and the backfill
-    point when apply_floor is set.
+    point when extend_to_backfill_days is set.
     """
     # Floored to the hour so the window_start stored in the run record is a
     # bucket boundary.
@@ -193,10 +193,10 @@ def get_watermark(
         return backfill_floor
 
     resume_point = latest_timestamp.astimezone(UTC) - timedelta(hours=OVERLAP_HOURS)
-    # apply_floor is off unless the operator passes --backfill-days. If it
-    # were always on, the default of 365 days would make every ordinary
-    # incremental run re-fetch a full year.
-    return min(resume_point, backfill_floor) if apply_floor else resume_point
+    # extend_to_backfill_days is off unless the operator passes
+    # --backfill-days. If it were always on, the default of 365 days would make
+    # every ordinary incremental run re-fetch a full year.
+    return min(resume_point, backfill_floor) if extend_to_backfill_days else resume_point
 
 
 def _mark_run_failed(connection, run_id: int) -> None:
@@ -294,7 +294,7 @@ def _fetch_into_raw(
                     ],
                 )
             # Committed per window, so a failure late in a long backfill
-            # leaves the fetched windows in raw, where UPSERT_SQL can promote
+            # leaves the fetched windows in raw, where UPSERT_CORE_SQL can promote
             # them under their run_id without another API call.
             connection.commit()
             rows_fetched += len(candles)
@@ -321,7 +321,7 @@ def _promote_to_core(connection, run_id: int, rows_fetched: int) -> int:
                 len(rejected),
                 rejected[0].isoformat(),
             )
-        cursor.execute(UPSERT_SQL, (run_id,))
+        cursor.execute(UPSERT_CORE_SQL, (run_id,))
         rows_upserted = cursor.rowcount
         cursor.execute(
             """
@@ -342,9 +342,9 @@ def load_product(
     product_code: str,
     backfill_days: int,
     *,
-    apply_floor: bool = False,
+    extend_to_backfill_days: bool = False,
 ) -> LoadResult:
-    """Load one product by reading its watermark, fetching into raw, and
+    """Load one product by finding its resume point, fetching into raw, and
     promoting to core, and return a LoadResult.
 
     On any failure, Ctrl+C included, the run row is marked failed and the
@@ -353,7 +353,12 @@ def load_product(
     current_hour = floor_hour(datetime.now(UTC))
 
     with connection.cursor() as cursor:
-        start = get_watermark(cursor, product_code, backfill_days, apply_floor=apply_floor)
+        start = find_resume_point(
+            cursor,
+            product_code,
+            backfill_days,
+            extend_to_backfill_days=extend_to_backfill_days,
+        )
         cursor.execute(
             """
             INSERT INTO raw.ingest_runs
@@ -413,7 +418,7 @@ def run_ingest(
     products: list[str] | None = None,
     backfill_days: int = DEFAULT_BACKFILL_DAYS,
     *,
-    apply_floor: bool = False,
+    extend_to_backfill_days: bool = False,
     refresh: bool = False,
 ) -> int:
     """Load every requested product, refresh the marts when asked, and return a
@@ -439,7 +444,11 @@ def run_ingest(
         for product_code in targets:
             try:
                 load_result = load_product(
-                    connection, session, product_code, backfill_days, apply_floor=apply_floor
+                    connection,
+                    session,
+                    product_code,
+                    backfill_days,
+                    extend_to_backfill_days=extend_to_backfill_days,
                 )
             except Exception as error:
                 failures.append(product_code)

@@ -19,7 +19,7 @@ import logging
 from contextlib import closing
 
 from crypto_warehouse.candle_ingest import refresh_marts
-from crypto_warehouse.database_connection import ConfigError, configure_logging, connect
+from crypto_warehouse.database_connection import OperatorError, configure_logging, connect
 
 log = logging.getLogger("run_refresh_marts")
 
@@ -37,7 +37,7 @@ def main() -> int:
     try:
         with closing(connect()) as connection:
             refresh_marts(connection)
-    except (ConfigError, FileNotFoundError) as error:
+    except (OperatorError, FileNotFoundError) as error:
         log.error("%s", error)
         return 2
     log.info("marts refreshed")

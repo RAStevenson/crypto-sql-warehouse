@@ -21,7 +21,7 @@ import requests
 
 log = logging.getLogger(__name__)
 
-API_BASE = "https://api.exchange.coinbase.com"
+COINBASE_EXCHANGE_URL = "https://api.exchange.coinbase.com"
 GRANULARITY_SECONDS = 3600
 REQUEST_TIMEOUT_SECONDS = 30
 
@@ -177,7 +177,7 @@ def fetch_window(
     MAX_ATTEMPTS times before a RuntimeError, and any other 4xx raises on the
     first try.
     """
-    url = f"{API_BASE}/products/{product_code}/candles"
+    url = f"{COINBASE_EXCHANGE_URL}/products/{product_code}/candles"
     query_parameters = {
         "granularity": GRANULARITY_SECONDS,
         "start": window_start.isoformat(),

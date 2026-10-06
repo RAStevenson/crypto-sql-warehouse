@@ -24,11 +24,9 @@ from .database_connection import REPO_ROOT
 from .diversification_metrics import FIGURES_DIR, METRICS_PATH, REPORTS_DIR
 from .sql_file_runner import QUERIES_FILE, SQL_DIR, VERIFY_FILE
 
-METRICS = METRICS_PATH
-FIGURES = FIGURES_DIR
-OUT = REPORTS_DIR / "crypto_warehouse_report.html"
-OUT_PDF = REPORTS_DIR / "crypto_warehouse_report.pdf"
-CHROME = Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe")
+REPORT_HTML_PATH = REPORTS_DIR / "crypto_warehouse_report.html"
+REPORT_PDF_PATH = REPORTS_DIR / "crypto_warehouse_report.pdf"
+CHROME_EXECUTABLE = Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe")
 
 TESTS_DIR = REPO_ROOT / "tests"
 
@@ -220,18 +218,18 @@ REPORT_CSS = """<style>
 </style>"""
 
 
-def img(name: str) -> str:
+def figure_data_uri(name: str) -> str:
     """Return a PNG from reports/figures as a base64 data URI."""
-    encoded_png = base64.b64encode((FIGURES / name).read_bytes()).decode("ascii")
+    encoded_png = base64.b64encode((FIGURES_DIR / name).read_bytes()).decode("ascii")
     return f"data:image/png;base64,{encoded_png}"
 
 
-def pct(fraction: float, places: int = 1) -> str:
+def format_percent(fraction: float, places: int = 1) -> str:
     """Return a fraction formatted as a percentage with the given decimal places."""
     return f"{100 * fraction:.{places}f}%"
 
 
-SMALL_NUMBERS = {
+NUMBER_WORDS = {
     1: "One",
     2: "Two",
     3: "Three",
@@ -245,14 +243,14 @@ SMALL_NUMBERS = {
 }
 
 
-def spell(count: int, capital: bool = True) -> str:
+def number_word(count: int, capital: bool = True) -> str:
     """Return a count from 1 to 10 as a word, capitalized unless capital is
     False, and any other count as digits."""
-    word = SMALL_NUMBERS.get(count, str(count))
+    word = NUMBER_WORDS.get(count, str(count))
     return word if capital else word.lower()
 
 
-def listing(items: list[str], conjunction: str = "and") -> str:
+def join_with_conjunction(items: list[str], conjunction: str = "and") -> str:
     """Return the items joined by commas, with a conjunction before the last one."""
     if not items:
         return ""
@@ -263,15 +261,15 @@ def listing(items: list[str], conjunction: str = "and") -> str:
     return ", ".join(items[:-1]) + f", {conjunction} {items[-1]}"
 
 
-def emit_pdf(html_path: Path = OUT, pdf_path: Path = OUT_PDF) -> bool:
+def emit_pdf(html_path: Path = REPORT_HTML_PATH, pdf_path: Path = REPORT_PDF_PATH) -> bool:
     """Print the HTML report to PDF with headless Chrome and return True, or
     return False when Chrome is not at its default path."""
-    if not CHROME.exists():
+    if not CHROME_EXECUTABLE.exists():
         print("Chrome not found: skipping PDF (open the HTML and print to PDF manually)")
         return False
     subprocess.run(
         [
-            str(CHROME),
+            str(CHROME_EXECUTABLE),
             "--headless=new",
             "--disable-gpu",
             "--no-pdf-header-footer",
@@ -292,9 +290,11 @@ def build_report() -> None:
     Exits with a message when metrics.json is missing or when a figure or
     table is not cited from the body prose.
     """
-    if not METRICS.exists():
-        raise SystemExit(f"{METRICS} not found; run scripts/run_diversification_analysis.py first")
-    metrics = json.loads(METRICS.read_text(encoding="utf-8"))
+    if not METRICS_PATH.exists():
+        raise SystemExit(
+            f"{METRICS_PATH} not found; run scripts/run_diversification_analysis.py first"
+        )
+    metrics = json.loads(METRICS_PATH.read_text(encoding="utf-8"))
     panel, assets = metrics["panel"], metrics["assets"]
     correlation, diversification, provenance = (
         metrics["correlation"],
@@ -306,7 +306,7 @@ def build_report() -> None:
     n_tests = count_tests()
     n_queries = count_queries()
     n_checks = count_checks()
-    symbols = listing(panel["symbols"])
+    symbols = join_with_conjunction(panel["symbols"])
     n_days, n_assets = panel["n_days"], panel["n_assets"]
 
     close_path = metrics["close_path"]
@@ -422,7 +422,7 @@ their correlations differ by more than about {interval_width:.3f}, so this check
 supports the figure's ordering only between pairs that far apart. Beyond that, what survives is
 that the whole block sits high."""
 
-    def verb(count: int, singular: str, plural: str) -> str:
+    def singular_or_plural(count: int, singular: str, plural: str) -> str:
         """Return the singular wording when count is 1 and the plural otherwise."""
         return singular if count == 1 else plural
 
@@ -440,17 +440,17 @@ that the whole block sits high."""
     exclusion_reasons = [
         (
             len(partial_dates),
-            verb(len(partial_dates), "has", "have")
-            + f" at least one partial bar ({listing(partial_dates)})",
+            singular_or_plural(len(partial_dates), "has", "have")
+            + f" at least one partial bar ({join_with_conjunction(partial_dates)})",
         ),
         (
             n_unshared_dates,
-            verb(n_unshared_dates, "is a date", "are dates")
+            singular_or_plural(n_unshared_dates, "is a date", "are dates")
             + " on which not every asset has a daily bar",
         ),
         (
             n_dates_after_excluded,
-            verb(
+            singular_or_plural(
                 n_dates_after_excluded,
                 "is a complete day with no complete day directly before it, so it has",
                 "are complete days with no complete day directly before them, so they have",
@@ -461,7 +461,7 @@ that the whole block sits high."""
     exclusion_reasons = [(count, text) for count, text in exclusion_reasons if count]
     excluded_count = (
         f"Of {provenance['observed_dates']} observed dates, {n_dropped} "
-        f"{verb(n_dropped, 'is', 'are')} excluded"
+        f"{singular_or_plural(n_dropped, 'is', 'are')} excluded"
     )
     # True only when this run's history is shorter than a default first load,
     # so the sentence is left out of a report rendered from a full one.
@@ -477,18 +477,19 @@ that the whole block sits high."""
     elif len(exclusion_reasons) == 1:
         # One reason covers every excluded date, so the count is not repeated.
         exclusion_sentence = (
-            f"{excluded_count}. {verb(n_dropped, 'It', 'They')} {exclusion_reasons[0][1]}."
+            f"{excluded_count}. {singular_or_plural(n_dropped, 'It', 'They')} "
+            f"{exclusion_reasons[0][1]}."
         )
     else:
         exclusion_sentence = (
             f"{excluded_count}: "
-            + listing([f"{count} {text}" for count, text in exclusion_reasons])
+            + join_with_conjunction([f"{count} {text}" for count, text in exclusion_reasons])
             + "."
         )
 
     asset_rows = "\n".join(
         f"<tr><td>{asset['symbol']}</td><td>{asset['annualized_volatility']:.3f}</td>"
-        f"<td>{pct(asset['max_drawdown'])}</td><td>{asset['total_log_return']:+.3f}</td></tr>"
+        f"<td>{format_percent(asset['max_drawdown'])}</td><td>{asset['total_log_return']:+.3f}</td></tr>"
         for asset in sorted(assets, key=lambda asset: -asset["annualized_volatility"])
     )
 
@@ -506,7 +507,7 @@ that the whole block sits high."""
     html = f"""<article>
 <header class="titleblock">
   <p class="doctype">Analytical Report</p>
-  <h1>Diversification Across {spell(n_assets)} Major Crypto Assets</h1>
+  <h1>Diversification Across {number_word(n_assets)} Major Crypto Assets</h1>
   <p class="subtitle">How much volatility an equal-weight holding actually
   removes, measured over {n_days} complete trading days</p>
   <table class="meta">
@@ -526,9 +527,9 @@ that the whole block sits high."""
 
 <p>Holding several assets instead of one reduces risk only to the extent that
 those assets move independently. This report measures how much of that
-reduction {spell(n_assets, capital=False)} major crypto assets actually
+reduction {number_word(n_assets, capital=False)} major crypto assets actually
 deliver. The assets are {symbols}, all USD spot pairs from a single exchange.
-The portfolio holds them in equal weight, {pct(diversification["weight_per_asset"], 2)}
+The portfolio holds them in equal weight, {format_percent(diversification["weight_per_asset"], 2)}
 each.</p>
 
 <p>The reason to measure it rather than assume it is that the usual case for
@@ -546,19 +547,19 @@ states how the panel is built and section 5 states what it cannot support.</p>
 <p>On this panel the equal-weight portfolio has an annualized volatility of
 {diversification["equal_weight_portfolio_vol"]:.4f}, against
 {diversification["average_single_asset_vol"]:.4f} for the average single asset. That is
-{pct(diversification["risk_removed_actual"])} of the volatility removed. If the same
+{format_percent(diversification["risk_removed_actual"])} of the volatility removed. If the same
 {n_assets} assets had kept their variances with zero correlation between
 them, the portfolio would have come out at
 {diversification["zero_correlation_vol"]:.4f}, removing
-{pct(diversification["risk_removed_if_uncorrelated"])}. The portfolio captures
-{pct(diversification["diversification_captured"])} of the reduction that independence
+{format_percent(diversification["risk_removed_if_uncorrelated"])}. The portfolio captures
+{format_percent(diversification["diversification_captured"])} of the reduction that independence
 between the same {n_assets} assets would have given.</p>
 
 <p>Two caveats belong with that number rather than after it. The panel is
 {n_days} days, short enough that {ordering_caveat}. And Figure 3 shows all
 {n_assets} assets falling together, each at least
-{pct(shallowest_drawdown)} below its peak, so the
-{pct(diversification["risk_removed_actual"])} is measured partly through a joint selloff,
+{format_percent(shallowest_drawdown)} below its peak, so the
+{format_percent(diversification["risk_removed_actual"])} is measured partly through a joint selloff,
 which is when correlations are widely reported to run highest. Section 5
 gives both in full.</p>
 </section>
@@ -617,7 +618,7 @@ any name. What remains is {n_days} days from {panel["first_date"]} to
 particular pair happened to share, lets different entries of the matrix
 describe different periods. A matrix assembled that way is not guaranteed to be
 positive semidefinite, and the portfolio variance it produces can come out
-negative. Dropping {n_dropped} {verb(n_dropped, "date", "dates")} for everyone is the
+negative. Dropping {n_dropped} {singular_or_plural(n_dropped, "date", "dates")} for everyone is the
 cheaper problem.</p>
 
 <h3>2.4 Returns, annualization, and covariance</h3>
@@ -633,7 +634,7 @@ compared with published ones.</p>
 and holidays, so a year holds 365 return observations. The square root of 252
 that equity work uses counts exchange sessions, and a market with no sessions
 off does not have 252 of them. Annualizing this data on 252 would report every
-volatility in this report about {pct(equity_understatement, 0)} lower than it
+volatility in this report about {format_percent(equity_understatement, 0)} lower than it
 is.</p>
 
 <p>The covariance matrix is the sample covariance of the same daily log
@@ -666,14 +667,15 @@ report uses them.</p>
 
 <p>All {correlation["n_pairs"]} pairs sit between {correlation["off_diagonal_min"]:.3f} and
 {correlation["off_diagonal_max"]:.3f}, averaging {correlation["off_diagonal_mean"]:.3f}. The
-least correlated pair is {listing(correlation["least_correlated_pair"])} at
+least correlated pair is {join_with_conjunction(correlation["least_correlated_pair"])} at
 {correlation["off_diagonal_min"]:.3f} and the most correlated is
-{listing(correlation["most_correlated_pair"])} at {correlation["off_diagonal_max"]:.3f}. There is no
+{join_with_conjunction(
+correlation["most_correlated_pair"])} at {correlation["off_diagonal_max"]:.3f}. There is no
 pair in this set that a portfolio could lean on for independence. Figure 1
 shows the matrix as a heatmap, and Table 1 gives its values.</p>
 
 <figure>
-  <img src="{img("correlation_heatmap.png")}"
+  <img src="{figure_data_uri("correlation_heatmap.png")}"
        alt="Pairwise correlation heatmap for the {n_assets} assets">
   <figcaption><strong>Figure 1.</strong> Pairwise correlation of daily log
   returns over the {n_days}-day panel. The color axis runs from
@@ -705,7 +707,7 @@ portfolio has to beat, because it is what an investor holding one of these
 names at random would have had.</p>
 
 <figure>
-  <img src="{img("asset_volatility.png")}" alt="Annualized volatility by asset, sorted">
+  <img src="{figure_data_uri("asset_volatility.png")}" alt="Annualized volatility by asset, sorted">
   <figcaption><strong>Figure 2.</strong> Annualized volatility per asset,
   sorted, with the {diversification["average_single_asset_vol"]:.3f} average marked. The
   assets are not interchangeable in risk terms.
@@ -735,12 +737,12 @@ together and rebound together, and the differences between them are mostly depth
 than timing.</p>
 
 <figure>
-  <img src="{img("drawdown_curves.png")}"
+  <img src="{figure_data_uri("drawdown_curves.png")}"
        alt="Drawdown from running peak for all {n_assets} assets">
   <figcaption><strong>Figure 3.</strong> Each asset's drawdown from its own
   running peak, all on one axis. The assets fall together and rebound
   together. The deepest drawdown is
-  {pct(worst_drawdown["max_drawdown"])}, for {worst_drawdown["symbol"]}.</figcaption>
+  {format_percent(worst_drawdown["max_drawdown"])}, for {worst_drawdown["symbol"]}.</figcaption>
 </figure>
 
 <h3>3.4 The diversification result</h3>
@@ -748,17 +750,17 @@ than timing.</p>
 <p>Equal weights on the {n_days}-day covariance matrix give an annualized
 portfolio volatility of {diversification["equal_weight_portfolio_vol"]:.4f}. The average
 single asset had {diversification["average_single_asset_vol"]:.4f}, so the basket
-removed {pct(diversification["risk_removed_actual"])} of the volatility. Holding the same
+removed {format_percent(diversification["risk_removed_actual"])} of the volatility. Holding the same
 {n_assets} variances with every correlation set to zero would have given
 {diversification["zero_correlation_vol"]:.4f}, a reduction of
-{pct(diversification["risk_removed_if_uncorrelated"])}. The ratio of the two,
-{pct(diversification["diversification_captured"])}, is the share of the available
+{format_percent(diversification["risk_removed_if_uncorrelated"])}. The ratio of the two,
+{format_percent(diversification["diversification_captured"])}, is the share of the available
 diversification these assets actually delivered. Figure 4 puts the three
 volatilities side by side, and Table 3 lists them with the two reductions and
 their ratio.</p>
 
 <figure>
-  <img src="{img("diversification.png")}"
+  <img src="{figure_data_uri("diversification.png")}"
        alt="Average single-asset, equal-weight portfolio, and zero-correlation volatility">
   <figcaption><strong>Figure 4.</strong> Three annualized volatilities: on the
   left the average of holding one of these assets, in the middle the
@@ -781,11 +783,11 @@ their ratio.</p>
     <tr><td>Same variances, zero correlation</td>
       <td>{diversification["zero_correlation_vol"]:.4f}</td></tr>
     <tr><td>Risk removed by the portfolio</td>
-      <td>{pct(diversification["risk_removed_actual"])}</td></tr>
+      <td>{format_percent(diversification["risk_removed_actual"])}</td></tr>
     <tr><td>Risk removable at zero correlation</td>
-      <td>{pct(diversification["risk_removed_if_uncorrelated"])}</td></tr>
+      <td>{format_percent(diversification["risk_removed_if_uncorrelated"])}</td></tr>
     <tr class="highlight"><td>Share of available diversification captured</td>
-      <td>{pct(diversification["diversification_captured"])}</td></tr>
+      <td>{format_percent(diversification["diversification_captured"])}</td></tr>
   </tbody>
 </table>
 </section>
@@ -794,12 +796,12 @@ their ratio.</p>
 <h2>4. What this means in practice</h2>
 
 <p>Spreading a holding across these {n_assets} names removed
-{pct(diversification["risk_removed_actual"])} of its volatility. Counting names is
+{format_percent(diversification["risk_removed_actual"])} of its volatility. Counting names is
 therefore close to useless as a risk control here. Independence between the
 same {n_assets} assets would have removed
-{pct(diversification["risk_removed_if_uncorrelated"])}, so the shortfall sits in the
+{format_percent(diversification["risk_removed_if_uncorrelated"])}, so the shortfall sits in the
 correlations and not in the number or the size of the positions. The
-actual correlations deliver {pct(diversification["diversification_captured"])} of that
+actual correlations deliver {format_percent(diversification["diversification_captured"])} of that
 available reduction.
 An equal-weight basket of equally correlated assets converges toward the
 average volatility times the square root of the mean correlation. That limit is
@@ -832,7 +834,7 @@ correlation of {correlation["off_diagonal_mean"]:.3f} has a 95% Fisher interval 
 observations, a width of {interval_width:.3f}. Fisher's method keeps the interval
 inside -1 to 1 and accurate for correlations as high as these. The entire spread between the
 least and most correlated pair in Figure 1 is {pair_spread:.3f}, so the
-uncertainty on any one correlation is about {pct(interval_to_spread, 0)} as wide as
+uncertainty on any one correlation is about {format_percent(interval_to_spread, 0)} as wide as
 the range the heatmap is showing. {ordering_finding}</p>
 
 <p>The data covers one exchange and one quote currency. All candles come from
@@ -847,13 +849,15 @@ selloffs. This is the limitation that matters most for how the diversification
 result should be read, because a selloff is when diversification is being
 asked to do something. This panel cannot test that pattern on its own. It
 holds one deep joint decline, visible in Figure 3, in which every asset fell at
-least {pct(shallowest_drawdown)} below its peak, and one such decline is too little
+least {format_percent(shallowest_drawdown)} below its peak, and one such decline is too little
 to measure how correlation inside a selloff differs from correlation outside
-one. The {pct(diversification["risk_removed_actual"])} is therefore a reading taken partly
+one. The {format_percent(
+diversification["risk_removed_actual"])} is therefore a reading taken partly
 through a stressed market. If correlations do rise in selloffs, the days
 outside the decline lowered the measured correlation below its selloff
 level, so the
-{pct(diversification["risk_removed_actual"])} is more likely to be optimistic than conservative
+{format_percent(
+diversification["risk_removed_actual"])} is more likely to be optimistic than conservative
 as a forecast for the next selloff.</p>
 
 <p>Drawdown is measured only over the days this report covers.
@@ -874,7 +878,7 @@ The w'Cw calculation also assumes the weights stay at
 transaction costs, funding, borrow, or slippage are modeled anywhere in this
 report.</p>
 
-<p>{spell(n_assets)} assets is not the market. These are large-cap
+<p>{number_word(n_assets)} assets is not the market. These are large-cap
 USD spot pairs, which is one corner of one asset class. I picked them for
 coverage and liquidity when I built the warehouse. They are not a sample of
 anything. A result about {symbols} is a result about those {n_assets} names on
@@ -962,8 +966,11 @@ PostgreSQL {provenance["server_version"]}.</p>
         if not holds:
             print(f"warning: no longer true on this data, reword by hand: {condition}")
 
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(html, encoding="utf-8")
-    print(f"wrote {OUT} ({OUT.stat().st_size / 1024:.0f} KB, self-contained)")
+    REPORT_HTML_PATH.parent.mkdir(parents=True, exist_ok=True)
+    REPORT_HTML_PATH.write_text(html, encoding="utf-8")
+    print(
+        f"wrote {REPORT_HTML_PATH} "
+        f"({REPORT_HTML_PATH.stat().st_size / 1024:.0f} KB, self-contained)"
+    )
     if emit_pdf():
-        print(f"wrote {OUT_PDF} ({OUT_PDF.stat().st_size / 1024:.0f} KB)")
+        print(f"wrote {REPORT_PDF_PATH} ({REPORT_PDF_PATH.stat().st_size / 1024:.0f} KB)")
