@@ -36,7 +36,7 @@ import numpy as np
 
 from .database_connection import REPO_ROOT, connect
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 REPORTS_DIR = REPO_ROOT / "reports"
 FIGURES_DIR = REPORTS_DIR / "figures"
@@ -140,7 +140,7 @@ class ClosePath:
     closes: np.ndarray
 
 
-def build_panel(rows: list[tuple[datetime.date, str, float]]) -> ReturnPanel:
+def build_return_panel(rows: list[tuple[datetime.date, str, float]]) -> ReturnPanel:
     """Build a ReturnPanel from (date, symbol, log_return) rows, keeping only the dates
     on which every symbol in the input has a return.
 
@@ -185,7 +185,7 @@ def build_panel(rows: list[tuple[datetime.date, str, float]]) -> ReturnPanel:
     if len(set(starts.values())) > 1 or len(set(ends.values())) > 1:
         latest_start = max(starts, key=lambda symbol: starts[symbol])
         earliest_end = min(ends, key=lambda symbol: ends[symbol])
-        log.warning(
+        logger.warning(
             "assets do not share one history: returns start as late as %s (%s) and "
             "end as early as %s (%s); the panel keeps only the dates all %d share",
             starts[latest_start],
@@ -276,7 +276,7 @@ def correlation_matrix(returns: np.ndarray) -> np.ndarray:
     return np.corrcoef(returns, rowvar=False)
 
 
-def off_diagonal(matrix: np.ndarray) -> np.ndarray:
+def off_diagonal_entries(matrix: np.ndarray) -> np.ndarray:
     """The entries of a square matrix that are not on its diagonal."""
     mask = ~np.eye(matrix.shape[0], dtype=bool)
     return matrix[mask]
@@ -413,7 +413,7 @@ def panel_metrics(panel: ReturnPanel, close_path: ClosePath) -> dict:
     drawdowns = max_drawdown(close_changes)
     total_log_returns = close_changes.sum(axis=0)
     correlations = correlation_matrix(returns)
-    off_diagonal_values = off_diagonal(correlations)
+    off_diagonal_values = off_diagonal_entries(correlations)
 
     # Which pair is least and which is most correlated, named rather than left as
     # bare numbers the reader has to look for in the matrix.
@@ -541,7 +541,7 @@ def run_diversification_analysis(
     from . import report_figures
 
     with closing(connect()) as connection:
-        panel = build_panel(fetch_returns(connection))
+        panel = build_return_panel(fetch_returns(connection))
         close_path = build_close_path(fetch_closes(connection), panel)
         metrics = panel_metrics(panel, close_path)
         metrics["provenance"] = fetch_provenance(connection, panel)
@@ -552,7 +552,7 @@ def run_diversification_analysis(
         .isoformat()
         .replace("+00:00", "Z")
     )
-    log.info(
+    logger.info(
         "panel: %d complete days, %s to %s, %d assets",
         panel.n_days,
         metrics["panel"]["first_date"],
@@ -563,9 +563,9 @@ def run_diversification_analysis(
     figures_dir.mkdir(parents=True, exist_ok=True)
     figure_paths = report_figures.write_figures(panel, close_path, metrics, figures_dir)
     for path in figure_paths:
-        log.info("wrote %s", path)
+        logger.info("wrote %s", path)
 
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     metrics_path.write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
-    log.info("wrote %s", metrics_path)
+    logger.info("wrote %s", metrics_path)
     return metrics

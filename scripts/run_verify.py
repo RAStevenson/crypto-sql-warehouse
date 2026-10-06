@@ -19,7 +19,7 @@ import logging
 from crypto_warehouse.database_connection import OperatorError, configure_logging
 from crypto_warehouse.warehouse_verification import run_verify
 
-log = logging.getLogger("run_verify")
+logger = logging.getLogger("run_verify")
 
 
 def main() -> int:
@@ -35,7 +35,7 @@ def main() -> int:
     try:
         return run_verify()
     except (OperatorError, FileNotFoundError) as error:
-        log.error("%s", error)
+        logger.error("%s", error)
         return 2
 
 

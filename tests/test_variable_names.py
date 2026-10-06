@@ -4,7 +4,7 @@ name, or instance attribute outside a closed list of conventions."""
 import ast
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_DIRS = ("src", "scripts", "tests")
 # X and y: a model's input matrix and target. ax: one matplotlib axes.
 # i, j: an integer loop counter. Nothing else is allowed short.
@@ -31,7 +31,7 @@ def _short_names(path):
     """Return one 'file:line name' string per short name bound in the
     file at path that is not on the allowed list."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    relative_path = path.relative_to(ROOT).as_posix()
+    relative_path = path.relative_to(REPO_ROOT).as_posix()
     flagged = set()
     for line, name in _bound_names(tree):
         stripped_name = name.strip("_")
@@ -43,7 +43,7 @@ def _short_names(path):
 
 def test_every_name_says_what_it_holds():
     flagged = [entry for folder in SOURCE_DIRS
-               for path in sorted((ROOT / folder).rglob("*.py"))
+               for path in sorted((REPO_ROOT / folder).rglob("*.py"))
                for entry in _short_names(path)]
     assert not flagged, ("short names (python-repo-layout, variable names):\n  "
                          + "\n  ".join(flagged))

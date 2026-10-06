@@ -19,7 +19,7 @@ from crypto_warehouse.candle_ingest import (
 )
 from crypto_warehouse.coinbase_candles import Candle
 from crypto_warehouse.database_connection import OperatorError
-from crypto_warehouse.fetch_windows import HOUR
+from crypto_warehouse.fetch_windows import ONE_HOUR
 
 NOW = datetime(2026, 8, 3, 14, 27, 41, 123456, tzinfo=UTC)
 NOW_HOUR = NOW.replace(minute=0, second=0, microsecond=0)
@@ -72,7 +72,7 @@ def test_find_resume_point_populated_subtracts_the_overlap():
     assert resume_point(latest_timestamp) == latest_timestamp - timedelta(hours=OVERLAP_HOURS)
 
 
-def test_find_resume_point_returns_the_resume_point_in_utc_when_max_ts_carries_an_offset():
+def test_find_resume_point_converts_an_offset_timestamp_to_utc():
     # psycopg2 hands a timestamp back in the session's time zone. This one is
     # 11:00 UTC written with a +05:30 offset.
     latest_timestamp = datetime(2026, 8, 3, 16, 30, tzinfo=timezone(timedelta(hours=5, minutes=30)))
@@ -231,15 +231,15 @@ def raw_writes(monkeypatch):
     execute_values instead of sending them."""
     captured: list[tuple[str, list[tuple]]] = []
 
-    def record(cursor, sql, rows):
+    def record_execute_values(cursor, sql, rows):
         captured.append((" ".join(sql.split()), list(rows)))
 
     monkeypatch.setattr(candle_ingest.time, "sleep", lambda seconds: None)
-    monkeypatch.setattr(candle_ingest.psycopg2.extras, "execute_values", record)
+    monkeypatch.setattr(candle_ingest.psycopg2.extras, "execute_values", record_execute_values)
     return captured
 
 
-def serve(monkeypatch, candles):
+def serve_candles(monkeypatch, candles):
     """Make fetch_window answer every window with the same candles."""
 
     def fake_fetch_window(session, product_code, window_start, window_end):
@@ -256,12 +256,14 @@ def flat_candle(bucket_start):
 def window_of_300_without(missing_offsets):
     """A full 300-hour window from WINDOW_START, less the hours at the given
     offsets."""
-    return [flat_candle(WINDOW_START + i * HOUR) for i in range(300) if i not in missing_offsets]
+    return [
+        flat_candle(WINDOW_START + i * ONE_HOUR) for i in range(300) if i not in missing_offsets
+    ]
 
 
 def fetch_300_hour_window(connection):
     return candle_ingest._fetch_into_raw(
-        connection, None, "BTC-USD", 42, WINDOW_START, WINDOW_START + 300 * HOUR
+        connection, None, "BTC-USD", 42, WINDOW_START, WINDOW_START + 300 * ONE_HOUR
     )
 
 
@@ -275,11 +277,11 @@ def test_fetch_into_raw_writes_each_candle_to_raw_in_ddl_column_order(monkeypatc
         close=Decimal("3.3"),
         volume=Decimal("5.5"),
     )
-    serve(monkeypatch, [candle])
+    serve_candles(monkeypatch, [candle])
     connection = FakeConnection()
 
     rows_fetched, _ = candle_ingest._fetch_into_raw(
-        connection, None, "BTC-USD", 42, WINDOW_START, WINDOW_START + HOUR
+        connection, None, "BTC-USD", 42, WINDOW_START, WINDOW_START + ONE_HOUR
     )
 
     ((sql, rows),) = raw_writes
@@ -303,7 +305,7 @@ def test_fetch_into_raw_writes_each_candle_to_raw_in_ddl_column_order(monkeypatc
 def test_fetch_into_raw_counts_a_window_missing_six_consecutive_hours_of_300_as_short(
     monkeypatch, raw_writes, caplog
 ):
-    serve(monkeypatch, window_of_300_without(range(100, 106)))
+    serve_candles(monkeypatch, window_of_300_without(range(100, 106)))
 
     with caplog.at_level("WARNING"):
         rows_fetched, short_windows = fetch_300_hour_window(FakeConnection())
@@ -312,13 +314,13 @@ def test_fetch_into_raw_counts_a_window_missing_six_consecutive_hours_of_300_as_
     assert rows_fetched == 294
     (warning,) = [record for record in caplog.records if record.levelname == "WARNING"]
     assert "missing 6 of 300 buckets" in warning.getMessage()
-    assert (WINDOW_START + 100 * HOUR).isoformat() in warning.getMessage()
+    assert (WINDOW_START + 100 * ONE_HOUR).isoformat() in warning.getMessage()
 
 
 def test_fetch_into_raw_does_not_count_a_window_missing_two_isolated_hours_of_300_as_short(
     monkeypatch, raw_writes, caplog
 ):
-    serve(monkeypatch, window_of_300_without({50, 200}))
+    serve_candles(monkeypatch, window_of_300_without({50, 200}))
 
     with caplog.at_level("WARNING"):
         rows_fetched, short_windows = fetch_300_hour_window(FakeConnection())
@@ -329,11 +331,11 @@ def test_fetch_into_raw_does_not_count_a_window_missing_two_isolated_hours_of_30
 
 
 def test_fetch_into_raw_drops_candles_outside_the_requested_window(monkeypatch, raw_writes, caplog):
-    current_hour = WINDOW_START + 3 * HOUR
-    inside = [flat_candle(WINDOW_START + i * HOUR) for i in range(3)]
-    before_the_window = flat_candle(WINDOW_START - HOUR)
+    current_hour = WINDOW_START + 3 * ONE_HOUR
+    inside = [flat_candle(WINDOW_START + i * ONE_HOUR) for i in range(3)]
+    before_the_window = flat_candle(WINDOW_START - ONE_HOUR)
     forming_hour = flat_candle(current_hour)
-    serve(monkeypatch, [before_the_window, *inside, forming_hour])
+    serve_candles(monkeypatch, [before_the_window, *inside, forming_hour])
 
     with caplog.at_level("WARNING"):
         rows_fetched, short_windows = candle_ingest._fetch_into_raw(
@@ -407,10 +409,10 @@ def test_run_ingest_keeps_going_after_a_failed_product_and_rolls_back_before_the
 # --------------------------------------------------------------------------
 # promotion to core, and the rows it leaves in raw
 # --------------------------------------------------------------------------
-REPO = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def conditions(sql_text: str) -> set[str]:
+def split_sql_conditions(sql_text: str) -> set[str]:
     """The individual comparisons in a block of AND-ed conditions, with the
     raw alias and repeated spaces removed so two spellings compare equal."""
     flat_text = " ".join(sql_text.replace("r.", "").split())
@@ -419,12 +421,12 @@ def conditions(sql_text: str) -> set[str]:
 
 def core_check_constraints() -> set[str]:
     """Every CHECK comparison the DDL declares on core.ohlcv_hourly."""
-    ddl = (REPO / "sql" / "01_schema.sql").read_text(encoding="utf-8")
-    table = ddl[ddl.index("CREATE TABLE core.ohlcv_hourly") :]
+    schema_sql = (REPO_ROOT / "sql" / "01_schema.sql").read_text(encoding="utf-8")
+    table = schema_sql[schema_sql.index("CREATE TABLE core.ohlcv_hourly") :]
     table = table[: table.index(");")]
     found: set[str] = set()
     for body in re.findall(r"CHECK \(([^()]*)\)", table):
-        found |= conditions(body)
+        found |= split_sql_conditions(body)
     return found
 
 
@@ -438,16 +440,16 @@ def test_core_row_checks_repeat_every_check_constraint_on_the_core_table():
         "low <= close",
         "low > 0",
     }
-    assert conditions(candle_ingest.CORE_ROW_CHECKS) == core_check_constraints()
+    assert split_sql_conditions(candle_ingest.CORE_ROW_CHECKS) == core_check_constraints()
 
 
 def test_the_upsert_shown_in_the_query_file_carries_the_same_row_checks():
-    queries = (REPO / "sql" / "04_queries.sql").read_text(encoding="utf-8")
+    queries = (REPO_ROOT / "sql" / "04_queries.sql").read_text(encoding="utf-8")
     query_20 = queries[queries.index("-- Q20 ") :]
     statement = "\n".join(line for line in query_20.splitlines() if not line.startswith("--"))
     where_clause = statement[statement.index("status = 'succeeded')") : statement.index("ORDER BY")]
-    shown = conditions(where_clause.split("AND", 1)[1])
-    assert shown == conditions(candle_ingest.CORE_ROW_CHECKS)
+    shown = split_sql_conditions(where_clause.split("AND", 1)[1])
+    assert shown == split_sql_conditions(candle_ingest.CORE_ROW_CHECKS)
 
 
 def test_both_promotion_statements_filter_on_the_row_checks():
@@ -458,7 +460,7 @@ def test_both_promotion_statements_filter_on_the_row_checks():
 
 def test_promote_to_core_warns_about_rows_core_would_reject_and_still_promotes(caplog):
     connection = FakeConnection()
-    connection.batches = [[(WINDOW_START,), (WINDOW_START + HOUR,)]]
+    connection.batches = [[(WINDOW_START,), (WINDOW_START + ONE_HOUR,)]]
 
     with caplog.at_level("WARNING"):
         candle_ingest._promote_to_core(connection, run_id=7, rows_fetched=5)

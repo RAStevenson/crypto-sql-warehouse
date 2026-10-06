@@ -32,10 +32,10 @@ from crypto_warehouse.candle_ingest import DEFAULT_BACKFILL_DAYS, USER_AGENT, ru
 from crypto_warehouse.coinbase_candles import CandlePayloadError
 from crypto_warehouse.database_connection import OperatorError, configure_logging, connect
 
-log = logging.getLogger("run_add_asset")
+logger = logging.getLogger("run_add_asset")
 
 
-def positive_int(value: str) -> int:
+def positive_day_count(value: str) -> int:
     """Return a command-line value as a whole number of days, raising an argparse
     error when it is below 1."""
     number = int(value)
@@ -64,7 +64,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--backfill-days",
-        type=positive_int,
+        type=positive_day_count,
         default=None,
         help=f"Depth of the initial load in days (default {DEFAULT_BACKFILL_DAYS})",
     )
@@ -100,8 +100,8 @@ def main() -> int:
         except OperatorError:
             raise
         except (requests.RequestException, RuntimeError, CandlePayloadError):
-            log.error("%s: the Coinbase probe failed", product_code, exc_info=True)
-            log.error(
+            logger.error("%s: the Coinbase probe failed", product_code, exc_info=True)
+            logger.error(
                 "%s was not registered and nothing was written; check the product code "
                 "and rerun",
                 product_code,
@@ -118,13 +118,13 @@ def main() -> int:
                     quote_currency=quote_currency,
                 )
             connection.commit()
-        log.info("%s registered as asset_id %d (symbol %s)", product_code, asset_id, symbol)
+        logger.info("%s registered as asset_id %d (symbol %s)", product_code, asset_id, symbol)
     except OperatorError as error:
-        log.error("%s", error)
+        logger.error("%s", error)
         return 2
 
     if args.no_backfill:
-        log.info("registered without backfill; the next ingest run loads %s", product_code)
+        logger.info("registered without backfill; the next ingest run loads %s", product_code)
         return 0
 
     exit_code = run_ingest(
@@ -134,7 +134,7 @@ def main() -> int:
         refresh=True,
     )
     if exit_code != 0:
-        log.error(
+        logger.error(
             "%s is registered but its backfill did not finish. Finish it with: "
             "python scripts/run_ingest.py --products %s --backfill-days %d",
             product_code,

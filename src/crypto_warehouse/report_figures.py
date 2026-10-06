@@ -35,7 +35,7 @@ DRAWDOWN_CURVES_FILENAME = "drawdown_curves.png"
 DIVERSIFICATION_FILENAME = "diversification.png"
 
 
-def apply_style() -> None:
+def apply_figure_style() -> None:
     """Set the matplotlib defaults that every figure shares."""
     plt.rcParams.update(
         {
@@ -89,7 +89,7 @@ def correlation_heatmap(
     from the metrics so that the image and the report's caption state the same
     range.
     """
-    apply_style()
+    apply_figure_style()
     n_symbols = len(symbols)
     # The scale covers the observed off-diagonal range, because on -1 to 1
     # every cell would render in nearly the same tone. The diagonal is masked
@@ -141,7 +141,7 @@ def volatility_bars(
 ) -> Path:
     """Draw each asset's annualized volatility as sorted bars with the average
     marked, save the figure, and return the path."""
-    apply_style()
+    apply_figure_style()
     order = np.argsort(volatilities)
     labels = [symbols[i] for i in order]
     values = volatilities[order]
@@ -188,7 +188,7 @@ def drawdown_curves(
 ) -> Path:
     """Draw every asset's drawdown from its running peak on one axis, save the
     figure, and return the path."""
-    apply_style()
+    apply_figure_style()
     # The dates are the close path's own, starting at the close the first
     # return is measured from, so they line up with the path row for row.
     plot_dates = np.array(dates, dtype="datetime64[D]")
@@ -221,7 +221,7 @@ def drawdown_curves(
 def diversification_bars(diversification: dict, path: Path) -> Path:
     """Draw the average single-asset, equal-weight, and zero-correlation
     volatilities as three bars, save the figure, and return the path."""
-    apply_style()
+    apply_figure_style()
     labels = [
         "average single asset",
         "equal-weight portfolio",

@@ -19,7 +19,7 @@ from typing import NamedTuple
 
 import requests
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 COINBASE_EXCHANGE_URL = "https://api.exchange.coinbase.com"
 GRANULARITY_SECONDS = 3600
@@ -31,7 +31,7 @@ MAX_ATTEMPTS = 5
 # front of the exchange returns when the origin is slow. All are worth another
 # try. Every other 4xx (404 on an unknown product, 400 on a bad window) is a
 # bug in the request and retrying it just wastes time.
-RETRY_STATUSES = frozenset({408, 429}) | frozenset(range(500, 600))
+RETRY_HTTP_STATUSES = frozenset({408, 429}) | frozenset(range(500, 600))
 # A response cut off mid-body raises ChunkedEncodingError, which is neither a
 # ConnectionError nor a Timeout in requests' hierarchy and has to be named.
 RETRY_EXCEPTIONS = (
@@ -191,7 +191,7 @@ def fetch_window(
         except RETRY_EXCEPTIONS as error:
             last_error = error
             delay = _backoff_seconds(attempt)
-            log.warning(
+            logger.warning(
                 "%s: %s on attempt %d/%d, retrying in %.1fs",
                 product_code,
                 type(error).__name__,
@@ -200,7 +200,7 @@ def fetch_window(
                 delay,
             )
         else:
-            if response.status_code not in RETRY_STATUSES:
+            if response.status_code not in RETRY_HTTP_STATUSES:
                 response.raise_for_status()
                 # parse_float=Decimal is what keeps the numeric columns exact.
                 # Without it every price would round-trip through a binary
@@ -218,7 +218,7 @@ def fetch_window(
                 delay = _retry_after_seconds(response)
             if delay is None:
                 delay = _backoff_seconds(attempt)
-            log.warning(
+            logger.warning(
                 "%s: HTTP %d on attempt %d/%d, retrying in %.1fs",
                 product_code,
                 response.status_code,

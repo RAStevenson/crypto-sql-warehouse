@@ -36,7 +36,7 @@ from crypto_warehouse.diversification_metrics import (
 )
 from crypto_warehouse.report_generator import build_report
 
-log = logging.getLogger("run_diversification_analysis")
+logger = logging.getLogger("run_diversification_analysis")
 
 
 def main() -> int:
@@ -65,32 +65,32 @@ def main() -> int:
     try:
         metrics = run_diversification_analysis(Path(args.metrics), Path(args.figures))
     except OperatorError as error:
-        log.error("%s", error)
+        logger.error("%s", error)
         return 2
     except psycopg2.OperationalError:
-        log.error("could not reach the database", exc_info=True)
-        log.error(
+        logger.error("could not reach the database", exc_info=True)
+        logger.error(
             "nothing was written; start the server or fix DATABASE_URL in .env, then rerun"
         )
         return 1
     except psycopg2.errors.UndefinedTable:
-        log.error("a warehouse table is missing", exc_info=True)
-        log.error(
+        logger.error("a warehouse table is missing", exc_info=True)
+        logger.error(
             "nothing was written; run scripts/run_setup.py and scripts/run_ingest.py first"
         )
         return 1
     except PanelDataError as error:
-        log.error("%s", error)
-        log.error("nothing was written")
+        logger.error("%s", error)
+        logger.error("nothing was written")
         return 1
 
     diversification = metrics["diversification"]
-    log.info(
+    logger.info(
         "equal-weight portfolio vol %.4f against average single-asset vol %.4f",
         diversification["equal_weight_portfolio_vol"],
         diversification["average_single_asset_vol"],
     )
-    log.info(
+    logger.info(
         "risk removed %.1f%% of the %.1f%% removable at zero correlation (%.1f%% captured)",
         100 * diversification["risk_removed_actual"],
         100 * diversification["risk_removed_if_uncorrelated"],
@@ -98,7 +98,7 @@ def main() -> int:
     )
 
     if args.no_report:
-        log.info("report skipped; render it with: python scripts/run_build_report.py")
+        logger.info("report skipped; render it with: python scripts/run_build_report.py")
     elif (
         Path(args.metrics).resolve() != METRICS_PATH.resolve()
         or Path(args.figures).resolve() != FIGURES_DIR.resolve()
@@ -106,7 +106,7 @@ def main() -> int:
         # The report builder reads the default metrics file and the default
         # figures directory. Rendering after writing either one elsewhere
         # would pair new numbers with old figures, or the reverse.
-        log.info(
+        logger.info(
             "report not built: the report builder reads %s and %s, and this run wrote "
             "%s and %s",
             METRICS_PATH,
@@ -122,8 +122,8 @@ def main() -> int:
         try:
             build_report()
         except (Exception, SystemExit):
-            log.error("the report build failed", exc_info=True)
-            log.error(
+            logger.error("the report build failed", exc_info=True)
+            logger.error(
                 "the metrics and figures were written, but the report was not; fix the "
                 "cause above and rerun python scripts/run_build_report.py"
             )

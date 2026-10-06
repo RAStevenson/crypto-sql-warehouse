@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Collection, Iterator
 from datetime import UTC, datetime, timedelta
 
-HOUR = timedelta(hours=1)
+ONE_HOUR = timedelta(hours=1)
 
 # The candles endpoint refuses a request whose start/end span more than this
 # many buckets. Both bounds are inclusive, so 300 buckets is a 299-hour span.
@@ -34,7 +34,7 @@ def bucket_count(window_start: datetime, window_end: datetime) -> int:
     """How many hourly buckets a window asks for, both bounds inclusive."""
     if window_end < window_start:
         return 0
-    return int((window_end - window_start) // HOUR) + 1
+    return int((window_end - window_start) // ONE_HOUR) + 1
 
 
 def missing_buckets(
@@ -42,7 +42,7 @@ def missing_buckets(
 ) -> list[datetime]:
     """The hourly buckets of the inclusive window that present lacks, in time order."""
     held = set(present)
-    wanted = (window_start + i * HOUR for i in range(bucket_count(window_start, window_end)))
+    wanted = (window_start + i * ONE_HOUR for i in range(bucket_count(window_start, window_end)))
     return [bucket for bucket in wanted if bucket not in held]
 
 
@@ -51,7 +51,9 @@ def longest_consecutive_run(buckets: list[datetime]) -> int:
     longest = current_run = 0
     previous = None
     for bucket in buckets:
-        current_run = current_run + 1 if previous is not None and bucket - previous == HOUR else 1
+        current_run = (
+            current_run + 1 if previous is not None and bucket - previous == ONE_HOUR else 1
+        )
         longest = max(longest, current_run)
         previous = bucket
     return longest
@@ -77,10 +79,10 @@ def iter_windows(
     window_start = floor_hour(start)
     # current_hour is still forming, so the last bucket requested is the hour
     # before it.
-    last_bucket = floor_hour(current_hour) - HOUR
-    span = (max_candles - 1) * HOUR
+    last_bucket = floor_hour(current_hour) - ONE_HOUR
+    span = (max_candles - 1) * ONE_HOUR
 
     while window_start <= last_bucket:
         window_end = min(window_start + span, last_bucket)
         yield window_start, window_end
-        window_start = window_end + HOUR
+        window_start = window_end + ONE_HOUR

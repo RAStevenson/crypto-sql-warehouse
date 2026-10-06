@@ -20,12 +20,12 @@ import pytest
 from crypto_warehouse import diversification_metrics, warehouse_verification
 from crypto_warehouse.database_connection import OperatorError
 
-SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
+SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 
 
 def load_script(name: str):
     """Import a script from scripts/ by path, as a module of its own."""
-    spec = importlib.util.spec_from_file_location(f"script_{name}", SCRIPTS / f"{name}.py")
+    spec = importlib.util.spec_from_file_location(f"script_{name}", SCRIPTS_DIR / f"{name}.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -58,7 +58,7 @@ def fake_metrics() -> dict:
     }
 
 
-def test_analysis_reports_an_unreachable_database_with_its_traceback(
+def test_analysis_script_reports_an_unreachable_database_with_its_traceback(
     analysis_script, monkeypatch, caplog
 ):
     def refuse(*args, **kwargs):
@@ -76,7 +76,7 @@ def test_analysis_reports_an_unreachable_database_with_its_traceback(
     assert "DATABASE_URL" in errors[-1].getMessage()
 
 
-def test_analysis_reports_missing_tables_and_says_to_run_setup(
+def test_analysis_script_reports_missing_tables_and_says_to_run_setup(
     analysis_script, monkeypatch, caplog
 ):
     def missing(*args, **kwargs):
@@ -92,7 +92,7 @@ def test_analysis_reports_missing_tables_and_says_to_run_setup(
     assert "run_setup.py" in errors[-1].getMessage()
 
 
-def test_analysis_reports_thin_data_and_says_nothing_was_written(
+def test_analysis_script_reports_thin_data_and_says_nothing_was_written(
     analysis_script, monkeypatch, caplog
 ):
     def thin(*args, **kwargs):
@@ -116,7 +116,7 @@ def test_analysis_reports_thin_data_and_says_nothing_was_written(
     ],
     ids=["KeyError", "ValueError", "other database error"],
 )
-def test_analysis_lets_an_unexpected_error_through(analysis_script, monkeypatch, unexpected):
+def test_analysis_script_lets_an_unexpected_error_through(analysis_script, monkeypatch, unexpected):
     def fail(*args, **kwargs):
         raise unexpected
 

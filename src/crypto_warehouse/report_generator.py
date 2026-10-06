@@ -31,7 +31,7 @@ CHROME_EXECUTABLE = Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe
 TESTS_DIR = REPO_ROOT / "tests"
 
 
-def count_tests() -> int:
+def count_test_functions() -> int:
     """Return the number of test functions in tests/, counted from the files on disk."""
     return sum(
         line.lstrip().startswith("def test_")
@@ -40,7 +40,7 @@ def count_tests() -> int:
     )
 
 
-def count_queries() -> int:
+def count_annotated_queries() -> int:
     """Return the number of numbered queries in sql/04_queries.sql, or 0 when the
     file is missing."""
     path = SQL_DIR / QUERIES_FILE
@@ -52,7 +52,7 @@ def count_queries() -> int:
     )
 
 
-def count_checks() -> int:
+def count_verify_checks() -> int:
     """Return the number of DO blocks in sql/05_verify.sql, or 0 when the file is
     missing.
 
@@ -261,7 +261,9 @@ def join_with_conjunction(items: list[str], conjunction: str = "and") -> str:
     return ", ".join(items[:-1]) + f", {conjunction} {items[-1]}"
 
 
-def emit_pdf(html_path: Path = REPORT_HTML_PATH, pdf_path: Path = REPORT_PDF_PATH) -> bool:
+def print_report_to_pdf(
+    html_path: Path = REPORT_HTML_PATH, pdf_path: Path = REPORT_PDF_PATH
+) -> bool:
     """Print the HTML report to PDF with headless Chrome and return True, or
     return False when Chrome is not at its default path."""
     if not CHROME_EXECUTABLE.exists():
@@ -303,9 +305,9 @@ def build_report() -> None:
     )
     mart_correlations = provenance["mart_correlations_90d"]
 
-    n_tests = count_tests()
-    n_queries = count_queries()
-    n_checks = count_checks()
+    n_tests = count_test_functions()
+    n_queries = count_annotated_queries()
+    n_checks = count_verify_checks()
     symbols = join_with_conjunction(panel["symbols"])
     n_days, n_assets = panel["n_days"], panel["n_assets"]
 
@@ -972,5 +974,5 @@ PostgreSQL {provenance["server_version"]}.</p>
         f"wrote {REPORT_HTML_PATH} "
         f"({REPORT_HTML_PATH.stat().st_size / 1024:.0f} KB, self-contained)"
     )
-    if emit_pdf():
+    if print_report_to_pdf():
         print(f"wrote {REPORT_PDF_PATH} ({REPORT_PDF_PATH.stat().st_size / 1024:.0f} KB)")

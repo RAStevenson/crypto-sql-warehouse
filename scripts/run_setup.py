@@ -28,7 +28,7 @@ import logging
 from crypto_warehouse.database_connection import OperatorError, configure_logging
 from crypto_warehouse.database_setup import run_setup
 
-log = logging.getLogger("run_setup")
+logger = logging.getLogger("run_setup")
 
 
 def main() -> int:
@@ -58,7 +58,7 @@ def main() -> int:
     try:
         return run_setup(reset=args.reset, marts_only=args.rebuild_marts)
     except (OperatorError, FileNotFoundError) as error:
-        log.error("%s", error)
+        logger.error("%s", error)
         return 2
 
 
