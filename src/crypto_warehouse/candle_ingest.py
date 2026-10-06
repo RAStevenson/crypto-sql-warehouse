@@ -239,9 +239,10 @@ def _fetch_into_raw(
         # forming hour, and a candle outside the window would otherwise count
         # toward the completeness check below.
         candles = [
-            c
-            for c in fetched
-            if window_start <= c.bucket_start <= window_end and c.bucket_start < current_hour
+            candle
+            for candle in fetched
+            if window_start <= candle.bucket_start <= window_end
+            and candle.bucket_start < current_hour
         ]
         if len(candles) != len(fetched):
             log.warning(
@@ -253,7 +254,9 @@ def _fetch_into_raw(
             )
 
         expected = bucket_count(window_start, window_end)
-        missing = missing_buckets(window_start, window_end, {c.bucket_start for c in candles})
+        missing = missing_buckets(
+            window_start, window_end, {candle.bucket_start for candle in candles}
+        )
         longest_gap = longest_consecutive_run(missing)
         if longest_gap >= GAP_WARNING_HOURS or (
             missing and len(missing) >= max(1, int(expected * SHORT_WINDOW_TOLERANCE))
@@ -280,14 +283,14 @@ def _fetch_into_raw(
                         (
                             run_id,
                             product_code,
-                            c.bucket_start,
-                            c.open,
-                            c.high,
-                            c.low,
-                            c.close,
-                            c.volume,
+                            candle.bucket_start,
+                            candle.open,
+                            candle.high,
+                            candle.low,
+                            candle.close,
+                            candle.volume,
                         )
-                        for c in candles
+                        for candle in candles
                     ],
                 )
             # Committed per window, so a failure late in a long backfill

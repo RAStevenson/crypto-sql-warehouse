@@ -226,9 +226,9 @@ def img(name: str) -> str:
     return f"data:image/png;base64,{data}"
 
 
-def pct(x: float, places: int = 1) -> str:
+def pct(fraction: float, places: int = 1) -> str:
     """Return a fraction formatted as a percentage with the given decimal places."""
-    return f"{100 * x:.{places}f}%"
+    return f"{100 * fraction:.{places}f}%"
 
 
 SMALL_NUMBERS = {
@@ -245,10 +245,10 @@ SMALL_NUMBERS = {
 }
 
 
-def spell(n: int, capital: bool = True) -> str:
+def spell(count: int, capital: bool = True) -> str:
     """Return a count from 1 to 10 as a word, capitalized unless capital is
     False, and any other count as digits."""
-    word = SMALL_NUMBERS.get(n, str(n))
+    word = SMALL_NUMBERS.get(count, str(count))
     return word if capital else word.lower()
 
 
@@ -294,9 +294,9 @@ def build_report() -> None:
     """
     if not METRICS.exists():
         raise SystemExit(f"{METRICS} not found; run scripts/run_diversification_analysis.py first")
-    m = json.loads(METRICS.read_text(encoding="utf-8"))
-    panel, assets = m["panel"], m["assets"]
-    corr, div, prov = m["correlation"], m["diversification"], m["provenance"]
+    metrics = json.loads(METRICS.read_text(encoding="utf-8"))
+    panel, assets = metrics["panel"], metrics["assets"]
+    corr, div, prov = metrics["correlation"], metrics["diversification"], metrics["provenance"]
     mart = prov["mart_correlations_90d"]
 
     n_tests = count_tests()
@@ -305,7 +305,7 @@ def build_report() -> None:
     symbols = listing(panel["symbols"])
     n_days, n_assets = panel["n_days"], panel["n_assets"]
 
-    close_path = m["close_path"]
+    close_path = metrics["close_path"]
 
     # sqrt(252) is the equity convention. How far it would move these numbers
     # is arithmetic on the two day counts, not a remembered figure.
@@ -314,9 +314,9 @@ def build_report() -> None:
     # The least volatile single asset, for the practical comparison in
     # section 4. Read from the metrics rather than named in the prose, because
     # a reload could change which asset it is.
-    least_volatile = min(assets, key=lambda a: a["annualized_volatility"])
-    most_volatile = max(assets, key=lambda a: a["annualized_volatility"])
-    worst_dd = min(assets, key=lambda a: a["max_drawdown"])
+    least_volatile = min(assets, key=lambda asset: asset["annualized_volatility"])
+    most_volatile = max(assets, key=lambda asset: asset["annualized_volatility"])
+    worst_dd = min(assets, key=lambda asset: asset["max_drawdown"])
     vol_ratio = (
         most_volatile["annualized_volatility"] / least_volatile["annualized_volatility"]
     )
@@ -325,7 +325,7 @@ def build_report() -> None:
     # hold whichever way the window ended: every asset fell at least this far
     # below its own peak. That the falls happened together is what Figure 3
     # shows, and the prose cites the figure for it.
-    shallowest_drawdown = -max(a["max_drawdown"] for a in assets)
+    shallowest_drawdown = -max(asset["max_drawdown"] for asset in assets)
 
     # Some sentences state qualitative facts as literals that no placeholder
     # can update, and they hold for the recorded run. Each one computable from
@@ -361,29 +361,32 @@ def build_report() -> None:
     # Section 4 compares the least volatile asset with the basket. Compare at
     # the precision printed, adding places until the two values differ, so the
     # sentence never prints two equal numbers as one above the other.
-    lv, ew = least_volatile["annualized_volatility"], div["equal_weight_portfolio_vol"]
+    least_volatile_vol, basket_vol = (
+        least_volatile["annualized_volatility"],
+        div["equal_weight_portfolio_vol"],
+    )
     places = 3
-    while round(lv, places) == round(ew, places) and places < 6:
+    while round(least_volatile_vol, places) == round(basket_vol, places) and places < 6:
         places += 1
-    if round(lv, places) < round(ew, places):
+    if round(least_volatile_vol, places) < round(basket_vol, places):
         least_volatile_paragraph = f"""<p>The sharper version of the same point is in Table 2.
-{least_volatile["symbol"]} alone had a volatility of {lv:.{places}f},
-which is below the equal-weight basket's {ew:.{places}f}. Over this window,
+{least_volatile["symbol"]} alone had a volatility of {least_volatile_vol:.{places}f},
+which is below the equal-weight basket's {basket_vol:.{places}f}. Over this window,
 spreading into the other {n_assets - 1} names raised volatility rather than
 lowering it, because the diversification benefit was smaller than the extra
 variance those names brought with them. Equal weight assumes the assets are
 interchangeable, and on this evidence they are not.</p>"""
-    elif round(lv, places) > round(ew, places):
+    elif round(least_volatile_vol, places) > round(basket_vol, places):
         least_volatile_paragraph = f"""<p>Table 2 gives the per-asset figures. The least
 volatile asset, {least_volatile["symbol"]}, had a volatility of
-{lv:.{places}f}, above the equal-weight basket's {ew:.{places}f}. Over this
+{least_volatile_vol:.{places}f}, above the equal-weight basket's {basket_vol:.{places}f}. Over this
 window, spreading into the other {n_assets - 1} names lowered volatility below
 even the least volatile asset, by
-{round(lv, places) - round(ew, places):.{places}f}.</p>"""
+{round(least_volatile_vol, places) - round(basket_vol, places):.{places}f}.</p>"""
     else:
         least_volatile_paragraph = f"""<p>Table 2 gives the per-asset figures. The least
 volatile asset, {least_volatile["symbol"]}, had a volatility of
-{lv:.{places}f}, the same as the equal-weight basket to {places} decimal
+{least_volatile_vol:.{places}f}, the same as the equal-weight basket to {places} decimal
 places. Over this window, spreading into the other {n_assets - 1} names
 neither raised nor lowered volatility relative to it.</p>"""
 
@@ -415,9 +418,9 @@ their correlations differ by more than about {ci_width:.3f}, so this check
 supports the figure's ordering only between pairs that far apart. Beyond that, what survives is
 that the whole block sits high."""
 
-    def verb(n: int, singular: str, plural: str) -> str:
-        """Return the singular wording when n is 1 and the plural otherwise."""
-        return singular if n == 1 else plural
+    def verb(count: int, singular: str, plural: str) -> str:
+        """Return the singular wording when count is 1 and the plural otherwise."""
+        return singular if count == 1 else plural
 
     # Why each excluded date is out, read from the analysis rather than
     # inferred by subtraction, so the sentence stays true when an asset joins
@@ -451,7 +454,7 @@ that the whole block sits high."""
             + " no one-day return (section 2.2)",
         ),
     ]
-    exclusion_reasons = [(n, text) for n, text in exclusion_reasons if n]
+    exclusion_reasons = [(count, text) for count, text in exclusion_reasons if count]
     excluded_count = (
         f"Of {prov['observed_dates']} observed dates, {n_dropped} "
         f"{verb(n_dropped, 'is', 'are')} excluded"
@@ -475,17 +478,17 @@ that the whole block sits high."""
     else:
         exclusion_sentence = (
             f"{excluded_count}: "
-            + listing([f"{n} {text}" for n, text in exclusion_reasons])
+            + listing([f"{count} {text}" for count, text in exclusion_reasons])
             + "."
         )
 
     asset_rows = "\n".join(
-        f"<tr><td>{a['symbol']}</td><td>{a['annualized_volatility']:.3f}</td>"
-        f"<td>{pct(a['max_drawdown'])}</td><td>{a['total_log_return']:+.3f}</td></tr>"
-        for a in sorted(assets, key=lambda a: -a["annualized_volatility"])
+        f"<tr><td>{asset['symbol']}</td><td>{asset['annualized_volatility']:.3f}</td>"
+        f"<td>{pct(asset['max_drawdown'])}</td><td>{asset['total_log_return']:+.3f}</td></tr>"
+        for asset in sorted(assets, key=lambda asset: -asset["annualized_volatility"])
     )
 
-    corr_header = "".join(f"<th>{s}</th>" for s in corr["symbols"])
+    corr_header = "".join(f"<th>{symbol}</th>" for symbol in corr["symbols"])
     corr_rows = "\n".join(
         f"<tr><td>{sym}</td>"
         + "".join(
@@ -923,7 +926,7 @@ standalone against a loaded database.</p>
 <p>Rerunning the ingestion loads whatever the exchange has published since,
 which moves the panel's end date and every number here.{fresh_load_sentence} The figures in this
 document are the ones produced by the run recorded in
-<code>reports/metrics.json</code>, generated {m["generated_at_utc"]} against
+<code>reports/metrics.json</code>, generated {metrics["generated_at_utc"]} against
 PostgreSQL {prov["server_version"]}.</p>
 </section>
 
@@ -944,9 +947,9 @@ PostgreSQL {prov["server_version"]}.</p>
     # counting, so a mention in a caption does not count as a citation.
     body = re.sub(r"<(fig)?caption>.*?</(fig)?caption>", "", html, flags=re.S)
     uncited = [
-        f"{kind} {n}"
-        for kind, n in re.findall(r"<strong>(Figure|Table) (\d+)\.</strong>", html)
-        if not re.search(rf"\b{kind} {n}\b", body)
+        f"{kind} {number}"
+        for kind, number in re.findall(r"<strong>(Figure|Table) (\d+)\.</strong>", html)
+        if not re.search(rf"\b{kind} {number}\b", body)
     ]
     if uncited:
         raise SystemExit("not cited from body prose: " + ", ".join(uncited))

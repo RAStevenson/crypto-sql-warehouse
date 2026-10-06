@@ -33,7 +33,7 @@ def load_script(name: str):
 
 
 def error_records(caplog) -> list[logging.LogRecord]:
-    return [r for r in caplog.records if r.levelno >= logging.ERROR]
+    return [record for record in caplog.records if record.levelno >= logging.ERROR]
 
 
 # --------------------------------------------------------------------------
@@ -97,7 +97,7 @@ def test_analysis_reports_thin_data_and_says_nothing_was_written(analysis, monke
     with caplog.at_level(logging.ERROR):
         assert analysis.main() == 1
 
-    messages = [r.getMessage() for r in error_records(caplog)]
+    messages = [record.getMessage() for record in error_records(caplog)]
     assert messages == ["no non-null log returns found", "nothing was written"]
 
 
@@ -196,7 +196,7 @@ def test_a_probe_that_finds_no_candles_prints_its_own_message(add_asset, monkeyp
     with caplog.at_level(logging.ERROR):
         assert add_asset.main() == 2
 
-    messages = [r.getMessage() for r in error_records(caplog)]
+    messages = [record.getMessage() for record in error_records(caplog)]
     assert messages == ["XRP-USD: Coinbase answered but returned no candles"]
 
 
@@ -244,7 +244,7 @@ def test_a_failed_check_prints_the_server_report_then_the_summary(monkeypatch, c
         )
 
     assert exit_code == 1
-    messages = [r.getMessage() for r in error_records(caplog)]
+    messages = [record.getMessage() for record in error_records(caplog)]
     assert messages[0].startswith("full server report:")
     assert messages[-1].startswith("verification FAILED: gap check failed")
     assert "did not run" in messages[-1]
