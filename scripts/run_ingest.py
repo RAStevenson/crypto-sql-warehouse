@@ -24,8 +24,6 @@ import logging
 from crypto_warehouse.candle_ingest import DEFAULT_BACKFILL_DAYS, run_ingest
 from crypto_warehouse.database_connection import OperatorError, configure_logging
 
-logger = logging.getLogger("run_ingest")
-
 
 def positive_day_count(value: str) -> int:
     """Return a command-line value as a whole number of days, raising an argparse
@@ -36,8 +34,9 @@ def positive_day_count(value: str) -> int:
     return number
 
 
-def main() -> int:
-    """Parse the command line, run the ingest, and return a process exit code."""
+def main() -> None:
+    """Parse the command line, run the ingest, and exit with a process exit code."""
+    logger = logging.getLogger("run_ingest")
     parser = argparse.ArgumentParser(
         prog="run_ingest.py",
         description="Incremental, idempotent OHLCV ingestion from Coinbase Exchange.",
@@ -84,16 +83,16 @@ def main() -> int:
     backfill_days = args.backfill_days if args.backfill_days is not None else DEFAULT_BACKFILL_DAYS
 
     try:
-        return run_ingest(
+        sys.exit(run_ingest(
             products=args.products,
             backfill_days=backfill_days,
             extend_to_backfill_days=args.backfill_days is not None,
             refresh=not args.no_refresh_marts,
-        )
+        ))
     except (OperatorError, FileNotFoundError) as error:
         logger.error("%s", error)
-        return 2
+        sys.exit(2)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

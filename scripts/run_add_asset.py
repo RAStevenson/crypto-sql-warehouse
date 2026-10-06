@@ -32,8 +32,6 @@ from crypto_warehouse.candle_ingest import DEFAULT_BACKFILL_DAYS, USER_AGENT, ru
 from crypto_warehouse.coinbase_candles import CandlePayloadError
 from crypto_warehouse.database_connection import OperatorError, configure_logging, connect
 
-logger = logging.getLogger("run_add_asset")
-
 
 def positive_day_count(value: str) -> int:
     """Return a command-line value as a whole number of days, raising an argparse
@@ -44,9 +42,10 @@ def positive_day_count(value: str) -> int:
     return number
 
 
-def main() -> int:
+def main() -> None:
     """Validate the product on Coinbase, register it in core.assets, backfill it
-    unless --no-backfill is passed, and return a process exit code."""
+    unless --no-backfill is passed, and exit with a process exit code."""
+    logger = logging.getLogger("run_add_asset")
     parser = argparse.ArgumentParser(
         prog="run_add_asset.py",
         description="Validate a Coinbase product, register it in core.assets, backfill it.",
@@ -106,7 +105,7 @@ def main() -> int:
                 "and rerun",
                 product_code,
             )
-            return 2
+            sys.exit(2)
 
         with closing(connect()) as connection:
             with connection.cursor() as cursor:
@@ -121,11 +120,11 @@ def main() -> int:
         logger.info("%s registered as asset_id %d (symbol %s)", product_code, asset_id, symbol)
     except OperatorError as error:
         logger.error("%s", error)
-        return 2
+        sys.exit(2)
 
     if args.no_backfill:
         logger.info("registered without backfill; the next ingest run loads %s", product_code)
-        return 0
+        return
 
     exit_code = run_ingest(
         products=[product_code],
@@ -141,8 +140,8 @@ def main() -> int:
             product_code,
             backfill_days,
         )
-    return exit_code
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

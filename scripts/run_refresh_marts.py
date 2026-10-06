@@ -21,11 +21,10 @@ from contextlib import closing
 from crypto_warehouse.candle_ingest import refresh_marts
 from crypto_warehouse.database_connection import OperatorError, configure_logging, connect
 
-logger = logging.getLogger("run_refresh_marts")
 
-
-def main() -> int:
-    """Parse the command line, refresh the marts, and return a process exit code."""
+def main() -> None:
+    """Parse the command line, refresh the marts, and exit with a process exit code."""
+    logger = logging.getLogger("run_refresh_marts")
     parser = argparse.ArgumentParser(
         prog="run_refresh_marts.py",
         description="Refresh the marts layer.",
@@ -39,10 +38,9 @@ def main() -> int:
             refresh_marts(connection)
     except (OperatorError, FileNotFoundError) as error:
         logger.error("%s", error)
-        return 2
+        sys.exit(2)
     logger.info("marts refreshed")
-    return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

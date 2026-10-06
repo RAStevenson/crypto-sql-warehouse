@@ -19,11 +19,10 @@ import logging
 from crypto_warehouse.database_connection import OperatorError, configure_logging
 from crypto_warehouse.warehouse_verification import run_verify
 
-logger = logging.getLogger("run_verify")
 
-
-def main() -> int:
-    """Parse the command line, run the verify script, and return a process exit code."""
+def main() -> None:
+    """Parse the command line, run the verify script, and exit with a process exit code."""
+    logger = logging.getLogger("run_verify")
     parser = argparse.ArgumentParser(
         prog="run_verify.py",
         description="Execute sql/05_verify.sql; nonzero exit if any check fails.",
@@ -33,11 +32,11 @@ def main() -> int:
 
     configure_logging(args.verbose)
     try:
-        return run_verify()
+        sys.exit(run_verify())
     except (OperatorError, FileNotFoundError) as error:
         logger.error("%s", error)
-        return 2
+        sys.exit(2)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
