@@ -28,11 +28,10 @@ import logging
 from crypto_warehouse.database_connection import OperatorError, configure_logging
 from crypto_warehouse.database_setup import run_setup
 
-logger = logging.getLogger("run_setup")
 
-
-def main() -> int:
-    """Parse the command line, run the setup, and return a process exit code."""
+def main() -> None:
+    """Parse the command line, run the setup, and exit with a process exit code."""
+    logger = logging.getLogger("run_setup")
     parser = argparse.ArgumentParser(
         prog="run_setup.py",
         description="Create the database and apply sql/01_schema.sql and sql/02_marts.sql.",
@@ -56,11 +55,11 @@ def main() -> int:
 
     configure_logging(args.verbose)
     try:
-        return run_setup(reset=args.reset, marts_only=args.rebuild_marts)
+        sys.exit(run_setup(reset=args.reset, marts_only=args.rebuild_marts))
     except (OperatorError, FileNotFoundError) as error:
         logger.error("%s", error)
-        return 2
+        sys.exit(2)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

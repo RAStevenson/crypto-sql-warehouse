@@ -67,7 +67,9 @@ def test_analysis_script_reports_an_unreachable_database_with_its_traceback(
     monkeypatch.setattr(analysis_script, "run_diversification_analysis", refuse)
 
     with caplog.at_level(logging.ERROR):
-        assert analysis_script.main() == 1
+        with pytest.raises(SystemExit) as stopped:
+            analysis_script.main()
+        assert stopped.value.code == 1
 
     errors = error_records(caplog)
     assert errors[0].exc_info is not None
@@ -85,7 +87,9 @@ def test_analysis_script_reports_missing_tables_and_says_to_run_setup(
     monkeypatch.setattr(analysis_script, "run_diversification_analysis", missing)
 
     with caplog.at_level(logging.ERROR):
-        assert analysis_script.main() == 1
+        with pytest.raises(SystemExit) as stopped:
+            analysis_script.main()
+        assert stopped.value.code == 1
 
     errors = error_records(caplog)
     assert errors[0].exc_info is not None
@@ -101,7 +105,9 @@ def test_analysis_script_reports_thin_data_and_says_nothing_was_written(
     monkeypatch.setattr(analysis_script, "run_diversification_analysis", thin)
 
     with caplog.at_level(logging.ERROR):
-        assert analysis_script.main() == 1
+        with pytest.raises(SystemExit) as stopped:
+            analysis_script.main()
+        assert stopped.value.code == 1
 
     messages = [record.getMessage() for record in error_records(caplog)]
     assert messages == ["no non-null log returns found", "nothing was written"]
@@ -138,7 +144,9 @@ def test_a_failed_report_build_prints_the_traceback_then_what_was_written(
     monkeypatch.setattr(analysis_script, "build_report", broken_build)
 
     with caplog.at_level(logging.ERROR):
-        assert analysis_script.main() == 1
+        with pytest.raises(SystemExit) as stopped:
+            analysis_script.main()
+        assert stopped.value.code == 1
 
     errors = error_records(caplog)
     assert errors[0].exc_info is not None
@@ -160,7 +168,9 @@ def test_a_report_build_that_exits_with_a_message_is_reported_the_same_way(
     monkeypatch.setattr(analysis_script, "build_report", uncited)
 
     with caplog.at_level(logging.ERROR):
-        assert analysis_script.main() == 1
+        with pytest.raises(SystemExit) as stopped:
+            analysis_script.main()
+        assert stopped.value.code == 1
 
     assert "not cited from body prose: Table 3" in caplog.text
     assert "the metrics and figures were written" in error_records(caplog)[-1].getMessage()
@@ -189,7 +199,9 @@ def test_a_failed_probe_prints_the_traceback_then_says_nothing_was_written(
     monkeypatch.setattr(add_asset_script, "connect", must_not_connect)
 
     with caplog.at_level(logging.ERROR):
-        assert add_asset_script.main() == 2
+        with pytest.raises(SystemExit) as stopped:
+            add_asset_script.main()
+        assert stopped.value.code == 2
 
     errors = error_records(caplog)
     assert errors[0].exc_info is not None
@@ -206,7 +218,9 @@ def test_a_probe_that_finds_no_candles_prints_its_own_message(
     monkeypatch.setattr(add_asset_script, "probe_product", empty)
 
     with caplog.at_level(logging.ERROR):
-        assert add_asset_script.main() == 2
+        with pytest.raises(SystemExit) as stopped:
+            add_asset_script.main()
+        assert stopped.value.code == 2
 
     messages = [record.getMessage() for record in error_records(caplog)]
     assert messages == ["XRP-USD: Coinbase answered but returned no candles"]

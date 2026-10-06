@@ -36,12 +36,11 @@ from crypto_warehouse.diversification_metrics import (
 )
 from crypto_warehouse.report_generator import build_report
 
-logger = logging.getLogger("run_diversification_analysis")
 
-
-def main() -> int:
+def main() -> None:
     """Run the analysis, log the main results, render the report when both
-    output paths are the defaults, and return a process exit code."""
+    output paths are the defaults, and exit with a process exit code."""
+    logger = logging.getLogger("run_diversification_analysis")
     parser = argparse.ArgumentParser(
         prog="run_diversification_analysis.py",
         description=(
@@ -66,23 +65,23 @@ def main() -> int:
         metrics = run_diversification_analysis(Path(args.metrics), Path(args.figures))
     except OperatorError as error:
         logger.error("%s", error)
-        return 2
+        sys.exit(2)
     except psycopg2.OperationalError:
         logger.error("could not reach the database", exc_info=True)
         logger.error(
             "nothing was written; start the server or fix DATABASE_URL in .env, then rerun"
         )
-        return 1
+        sys.exit(1)
     except psycopg2.errors.UndefinedTable:
         logger.error("a warehouse table is missing", exc_info=True)
         logger.error(
             "nothing was written; run scripts/run_setup.py and scripts/run_ingest.py first"
         )
-        return 1
+        sys.exit(1)
     except PanelDataError as error:
         logger.error("%s", error)
         logger.error("nothing was written")
-        return 1
+        sys.exit(1)
 
     diversification = metrics["diversification"]
     logger.info(
@@ -127,9 +126,8 @@ def main() -> int:
                 "the metrics and figures were written, but the report was not; fix the "
                 "cause above and rerun python scripts/run_build_report.py"
             )
-            return 1
-    return 0
+            sys.exit(1)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

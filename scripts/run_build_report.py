@@ -19,8 +19,8 @@ import argparse
 from crypto_warehouse.report_generator import build_report
 
 
-def main() -> int:
-    """Parse the command line, render the report, and return a process exit code."""
+def main() -> None:
+    """Parse the command line and render the report."""
     parser = argparse.ArgumentParser(
         prog="run_build_report.py",
         description="Render the HTML and PDF report from reports/metrics.json and its figures.",
@@ -28,8 +28,7 @@ def main() -> int:
     parser.parse_args()
 
     build_report()
-    return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
