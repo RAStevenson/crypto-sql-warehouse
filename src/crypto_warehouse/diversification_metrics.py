@@ -158,7 +158,7 @@ def build_panel(rows: list[tuple[dt.date, str, float]]) -> Panel:
             f"only {symbols[0]} has returns; a diversification analysis needs at "
             "least two active assets"
         )
-    dates = sorted(d for d, obs in by_date.items() if len(obs) == len(symbols))
+    dates = sorted(trade_date for trade_date, obs in by_date.items() if len(obs) == len(symbols))
     if not dates:
         raise PanelDataError(
             f"no date carries all {len(symbols)} symbols; the panel would be empty"
@@ -166,11 +166,17 @@ def build_panel(rows: list[tuple[dt.date, str, float]]) -> Panel:
 
     # The panel is the intersection of every asset's dates, so one asset with
     # a shorter history shortens it for all. Warn when that happens.
-    starts = {s: min(d for d, obs in by_date.items() if s in obs) for s in symbols}
-    ends = {s: max(d for d, obs in by_date.items() if s in obs) for s in symbols}
+    starts = {
+        symbol: min(trade_date for trade_date, obs in by_date.items() if symbol in obs)
+        for symbol in symbols
+    }
+    ends = {
+        symbol: max(trade_date for trade_date, obs in by_date.items() if symbol in obs)
+        for symbol in symbols
+    }
     if len(set(starts.values())) > 1 or len(set(ends.values())) > 1:
-        latest_start = max(starts, key=lambda s: starts[s])
-        earliest_end = min(ends, key=lambda s: ends[s])
+        latest_start = max(starts, key=lambda symbol: starts[symbol])
+        earliest_end = min(ends, key=lambda symbol: ends[symbol])
         log.warning(
             "assets do not share one history: returns start as late as %s (%s) and "
             "end as early as %s (%s); the panel keeps only the dates all %d share",
@@ -181,7 +187,10 @@ def build_panel(rows: list[tuple[dt.date, str, float]]) -> Panel:
             len(symbols),
         )
 
-    returns = np.array([[by_date[d][s] for s in symbols] for d in dates], dtype=float)
+    returns = np.array(
+        [[by_date[trade_date][symbol] for symbol in symbols] for trade_date in dates],
+        dtype=float,
+    )
     return Panel(dates=dates, symbols=symbols, returns=returns)
 
 
@@ -197,15 +206,18 @@ def build_close_path(rows: list[tuple[dt.date, str, float]], panel: Panel) -> Cl
     for trade_date, symbol, value in rows:
         by_date[trade_date][symbol] = float(value)
     shared = sorted(
-        d
-        for d, obs in by_date.items()
-        if d <= panel.dates[-1] and all(s in obs for s in panel.symbols)
+        trade_date
+        for trade_date, obs in by_date.items()
+        if trade_date <= panel.dates[-1] and all(symbol in obs for symbol in panel.symbols)
     )
-    before = [d for d in shared if d < panel.dates[0]]
+    before = [trade_date for trade_date in shared if trade_date < panel.dates[0]]
     if not before:
         raise PanelDataError("no complete close precedes the panel's first return")
-    dates = [before[-1], *(d for d in shared if d >= panel.dates[0])]
-    closes = np.array([[by_date[d][s] for s in panel.symbols] for d in dates], dtype=float)
+    dates = [before[-1], *(trade_date for trade_date in shared if trade_date >= panel.dates[0])]
+    closes = np.array(
+        [[by_date[trade_date][symbol] for symbol in panel.symbols] for trade_date in dates],
+        dtype=float,
+    )
     return ClosePath(dates=dates, closes=closes)
 
 
@@ -263,22 +275,24 @@ def off_diagonal(matrix: np.ndarray) -> np.ndarray:
 # metrics, so the caption and the image cannot state different ranges.
 def scale_bounds(values: np.ndarray, step: float = 0.05) -> tuple[float, float]:
     """Return the (low, high) range of the values, rounded outward to multiples of step."""
-    lo = float(np.floor(values.min() / step) * step)
-    hi = float(np.ceil(values.max() / step) * step)
-    return lo, hi
+    low = float(np.floor(values.min() / step) * step)
+    high = float(np.ceil(values.max() / step) * step)
+    return low, high
 
 
-def fisher_interval(r: float, n: int, z: float = 1.959963984540054) -> tuple[float, float]:
-    """Return the two-sided Fisher interval, 95% at the default z, for one Pearson
-    correlation r estimated from n observations.
+def fisher_interval(
+    correlation: float, n_observations: int, z_score: float = 1.959963984540054
+) -> tuple[float, float]:
+    """Return the two-sided Fisher interval, 95% at the default z_score, for one
+    Pearson correlation estimated from n_observations observations.
 
     The interval describes a single pair and is not a joint statement about
-    several pairs, and a ValueError is raised when n is 3 or less.
+    several pairs, and a ValueError is raised when n_observations is 3 or less.
     """
-    if n <= 3:
+    if n_observations <= 3:
         raise ValueError("a Fisher interval needs more than 3 observations")
-    half_width = z / np.sqrt(n - 3)
-    center = np.arctanh(r)
+    half_width = z_score / np.sqrt(n_observations - 3)
+    center = np.arctanh(correlation)
     return float(np.tanh(center - half_width)), float(np.tanh(center + half_width))
 
 
@@ -307,9 +321,9 @@ def portfolio_volatility(covariance: np.ndarray, weights: np.ndarray) -> float:
     return float(np.sqrt(weights @ covariance @ weights))
 
 
-def equal_weights(n: int) -> np.ndarray:
-    """Return a vector of n weights that each equal 1/n."""
-    return np.full(n, 1.0 / n)
+def equal_weights(n_assets: int) -> np.ndarray:
+    """Return a vector of n_assets weights that each equal 1/n_assets."""
+    return np.full(n_assets, 1.0 / n_assets)
 
 
 def diversification(covariance: np.ndarray) -> dict[str, float]:
@@ -319,8 +333,8 @@ def diversification(covariance: np.ndarray) -> dict[str, float]:
     The references are the average single-asset volatility and the volatility
     of the same variances with every correlation set to zero.
     """
-    n = covariance.shape[0]
-    weights = equal_weights(n)
+    n_assets = covariance.shape[0]
+    weights = equal_weights(n_assets)
     asset_vols = np.sqrt(np.diag(covariance))
     portfolio_vol = portfolio_volatility(covariance, weights)
     average_vol = float(asset_vols.mean())
@@ -332,11 +346,11 @@ def diversification(covariance: np.ndarray) -> dict[str, float]:
     risk_removed_if_uncorrelated = 1.0 - independent_vol / average_vol
 
     # For equal volatilities sigma and a shared correlation rho, equal-weight
-    # variance is sigma^2 * (1/n + (1 - 1/n) * rho), so volatility tends to
-    # sigma * sqrt(rho) as n grows. The report quotes this limit to show what
-    # adding more names of the same kind could remove.
+    # variance is sigma^2 * (1/n_assets + (1 - 1/n_assets) * rho), so volatility
+    # tends to sigma * sqrt(rho) as n_assets grows. The report quotes this limit
+    # to show what adding more names of the same kind could remove.
     correlation = covariance / np.outer(asset_vols, asset_vols)
-    off_diagonal = correlation[np.triu_indices(n, k=1)]
+    off_diagonal = correlation[np.triu_indices(n_assets, k=1)]
     mean_correlation = float(off_diagonal.mean())
     equicorrelation_limit = average_vol * float(np.sqrt(max(mean_correlation, 0.0)))
 
@@ -366,7 +380,9 @@ def panel_metrics(panel: Panel, close_path: ClosePath) -> dict:
         )
     returns = panel.returns
     vols = annualized_volatility(returns)
-    constant = [s for s, v in zip(panel.symbols, vols, strict=True) if v == 0.0]
+    constant = [
+        symbol for symbol, volatility in zip(panel.symbols, vols, strict=True) if volatility == 0.0
+    ]
     if constant:
         raise PanelDataError(
             f"{', '.join(constant)} did not move over the panel; a correlation with "
@@ -419,7 +435,7 @@ def panel_metrics(panel: Panel, close_path: ClosePath) -> dict:
         ],
         "correlation": {
             "symbols": list(panel.symbols),
-            "matrix": [[float(v) for v in row] for row in corr],
+            "matrix": [[float(coefficient) for coefficient in row] for row in corr],
             "off_diagonal_min": float(off.min()),
             "off_diagonal_max": float(off.max()),
             "off_diagonal_mean": float(off.mean()),
@@ -459,17 +475,21 @@ def fetch_provenance(conn, panel: Panel) -> dict:
         cur.execute(MART_CORRELATION_QUERY)
         c_min, c_max, c_mean, n_pairs, days_min, days_max = cur.fetchone()
     reasons = classify_excluded_dates(observed, panel)
-    excluded = sorted(d for dates in reasons.values() for d in dates)
+    excluded = sorted(trade_date for dates in reasons.values() for trade_date in dates)
     return {
         "ohlcv_hourly_rows": int(hourly),
         "daily_ohlcv_rows": int(daily),
         "incomplete_asset_days": int(incomplete),
         "observed_dates": len(observed),
         "dates_dropped_from_panel": len(excluded),
-        "incomplete_dates": [d.isoformat() for d in reasons["partial_bar"]],
-        "dates_without_every_asset": [d.isoformat() for d in reasons["not_every_asset"]],
-        "dates_after_an_excluded_day": [d.isoformat() for d in reasons["after_excluded_day"]],
-        "excluded_dates": [d.isoformat() for d in excluded],
+        "incomplete_dates": [trade_date.isoformat() for trade_date in reasons["partial_bar"]],
+        "dates_without_every_asset": [
+            trade_date.isoformat() for trade_date in reasons["not_every_asset"]
+        ],
+        "dates_after_an_excluded_day": [
+            trade_date.isoformat() for trade_date in reasons["after_excluded_day"]
+        ],
+        "excluded_dates": [trade_date.isoformat() for trade_date in excluded],
         "assets_loaded": int(assets),
         "server_version": str(server_version),
         "mart_correlations_90d": {

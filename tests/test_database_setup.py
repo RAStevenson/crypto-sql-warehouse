@@ -43,12 +43,14 @@ def run_marts_only(monkeypatch, *, database=True, schema=True):
         database_setup.database_connection, "connect", lambda dsn=None, **kwargs: conn
     )
     monkeypatch.setattr(database_setup, "database_exists", lambda dsn: database)
-    monkeypatch.setattr(database_setup, "schema_is_applied", lambda c: schema)
+    monkeypatch.setattr(database_setup, "schema_is_applied", lambda connection: schema)
     monkeypatch.setattr(
         database_setup, "create_database", lambda dsn: conn.log.append("create_database")
     )
     monkeypatch.setattr(
-        database_setup.sql_file_runner, "run_sql_file", lambda c, name: c.log.append(f"file {name}")
+        database_setup.sql_file_runner,
+        "run_sql_file",
+        lambda connection, name: connection.log.append(f"file {name}"),
     )
     return database_setup.run_setup(marts_only=True), conn
 

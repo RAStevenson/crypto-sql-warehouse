@@ -43,7 +43,7 @@ def inclusive_bucket_count(window_start: datetime, window_end: datetime) -> int:
     return int((last - first) // HOUR) + 1
 
 
-@pytest.mark.parametrize("span", SPANS, ids=lambda s: str(s))
+@pytest.mark.parametrize("span", SPANS, ids=lambda span: str(span))
 @pytest.mark.parametrize("offset_minutes", range(60))
 def test_iter_windows_never_exceeds_candle_cap(span, offset_minutes):
     start = BASE + timedelta(minutes=offset_minutes)
@@ -59,7 +59,7 @@ def test_iter_windows_never_exceeds_candle_cap(span, offset_minutes):
         assert 1 <= count <= MAX_CANDLES_PER_REQUEST
 
 
-@pytest.mark.parametrize("span", SPANS, ids=lambda s: str(s))
+@pytest.mark.parametrize("span", SPANS, ids=lambda span: str(span))
 @pytest.mark.parametrize("offset_minutes", [0, 1, 37, 59])
 def test_iter_windows_covers_range_without_gaps(span, offset_minutes):
     start = BASE + timedelta(minutes=offset_minutes)

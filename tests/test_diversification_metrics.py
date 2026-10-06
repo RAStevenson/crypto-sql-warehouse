@@ -18,8 +18,8 @@ DAY = dt.timedelta(days=1)
 START = dt.date(2026, 1, 1)
 
 
-def dates(n: int) -> list[dt.date]:
-    return [START + i * DAY for i in range(n)]
+def dates(n_days: int) -> list[dt.date]:
+    return [START + i * DAY for i in range(n_days)]
 
 
 # Three Walsh vectors: zero mean, mutually orthogonal, so their sample
@@ -81,9 +81,9 @@ def test_portfolio_volatility_falls_when_covariance_is_negative():
     ) < diversification_metrics.portfolio_volatility(variances, weights)
 
 
-def equicorrelated_covariance(n: int, sigma: float, rho: float) -> np.ndarray:
-    """n assets, identical volatility sigma, every pair correlated rho."""
-    cov = np.full((n, n), rho * sigma * sigma)
+def equicorrelated_covariance(n_assets: int, sigma: float, rho: float) -> np.ndarray:
+    """n_assets assets, identical volatility sigma, every pair correlated rho."""
+    cov = np.full((n_assets, n_assets), rho * sigma * sigma)
     np.fill_diagonal(cov, sigma * sigma)
     return cov
 
@@ -101,10 +101,10 @@ def test_equicorrelation_limit_is_approached_from_above_as_n_grows():
     sigma, rho = 0.5, 0.64
     limit = sigma * np.sqrt(rho)
     previous = None
-    for n in (2, 4, 8, 32, 256):
-        vol = diversification_metrics.diversification(equicorrelated_covariance(n, sigma, rho))[
-            "equal_weight_portfolio_vol"
-        ]
+    for n_assets in (2, 4, 8, 32, 256):
+        vol = diversification_metrics.diversification(
+            equicorrelated_covariance(n_assets, sigma, rho)
+        )["equal_weight_portfolio_vol"]
         assert vol > limit
         if previous is not None:
             assert vol < previous
@@ -124,9 +124,9 @@ def test_equicorrelation_limit_is_zero_when_assets_are_independent():
 
 
 def test_equal_weights_sum_to_one():
-    for n in (1, 2, 6, 17):
-        weights = diversification_metrics.equal_weights(n)
-        assert len(weights) == n
+    for n_assets in (1, 2, 6, 17):
+        weights = diversification_metrics.equal_weights(n_assets)
+        assert len(weights) == n_assets
         assert weights.sum() == pytest.approx(1.0)
 
 
@@ -279,16 +279,16 @@ def test_drawdown_paths_start_at_zero_and_agree_with_max_drawdown():
 
 
 def test_build_panel_keeps_only_dates_where_every_symbol_reports():
-    d = dates(3)
+    day_list = dates(3)
     rows = [
-        (d[0], "AAA", 0.01),
-        (d[0], "BBB", 0.02),
-        (d[1], "AAA", 0.03),  # BBB missing, so this date is dropped
-        (d[2], "AAA", 0.04),
-        (d[2], "BBB", 0.05),
+        (day_list[0], "AAA", 0.01),
+        (day_list[0], "BBB", 0.02),
+        (day_list[1], "AAA", 0.03),  # BBB missing, so this date is dropped
+        (day_list[2], "AAA", 0.04),
+        (day_list[2], "BBB", 0.05),
     ]
     panel = diversification_metrics.build_panel(rows)
-    assert panel.dates == [d[0], d[2]]
+    assert panel.dates == [day_list[0], day_list[2]]
     assert panel.symbols == ["AAA", "BBB"]
     assert panel.n_days == 2
     assert panel.n_assets == 2
@@ -296,16 +296,16 @@ def test_build_panel_keeps_only_dates_where_every_symbol_reports():
 
 
 def test_build_panel_orders_columns_by_symbol_and_rows_by_date():
-    d = dates(2)
+    day_list = dates(2)
     rows = [
-        (d[1], "ZZZ", 0.04),
-        (d[0], "ZZZ", 0.02),
-        (d[1], "AAA", 0.03),
-        (d[0], "AAA", 0.01),
+        (day_list[1], "ZZZ", 0.04),
+        (day_list[0], "ZZZ", 0.02),
+        (day_list[1], "AAA", 0.03),
+        (day_list[0], "AAA", 0.01),
     ]
     panel = diversification_metrics.build_panel(rows)
     assert panel.symbols == ["AAA", "ZZZ"]
-    assert panel.dates == [d[0], d[1]]
+    assert panel.dates == [day_list[0], day_list[1]]
     assert np.allclose(panel.returns, [[0.01, 0.02], [0.03, 0.04]])
 
 
@@ -315,8 +315,8 @@ def test_build_panel_rejects_an_empty_input():
 
 
 def test_build_panel_rejects_a_panel_with_no_common_date():
-    d = dates(2)
-    rows = [(d[0], "AAA", 0.01), (d[1], "BBB", 0.02)]
+    day_list = dates(2)
+    rows = [(day_list[0], "AAA", 0.01), (day_list[1], "BBB", 0.02)]
     with pytest.raises(ValueError, match="would be empty"):
         diversification_metrics.build_panel(rows)
 
@@ -346,59 +346,74 @@ def panel_and_path(day_list, symbols, returns):
 
 
 def test_build_panel_rejects_a_single_asset():
-    d = dates(3)
-    rows = [(d[i], "AAA", 0.01 * (i + 1)) for i in range(3)]
+    day_list = dates(3)
+    rows = [(day_list[i], "AAA", 0.01 * (i + 1)) for i in range(3)]
     with pytest.raises(ValueError, match="at least two active assets"):
         diversification_metrics.build_panel(rows)
 
 
 def test_build_panel_warns_when_one_asset_shortens_the_panel(caplog):
-    d = dates(4)
-    rows = [(d[i], "AAA", 0.01) for i in range(4)] + [(d[i], "BBB", 0.02) for i in range(2, 4)]
+    day_list = dates(4)
+    rows = [(day_list[i], "AAA", 0.01) for i in range(4)] + [
+        (day_list[i], "BBB", 0.02) for i in range(2, 4)
+    ]
     with caplog.at_level("WARNING"):
         panel = diversification_metrics.build_panel(rows)
-    assert panel.dates == [d[2], d[3]]
+    assert panel.dates == [day_list[2], day_list[3]]
     assert "do not share one history" in caplog.text
     assert "BBB" in caplog.text
 
 
 def test_build_panel_is_silent_when_every_asset_shares_one_history(caplog):
-    d = dates(3)
-    rows = [(d[i], s, 0.01) for i in range(3) for s in ("AAA", "BBB")]
+    day_list = dates(3)
+    rows = [(day_list[i], symbol, 0.01) for i in range(3) for symbol in ("AAA", "BBB")]
     with caplog.at_level("WARNING"):
         diversification_metrics.build_panel(rows)
     assert caplog.text == ""
 
 
 def test_build_close_path_starts_at_the_close_before_the_first_return():
-    d = dates(3)
+    day_list = dates(3)
     symbols = ["AAA", "BBB"]
     returns = np.array([[0.01, 0.02], [0.03, -0.01], [-0.02, 0.04]])
-    _, path = panel_and_path(d, symbols, returns)
-    assert path.dates == [d[0] - DAY, *d]
+    _, path = panel_and_path(day_list, symbols, returns)
+    assert path.dates == [day_list[0] - DAY, *day_list]
     assert np.allclose(np.diff(np.log(path.closes), axis=0), returns)
 
 
 def test_build_close_path_keeps_complete_days_the_panel_excludes():
     """A day after a gap has no return, so the panel drops it, but its close
     is real and the path has to pass through it."""
-    d = dates(5)
+    day_list = dates(5)
     symbols = ["AAA", "BBB"]
-    # returns exist on d[0], d[1], d[4]; d[2] is a partial day (no close row at
-    # all here) and d[3] is the complete day after it (a close, but no return).
-    return_rows = [(day, s, 0.01) for day in (d[0], d[1], d[4]) for s in symbols]
+    # returns exist on day_list[0], day_list[1], day_list[4]; day_list[2] is a
+    # partial day (no close row at all here) and day_list[3] is the complete day
+    # after it (a close, but no return).
+    return_rows = [
+        (day, symbol, 0.01)
+        for day in (day_list[0], day_list[1], day_list[4])
+        for symbol in symbols
+    ]
     panel = diversification_metrics.build_panel(return_rows)
-    levels = {d[0] - DAY: 100.0, d[0]: 101.0, d[1]: 102.0, d[3]: 80.0, d[4]: 81.0}
-    closes = [(day, s, level) for day, level in levels.items() for s in symbols]
+    levels = {
+        day_list[0] - DAY: 100.0,
+        day_list[0]: 101.0,
+        day_list[1]: 102.0,
+        day_list[3]: 80.0,
+        day_list[4]: 81.0,
+    }
+    closes = [(day, symbol, level) for day, level in levels.items() for symbol in symbols]
     path = diversification_metrics.build_close_path(closes, panel)
-    assert path.dates == [d[0] - DAY, d[0], d[1], d[3], d[4]]
+    assert path.dates == [day_list[0] - DAY, day_list[0], day_list[1], day_list[3], day_list[4]]
 
 
 def test_build_close_path_needs_a_close_before_the_first_return():
-    d = dates(2)
+    day_list = dates(2)
     symbols = ["AAA", "BBB"]
-    panel = diversification_metrics.build_panel([(day, s, 0.01) for day in d for s in symbols])
-    closes = [(day, s, 100.0) for day in d for s in symbols]
+    panel = diversification_metrics.build_panel(
+        [(day, symbol, 0.01) for day in day_list for symbol in symbols]
+    )
+    closes = [(day, symbol, 100.0) for day in day_list for symbol in symbols]
     with pytest.raises(ValueError, match="no complete close precedes"):
         diversification_metrics.build_close_path(closes, panel)
 
@@ -407,22 +422,22 @@ def test_panel_metrics_drawdown_and_total_return_follow_the_closes_across_an_exc
     """The defect this pins: summing only the panel's returns cuts the move
     across an excluded date out of the path. Here both assets halve across the
     excluded stretch, and that fall has to show up."""
-    d = dates(7)
+    day_list = dates(7)
     symbols = ["AAA", "BBB"]
-    panel_days = (d[0], d[1], d[4], d[5], d[6])
+    panel_days = (day_list[0], day_list[1], day_list[4], day_list[5], day_list[6])
     pairs = [(0.01, 0.02), (0.02, -0.01), (0.03, 0.01), (-0.01, 0.02), (0.02, 0.03)]
     return_rows = [
-        (day, s, r)
+        (day, symbol, log_return)
         for day, pair in zip(panel_days, pairs, strict=True)
-        for s, r in zip(symbols, pair, strict=True)
+        for symbol, log_return in zip(symbols, pair, strict=True)
     ]
     panel = diversification_metrics.build_panel(return_rows)
     levels = {
-        d[0] - DAY: 100.0, d[0]: 110.0, d[1]: 120.0,  # the peak
-        d[3]: 60.0,  # complete day after the excluded d[2]: the trough
-        d[4]: 66.0, d[5]: 70.0, d[6]: 75.0,
+        day_list[0] - DAY: 100.0, day_list[0]: 110.0, day_list[1]: 120.0,  # the peak
+        day_list[3]: 60.0,  # complete day after the excluded day_list[2]: the trough
+        day_list[4]: 66.0, day_list[5]: 70.0, day_list[6]: 75.0,
     }  # fmt: skip
-    closes = [(day, s, level) for day, level in levels.items() for s in symbols]
+    closes = [(day, symbol, level) for day, level in levels.items() for symbol in symbols]
     metrics = diversification_metrics.panel_metrics(
         panel, diversification_metrics.build_close_path(closes, panel)
     )
@@ -430,63 +445,67 @@ def test_panel_metrics_drawdown_and_total_return_follow_the_closes_across_an_exc
         assert asset["total_log_return"] == pytest.approx(np.log(75.0 / 100.0))
         assert asset["max_drawdown"] == pytest.approx(60.0 / 120.0 - 1.0)
     assert metrics["close_path"] == {
-        "first_date": (d[0] - DAY).isoformat(),
-        "last_date": d[6].isoformat(),
+        "first_date": (day_list[0] - DAY).isoformat(),
+        "last_date": day_list[6].isoformat(),
         "n_closes": 7,
     }
 
 
 def test_panel_metrics_rejects_an_asset_that_never_moved():
-    d = dates(6)
+    day_list = dates(6)
     symbols = ["AAA", "BBB"]
     returns = np.column_stack([np.array([0.01, -0.02, 0.03, 0.01, -0.01, 0.02]), np.zeros(6)])
-    panel, path = panel_and_path(d, symbols, returns)
+    panel, path = panel_and_path(day_list, symbols, returns)
     with pytest.raises(ValueError, match="BBB did not move"):
         diversification_metrics.panel_metrics(panel, path)
 
 
 def test_classify_excluded_dates_sorts_each_date_into_its_reason():
-    d = dates(6)
-    panel_days = (d[1], d[4], d[5])
+    day_list = dates(6)
+    panel_days = (day_list[1], day_list[4], day_list[5])
     panel = diversification_metrics.build_panel(
-        [(day, s, 0.01) for day in panel_days for s in ("AAA", "BBB")]
+        [(day, symbol, 0.01) for day in panel_days for symbol in ("AAA", "BBB")]
     )
     observed = [
-        (d[0], 1, 0),  # only one asset has a bar
-        (d[1], 2, 0),  # in the panel
-        (d[2], 2, 1),  # a partial bar
-        (d[3], 2, 0),  # complete for both, excluded: first observation after d[2]
-        (d[4], 2, 0),
-        (d[5], 2, 0),
+        (day_list[0], 1, 0),  # only one asset has a bar
+        (day_list[1], 2, 0),  # in the panel
+        (day_list[2], 2, 1),  # a partial bar
+        (day_list[3], 2, 0),  # complete for both, excluded: first observation after day_list[2]
+        (day_list[4], 2, 0),
+        (day_list[5], 2, 0),
     ]
     assert diversification_metrics.classify_excluded_dates(observed, panel) == {
-        "partial_bar": [d[2]],
-        "not_every_asset": [d[0]],
-        "after_excluded_day": [d[3]],
+        "partial_bar": [day_list[2]],
+        "not_every_asset": [day_list[0]],
+        "after_excluded_day": [day_list[3]],
     }
 
 
 def test_classify_excluded_dates_counts_a_partial_bar_first_when_an_asset_is_also_absent():
-    d = dates(2)
-    panel = diversification_metrics.build_panel([(d[1], s, 0.01) for s in ("AAA", "BBB")])
-    assert diversification_metrics.classify_excluded_dates([(d[0], 1, 1), (d[1], 2, 0)], panel) == {
-        "partial_bar": [d[0]],
+    day_list = dates(2)
+    panel = diversification_metrics.build_panel(
+        [(day_list[1], symbol, 0.01) for symbol in ("AAA", "BBB")]
+    )
+    assert diversification_metrics.classify_excluded_dates(
+        [(day_list[0], 1, 1), (day_list[1], 2, 0)], panel
+    ) == {
+        "partial_bar": [day_list[0]],
         "not_every_asset": [],
         "after_excluded_day": [],
     }
 
 
 def test_panel_metrics_reports_the_panel_it_was_given():
-    d = dates(8)
+    day_list = dates(8)
     returns = orthogonal_panel()
     symbols = ["AAA", "BBB", "CCC"]
-    metrics = diversification_metrics.panel_metrics(*panel_and_path(d, symbols, returns))
+    metrics = diversification_metrics.panel_metrics(*panel_and_path(day_list, symbols, returns))
     assert metrics["panel"]["n_days"] == 8
     assert metrics["panel"]["n_assets"] == 3
     assert metrics["panel"]["symbols"] == symbols
-    assert metrics["panel"]["first_date"] == d[0].isoformat()
-    assert metrics["panel"]["last_date"] == d[7].isoformat()
-    assert [a["symbol"] for a in metrics["assets"]] == symbols
+    assert metrics["panel"]["first_date"] == day_list[0].isoformat()
+    assert metrics["panel"]["last_date"] == day_list[7].isoformat()
+    assert [asset["symbol"] for asset in metrics["assets"]] == symbols
     assert metrics["correlation"]["n_pairs"] == 3
     assert metrics["diversification"]["diversification_captured"] == pytest.approx(1.0, abs=1e-12)
 
@@ -496,10 +515,12 @@ def test_panel_metrics_output_is_json_serializable():
     may be a numpy scalar that json refuses to write."""
     import json
 
-    d = dates(8)
+    day_list = dates(8)
     returns = orthogonal_panel()
     symbols = ["AAA", "BBB", "CCC"]
-    text = json.dumps(diversification_metrics.panel_metrics(*panel_and_path(d, symbols, returns)))
+    text = json.dumps(
+        diversification_metrics.panel_metrics(*panel_and_path(day_list, symbols, returns))
+    )
     assert "NaN" not in text
     assert "Infinity" not in text
 
@@ -553,9 +574,9 @@ def test_build_panel_raises_a_panel_data_error_that_is_still_a_value_error():
 
 
 def test_panel_metrics_refuses_a_panel_too_short_for_a_correlation_interval():
-    d = dates(3)
+    day_list = dates(3)
     symbols = ["AAA", "BBB"]
     returns = np.array([[0.01, 0.02], [0.03, -0.01], [-0.02, 0.04]])
-    panel, path = panel_and_path(d, symbols, returns)
+    panel, path = panel_and_path(day_list, symbols, returns)
     with pytest.raises(diversification_metrics.PanelDataError, match="needs at least 4"):
         diversification_metrics.panel_metrics(panel, path)

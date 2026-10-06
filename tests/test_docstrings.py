@@ -33,7 +33,9 @@ def _bare(path: Path) -> list[str]:
 def test_every_definition_has_a_docstring() -> None:
     """Fail naming every bare definition, so the fix is a list and not a hunt."""
     assert PRODUCT, "no product files found"
-    offenders = {p.name: _bare(p) for p in PRODUCT if _bare(p)}
+    offenders = {
+        product_file.name: _bare(product_file) for product_file in PRODUCT if _bare(product_file)
+    }
     assert not offenders, "definitions without a docstring:\n" + "\n".join(
-        f"  {f}: {', '.join(names)}" for f, names in offenders.items()
+        f"  {file_name}: {', '.join(names)}" for file_name, names in offenders.items()
     )

@@ -85,11 +85,11 @@ def correlation_heatmap(
     metrics so that the image and the report's caption state the same range.
     """
     apply_style()
-    n = len(symbols)
+    n_symbols = len(symbols)
     # The scale covers the observed off-diagonal range, because on -1 to 1
     # every cell would render in nearly the same tone. The diagonal is masked
     # because a self-correlation of 1 would otherwise dominate the scale.
-    off_mask = ~np.eye(n, dtype=bool)
+    off_mask = ~np.eye(n_symbols, dtype=bool)
     shown = np.ma.masked_array(corr, mask=~off_mask)
 
     cmap = matplotlib.colormaps["RdBu_r"].copy()
@@ -97,15 +97,15 @@ def correlation_heatmap(
 
     fig, ax = plt.subplots(figsize=(6.4, 5.4))
     mesh = ax.imshow(shown, cmap=cmap, vmin=vmin, vmax=vmax)
-    ax.set_xticks(range(n), symbols)
-    ax.set_yticks(range(n), symbols)
+    ax.set_xticks(range(n_symbols), symbols)
+    ax.set_yticks(range(n_symbols), symbols)
     ax.grid(visible=False)
     for spine in ax.spines.values():
         spine.set_visible(False)
     ax.tick_params(length=0)
 
-    for i in range(n):
-        for j in range(n):
+    for i in range(n_symbols):
+        for j in range(n_symbols):
             if i == j:
                 ax.text(j, i, "1.00", ha="center", va="center", fontsize=9, color=MUTED)
                 continue
@@ -180,14 +180,14 @@ def drawdown_curves(
     apply_style()
     # The dates are the close path's own, starting at the close the first
     # return is measured from, so they line up with the path row for row.
-    x = np.array(dates, dtype="datetime64[D]")
+    plot_dates = np.array(dates, dtype="datetime64[D]")
 
     # One axis for all assets, so the reader can compare when each one falls
     # and recovers.
     fig, ax = plt.subplots(figsize=(8.4, 4.6))
     for i, symbol in enumerate(symbols):
         ax.plot(
-            x,
+            plot_dates,
             paths_matrix[:, i],
             color=SERIES[i % len(SERIES)],
             linewidth=1.6,
@@ -196,7 +196,7 @@ def drawdown_curves(
         )
     ax.axhline(0.0, color=MUTED, linewidth=1.0, zorder=2)
     ax.set_ylabel("drawdown from running peak")
-    ax.yaxis.set_major_formatter(lambda v, _: f"{100 * v:.0f}%")
+    ax.yaxis.set_major_formatter(lambda drawdown, _: f"{100 * drawdown:.0f}%")
     # The legend sits above the axes. The curves cross the whole plot area
     # over the window, so no interior space could hold a key without covering
     # data.
@@ -266,7 +266,7 @@ def write_all(panel, close_path, metrics: dict, figures_dir: Path) -> list[Path]
     from .diversification_metrics import drawdown_paths
 
     corr = np.array(metrics["correlation"]["matrix"], dtype=float)
-    vols = np.array([a["annualized_volatility"] for a in metrics["assets"]], dtype=float)
+    vols = np.array([asset["annualized_volatility"] for asset in metrics["assets"]], dtype=float)
     div = metrics["diversification"]
     return [
         correlation_heatmap(
