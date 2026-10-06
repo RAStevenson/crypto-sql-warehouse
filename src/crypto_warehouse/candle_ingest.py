@@ -130,7 +130,7 @@ class LoadResult(NamedTuple):
     short_windows: int
 
 
-def resolve_products(cur, requested: list[str] | None) -> list[str]:
+def resolve_products(cursor, requested: list[str] | None) -> list[str]:
     """Return the sorted product codes to load, which are the requested codes
     or, with none requested, every active asset.
 
@@ -138,11 +138,11 @@ def resolve_products(cur, requested: list[str] | None) -> list[str]:
     that is missing from core.assets raises ConfigError.
     """
     if requested:
-        cur.execute(
+        cursor.execute(
             "SELECT product_code, is_active FROM core.assets WHERE product_code = ANY(%s)",
             (list(requested),),
         )
-        found = dict(cur.fetchall())
+        found = dict(cursor.fetchall())
         missing = sorted(set(requested) - set(found))
         if missing:
             raise ConfigError(f"not in core.assets: {missing}. Add them there first.")
@@ -156,12 +156,12 @@ def resolve_products(cur, requested: list[str] | None) -> list[str]:
             )
         return sorted(found)
 
-    cur.execute("SELECT product_code FROM core.assets WHERE is_active ORDER BY product_code")
-    return [row[0] for row in cur.fetchall()]
+    cursor.execute("SELECT product_code FROM core.assets WHERE is_active ORDER BY product_code")
+    return [row[0] for row in cursor.fetchall()]
 
 
 def get_watermark(
-    cur,
+    cursor,
     product_code: str,
     backfill_days: int,
     *,
@@ -177,9 +177,9 @@ def get_watermark(
     # Floored to the hour so the window_start stored in the run record is a
     # bucket boundary.
     now_hour = floor_hour(now_utc or datetime.now(UTC))
-    floor = now_hour - timedelta(days=backfill_days)
+    backfill_floor = now_hour - timedelta(days=backfill_days)
 
-    cur.execute(
+    cursor.execute(
         """
         SELECT max(o.ts_utc)
         FROM core.ohlcv_hourly o
@@ -188,32 +188,32 @@ def get_watermark(
         """,
         (product_code,),
     )
-    max_ts = cur.fetchone()[0]
-    if max_ts is None:
-        return floor
+    latest_timestamp = cursor.fetchone()[0]
+    if latest_timestamp is None:
+        return backfill_floor
 
-    resume = max_ts.astimezone(UTC) - timedelta(hours=OVERLAP_HOURS)
+    resume_point = latest_timestamp.astimezone(UTC) - timedelta(hours=OVERLAP_HOURS)
     # apply_floor is off unless the operator passes --backfill-days. If it
     # were always on, the default of 365 days would make every ordinary
     # incremental run re-fetch a full year.
-    return min(resume, floor) if apply_floor else resume
+    return min(resume_point, backfill_floor) if apply_floor else resume_point
 
 
-def _mark_run_failed(conn, run_id: int) -> None:
+def _mark_run_failed(connection, run_id: int) -> None:
     """Roll back the open transaction and mark the run row failed, logging a
     warning instead of raising if either step fails.
 
     When a step fails, the run row stays at 'running' in raw.ingest_runs.
     """
     try:
-        conn.rollback()
-        with conn.cursor() as cur:
-            cur.execute(
+        connection.rollback()
+        with connection.cursor() as cursor:
+            cursor.execute(
                 "UPDATE raw.ingest_runs SET status = 'failed', finished_at = now() "
                 "WHERE run_id = %s",
                 (run_id,),
             )
-        conn.commit()
+        connection.commit()
     except Exception:
         # The error is not re-raised, because on a dead connection even the
         # rollback raises, and that error would replace the exception that
@@ -226,7 +226,7 @@ def _mark_run_failed(conn, run_id: int) -> None:
 
 
 def _fetch_into_raw(
-    conn, session, product_code: str, run_id: int, start: datetime, current_hour: datetime
+    connection, session, product_code: str, run_id: int, start: datetime, current_hour: datetime
 ) -> tuple[int, int]:
     """Fetch every window from start up to the current hour into raw.candles,
     committing each window, and return (rows_fetched, short_windows)."""
@@ -275,9 +275,9 @@ def _fetch_into_raw(
             )
 
         if candles:
-            with conn.cursor() as cur:
+            with connection.cursor() as cursor:
                 psycopg2.extras.execute_values(
-                    cur,
+                    cursor,
                     INSERT_RAW_SQL,
                     [
                         (
@@ -296,7 +296,7 @@ def _fetch_into_raw(
             # Committed per window, so a failure late in a long backfill
             # leaves the fetched windows in raw, where UPSERT_SQL can promote
             # them under their run_id without another API call.
-            conn.commit()
+            connection.commit()
             rows_fetched += len(candles)
 
         time.sleep(REQUEST_PAUSE_SECONDS)
@@ -304,15 +304,15 @@ def _fetch_into_raw(
     return rows_fetched, short_windows
 
 
-def _promote_to_core(conn, run_id: int, rows_fetched: int) -> int:
+def _promote_to_core(connection, run_id: int, rows_fetched: int) -> int:
     """Upsert this run's raw rows into core, mark the run succeeded, and return
     the number of rows inserted or updated.
 
     A raw row that core's constraints would reject is skipped with a warning.
     """
-    with conn.cursor() as cur:
-        cur.execute(REJECTED_ROWS_SQL, (run_id,))
-        rejected = [row[0] for row in cur.fetchall()]
+    with connection.cursor() as cursor:
+        cursor.execute(REJECTED_ROWS_SQL, (run_id,))
+        rejected = [row[0] for row in cursor.fetchall()]
         if rejected:
             log.warning(
                 "run %d: %d raw candle(s) fail core's constraints and stay in raw only, "
@@ -321,9 +321,9 @@ def _promote_to_core(conn, run_id: int, rows_fetched: int) -> int:
                 len(rejected),
                 rejected[0].isoformat(),
             )
-        cur.execute(UPSERT_SQL, (run_id,))
-        rows_upserted = cur.rowcount
-        cur.execute(
+        cursor.execute(UPSERT_SQL, (run_id,))
+        rows_upserted = cursor.rowcount
+        cursor.execute(
             """
             UPDATE raw.ingest_runs
             SET rows_fetched = %s, rows_upserted = %s,
@@ -332,12 +332,12 @@ def _promote_to_core(conn, run_id: int, rows_fetched: int) -> int:
             """,
             (rows_fetched, rows_upserted, run_id),
         )
-    conn.commit()
+    connection.commit()
     return rows_upserted
 
 
 def load_product(
-    conn,
+    connection,
     session,
     product_code: str,
     backfill_days: int,
@@ -352,9 +352,9 @@ def load_product(
     """
     current_hour = floor_hour(datetime.now(UTC))
 
-    with conn.cursor() as cur:
-        start = get_watermark(cur, product_code, backfill_days, apply_floor=apply_floor)
-        cur.execute(
+    with connection.cursor() as cursor:
+        start = get_watermark(cursor, product_code, backfill_days, apply_floor=apply_floor)
+        cursor.execute(
             """
             INSERT INTO raw.ingest_runs
                 (product_code, granularity_seconds, window_start, window_end)
@@ -363,8 +363,8 @@ def load_product(
             """,
             (product_code, GRANULARITY_SECONDS, start, current_hour),
         )
-        run_id = cur.fetchone()[0]
-    conn.commit()  # run row is visible even if the fetch below fails
+        run_id = cursor.fetchone()[0]
+    connection.commit()  # run row is visible even if the fetch below fails
 
     # Raw commits per window and the core upsert follows in its own
     # transaction, so core never references raw rows that are missing. A crash
@@ -372,13 +372,13 @@ def load_product(
     # copies, and the next run re-fetches that span from the watermark.
     try:
         rows_fetched, short_windows = _fetch_into_raw(
-            conn, session, product_code, run_id, start, current_hour
+            connection, session, product_code, run_id, start, current_hour
         )
-        rows_upserted = _promote_to_core(conn, run_id, rows_fetched)
+        rows_upserted = _promote_to_core(connection, run_id, rows_fetched)
     except BaseException:
         # BaseException, so that Ctrl+C also closes out the run row instead of
         # leaving it at 'running'.
-        _mark_run_failed(conn, run_id)
+        _mark_run_failed(connection, run_id)
         raise
 
     if short_windows:
@@ -391,10 +391,10 @@ def load_product(
     return LoadResult(product_code, run_id, rows_fetched, rows_upserted, short_windows)
 
 
-def _rollback_quietly(conn) -> None:
+def _rollback_quietly(connection) -> None:
     """Roll back, logging instead of raising when the connection itself is gone."""
     try:
-        conn.rollback()
+        connection.rollback()
     except Exception:
         log.warning(
             "rollback after a failure also failed; the connection is likely gone, so "
@@ -403,10 +403,10 @@ def _rollback_quietly(conn) -> None:
         )
 
 
-def refresh_marts(conn) -> None:
+def refresh_marts(connection) -> None:
     """Run sql/03_refresh_marts.sql in one transaction, so the three views change together."""
-    sql_file_runner.run_sql_file(conn, sql_file_runner.REFRESH_MARTS_FILE)
-    conn.commit()
+    sql_file_runner.run_sql_file(connection, sql_file_runner.REFRESH_MARTS_FILE)
+    connection.commit()
 
 
 def run_ingest(
@@ -424,12 +424,12 @@ def run_ingest(
     """
     failures: list[str] = []
 
-    with closing(database_connection.connect()) as conn, requests.Session() as session:
+    with closing(database_connection.connect()) as connection, requests.Session() as session:
         session.headers["User-Agent"] = USER_AGENT
 
-        with conn.cursor() as cur:
-            targets = resolve_products(cur, products)
-        conn.commit()
+        with connection.cursor() as cursor:
+            targets = resolve_products(cursor, products)
+        connection.commit()
 
         if not targets:
             log.warning("no products to load; core.assets has no active rows")
@@ -438,34 +438,34 @@ def run_ingest(
         log.info("loading %d product(s): %s", len(targets), ", ".join(targets))
         for product_code in targets:
             try:
-                result = load_product(
-                    conn, session, product_code, backfill_days, apply_floor=apply_floor
+                load_result = load_product(
+                    connection, session, product_code, backfill_days, apply_floor=apply_floor
                 )
-            except Exception as exc:
+            except Exception as error:
                 failures.append(product_code)
-                log.error("%s: load failed: %s", product_code, exc, exc_info=True)
+                log.error("%s: load failed: %s", product_code, error, exc_info=True)
                 # A failure before the run row exists never reaches the
                 # rollback in _mark_run_failed, and an aborted transaction
                 # would fail every product after this one.
-                _rollback_quietly(conn)
+                _rollback_quietly(connection)
                 continue
             log.info(
                 "%s: fetched %d, upserted %d (run %d)",
-                result.product_code,
-                result.rows_fetched,
-                result.rows_upserted,
-                result.run_id,
+                load_result.product_code,
+                load_result.rows_fetched,
+                load_result.rows_upserted,
+                load_result.run_id,
             )
 
         # The refresh runs even after a failed product, so the products that
         # did load reach the marts.
         if refresh:
             try:
-                refresh_marts(conn)
-            except Exception as exc:
+                refresh_marts(connection)
+            except Exception as error:
                 failures.append("refresh-marts")
-                log.error("mart refresh failed: %s", exc, exc_info=True)
-                _rollback_quietly(conn)
+                log.error("mart refresh failed: %s", error, exc_info=True)
+                _rollback_quietly(connection)
 
     if failures:
         log.error("finished with %d failure(s): %s", len(failures), ", ".join(failures))

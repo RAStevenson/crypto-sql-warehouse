@@ -36,8 +36,8 @@ def parse_product_code(product_code: str) -> tuple[str, str]:
     """
     # Lowercase is normalized, not rejected, because Coinbase treats codes
     # case-insensitively and the seeded codes are uppercase.
-    code = product_code.strip().upper()
-    parts = code.split("-")
+    normalized_code = product_code.strip().upper()
+    parts = normalized_code.split("-")
     # Checked here because the API answers a malformed code with a 404, which
     # reads as "no such product" and does not name the actual mistake.
     if len(parts) != 2 or not all(part.isalnum() and part for part in parts):
@@ -73,7 +73,7 @@ def probe_product(session: requests.Session, product_code: str) -> int:
 
 
 def insert_asset(
-    cur,
+    cursor,
     *,
     symbol: str,
     product_code: str,
@@ -89,7 +89,7 @@ def insert_asset(
     # asset is either a mistake or a soft-disabled asset coming back, and both
     # call for a look at the existing row, not a silent merge.
     try:
-        cur.execute(
+        cursor.execute(
             """
             INSERT INTO core.assets (symbol, product_code, asset_name, quote_currency)
             VALUES (%s, %s, %s, %s)
@@ -97,10 +97,10 @@ def insert_asset(
             """,
             (symbol, product_code, asset_name, quote_currency),
         )
-    except pg_errors.UniqueViolation as exc:
+    except pg_errors.UniqueViolation as error:
         raise ConfigError(
             f"{symbol} / {product_code} collides with an existing row in "
             "core.assets. If the asset was soft-disabled, set "
             "is_active = true instead of re-adding it."
-        ) from exc
-    return cur.fetchone()[0]
+        ) from error
+    return cursor.fetchone()[0]

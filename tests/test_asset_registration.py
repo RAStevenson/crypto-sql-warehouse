@@ -133,25 +133,25 @@ class FakeCursor:
 
 
 def test_insert_passes_the_row_and_returns_the_id():
-    cur = FakeCursor(asset_id=9)
+    cursor = FakeCursor(asset_id=9)
     asset_id = insert_asset(
-        cur,
+        cursor,
         symbol="XRP",
         product_code="XRP-USD",
         asset_name="Ripple",
         quote_currency="USD",
     )
     assert asset_id == 9
-    ((sql, params),) = cur.executed
+    ((sql, params),) = cursor.executed
     assert "INSERT INTO core.assets" in sql
     assert params == ("XRP", "XRP-USD", "Ripple", "USD")
 
 
 def test_insert_translates_a_unique_collision_into_plain_instructions():
-    cur = FakeCursor(error=pg_errors.UniqueViolation("duplicate key"))
+    cursor = FakeCursor(error=pg_errors.UniqueViolation("duplicate key"))
     with pytest.raises(ConfigError, match="is_active = true"):
         insert_asset(
-            cur,
+            cursor,
             symbol="BTC",
             product_code="BTC-USD",
             asset_name="Bitcoin",

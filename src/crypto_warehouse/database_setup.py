@@ -22,84 +22,84 @@ log = logging.getLogger(__name__)
 SCHEMAS = ("marts", "core", "raw")  # drop order: dependents first
 
 
-def database_exists(dsn: str) -> bool:
-    """Return True if a connection to the DSN succeeds and False if it fails
+def database_exists(database_url: str) -> bool:
+    """Return True if a connection to database_url succeeds and False if it fails
     with an error whose text contains "does not exist".
 
     Any other connection error is re-raised.
     """
     try:
-        conn = psycopg2.connect(dsn)
-    except psycopg2.OperationalError as exc:
-        if "does not exist" in str(exc):
+        connection = psycopg2.connect(database_url)
+    except psycopg2.OperationalError as error:
+        if "does not exist" in str(error):
             return False
         raise
-    conn.close()
+    connection.close()
     return True
 
 
-def create_database(dsn: str) -> bool:
-    """Create the DSN's database if it is missing and return True if one was
-    created.
+def create_database(database_url: str) -> bool:
+    """Create database_url's database if it is missing and return True if one
+    was created.
 
-    Raises ConfigError when the database is missing and the DSN is not a URL
+    Raises ConfigError when the database is missing and database_url is not a URL
     that database_connection.split_database_name can point at the maintenance database.
     """
-    if database_exists(dsn):
+    if database_exists(database_url):
         return False
 
-    parts = database_connection.split_database_name(dsn)
-    if parts is None:
+    split_url = database_connection.split_database_name(database_url)
+    if split_url is None:
         raise ConfigError(
             "the target database does not exist and DATABASE_URL is not a "
             "postgresql:// URL this can rewrite. Create the database by hand "
             "and re-run."
         )
-    maintenance_dsn, database = parts
+    maintenance_url, database = split_url
 
     log.info("database %r does not exist, creating it", database)
     # CREATE DATABASE cannot run inside a transaction block, hence autocommit.
     with (
-        closing(database_connection.connect(maintenance_dsn, autocommit=True)) as conn,
-        conn.cursor() as cur,
+        closing(database_connection.connect(maintenance_url, autocommit=True)) as connection,
+        connection.cursor() as cursor,
     ):
-        cur.execute(pgsql.SQL("CREATE DATABASE {}").format(pgsql.Identifier(database)))
+        cursor.execute(pgsql.SQL("CREATE DATABASE {}").format(pgsql.Identifier(database)))
     log.info("created database %r", database)
     return True
 
 
-def schema_is_applied(conn) -> bool:
+def schema_is_applied(connection) -> bool:
     """Return True if core.assets exists, which is the test for an applied schema."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT to_regclass('core.assets') IS NOT NULL")
-        return bool(cur.fetchone()[0])
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT to_regclass('core.assets') IS NOT NULL")
+        return bool(cursor.fetchone()[0])
 
 
-def drop_schemas(conn) -> None:
+def drop_schemas(connection) -> None:
     """Drop the marts, core, and raw schemas and everything in them.
 
     This does not commit, so the caller can commit the drop together with the
     rebuild and a DDL error leaves the old schemas in place.
     """
     log.warning("dropping schemas %s and everything in them", ", ".join(SCHEMAS))
-    with conn.cursor() as cur:
+    with connection.cursor() as cursor:
         for schema in SCHEMAS:
-            cur.execute(
+            cursor.execute(
                 pgsql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(pgsql.Identifier(schema))
             )
 
 
-def rebuild_marts(conn) -> None:
+def rebuild_marts(connection) -> None:
     """Drop the marts schema and re-create it from sql/02_marts.sql, leaving
     raw and core untouched.
 
     This does not commit, so a DDL error leaves the old marts in place.
     """
     log.warning("dropping schema marts and rebuilding it from sql/%s", sql_file_runner.MARTS_FILE)
-    with conn.cursor() as cur:
-        cur.execute("DROP SCHEMA IF EXISTS marts CASCADE")
-        cur.execute("CREATE SCHEMA marts")
-    sql_file_runner.run_sql_file(conn, sql_file_runner.MARTS_FILE)
+    with connection.cursor() as cursor:
+        cursor.execute("DROP SCHEMA IF EXISTS marts CASCADE")
+        cursor.execute("CREATE SCHEMA marts")
+    sql_file_runner.run_sql_file(connection, sql_file_runner.MARTS_FILE)
 
 
 def run_setup(*, reset: bool = False, marts_only: bool = False) -> int:
@@ -111,28 +111,28 @@ def run_setup(*, reset: bool = False, marts_only: bool = False) -> int:
     schema is dropped and rebuilt, which is how a changed mart definition
     reaches a loaded warehouse.
     """
-    dsn = database_connection.load_dsn()
+    database_url = database_connection.load_dsn()
 
     if marts_only:
-        if not database_exists(dsn):
+        if not database_exists(database_url):
             log.error("the database does not exist; run scripts/run_setup.py with no flag first")
             return 1
-        with closing(database_connection.connect(dsn)) as conn:
-            if not schema_is_applied(conn):
+        with closing(database_connection.connect(database_url)) as connection:
+            if not schema_is_applied(connection):
                 log.error(
                     "core.assets does not exist, so there is nothing to rebuild the "
                     "marts from; run scripts/run_setup.py with no flag first"
                 )
                 return 1
-            rebuild_marts(conn)
-            conn.commit()
+            rebuild_marts(connection)
+            connection.commit()
         log.info("marts rebuilt; raw and core were not touched")
         return 0
 
-    created = create_database(dsn)
+    created = create_database(database_url)
 
-    with closing(database_connection.connect(dsn)) as conn:
-        if schema_is_applied(conn) and not created:
+    with closing(database_connection.connect(database_url)) as connection:
+        if schema_is_applied(connection) and not created:
             if not reset:
                 log.error(
                     "core.assets already exists; the schema is applied. "
@@ -140,15 +140,15 @@ def run_setup(*, reset: bool = False, marts_only: bool = False) -> int:
                     "and rebuild them, which deletes every stored candle."
                 )
                 return 1
-            drop_schemas(conn)
+            drop_schemas(connection)
 
         # One transaction for the drop and both files: a database with the
         # fact tables but no matviews is a worse state to land in than no
         # database at all, and a failed rebuild must not have dropped the old
         # schemas.
-        sql_file_runner.run_sql_file(conn, sql_file_runner.SCHEMA_FILE)
-        sql_file_runner.run_sql_file(conn, sql_file_runner.MARTS_FILE)
-        conn.commit()
+        sql_file_runner.run_sql_file(connection, sql_file_runner.SCHEMA_FILE)
+        sql_file_runner.run_sql_file(connection, sql_file_runner.MARTS_FILE)
+        connection.commit()
 
     log.info("setup complete; run scripts/run_ingest.py next")
     return 0

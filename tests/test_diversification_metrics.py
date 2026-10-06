@@ -7,18 +7,18 @@ closed form, which is the only way a test of a statistic can fail informatively.
 
 from __future__ import annotations
 
-import datetime as dt
+import datetime
 
 import numpy as np
 import pytest
 
 from crypto_warehouse import diversification_metrics
 
-DAY = dt.timedelta(days=1)
-START = dt.date(2026, 1, 1)
+DAY = datetime.timedelta(days=1)
+START = datetime.date(2026, 1, 1)
 
 
-def dates(n_days: int) -> list[dt.date]:
+def dates(n_days: int) -> list[datetime.date]:
     return [START + i * DAY for i in range(n_days)]
 
 
@@ -39,8 +39,8 @@ def orthogonal_panel(scales=(0.01, 0.02, 0.03)) -> np.ndarray:
 
 
 def collinear_panel(scales=(1.0, 2.0, 3.0)) -> np.ndarray:
-    base = np.array([0.01, -0.02, 0.015, -0.005, 0.03, -0.01, 0.02, -0.04])
-    return np.outer(base, np.array(scales))
+    base_returns = np.array([0.01, -0.02, 0.015, -0.005, 0.03, -0.01, 0.02, -0.04])
+    return np.outer(base_returns, np.array(scales))
 
 
 # --------------------------------------------------------------------------
@@ -52,22 +52,26 @@ def test_portfolio_volatility_matches_hand_computed_two_asset_case():
     """w'Cw for C = [[0.04, 0.01], [0.01, 0.09]] and w = (0.5, 0.5) is
     0.25 * (0.04 + 0.01 + 0.01 + 0.09) = 0.0375, so the volatility is
     sqrt(0.0375) = 0.1936491673103708."""
-    cov = np.array([[0.04, 0.01], [0.01, 0.09]])
+    covariance = np.array([[0.04, 0.01], [0.01, 0.09]])
     weights = np.array([0.5, 0.5])
-    assert diversification_metrics.portfolio_volatility(cov, weights) == pytest.approx(0.0375**0.5)
-    assert diversification_metrics.portfolio_volatility(cov, weights) == pytest.approx(
+    assert diversification_metrics.portfolio_volatility(covariance, weights) == pytest.approx(
+        0.0375**0.5
+    )
+    assert diversification_metrics.portfolio_volatility(covariance, weights) == pytest.approx(
         0.1936491673103708
     )
 
 
 def test_portfolio_volatility_uses_the_weights_it_is_given():
-    cov = np.array([[0.04, 0.01], [0.01, 0.09]])
+    covariance = np.array([[0.04, 0.01], [0.01, 0.09]])
     # All weight on the first asset returns that asset's own volatility.
-    assert diversification_metrics.portfolio_volatility(cov, np.array([1.0, 0.0])) == pytest.approx(
-        0.2
+    assert (
+        diversification_metrics.portfolio_volatility(covariance, np.array([1.0, 0.0]))
+        == pytest.approx(0.2)
     )
-    assert diversification_metrics.portfolio_volatility(cov, np.array([0.0, 1.0])) == pytest.approx(
-        0.3
+    assert (
+        diversification_metrics.portfolio_volatility(covariance, np.array([0.0, 1.0]))
+        == pytest.approx(0.3)
     )
 
 
@@ -81,29 +85,37 @@ def test_portfolio_volatility_falls_when_covariance_is_negative():
     ) < diversification_metrics.portfolio_volatility(variances, weights)
 
 
-def equicorrelated_covariance(n_assets: int, sigma: float, rho: float) -> np.ndarray:
-    """n_assets assets, identical volatility sigma, every pair correlated rho."""
-    cov = np.full((n_assets, n_assets), rho * sigma * sigma)
-    np.fill_diagonal(cov, sigma * sigma)
-    return cov
+def equicorrelated_covariance(
+    n_assets: int, volatility: float, correlation: float
+) -> np.ndarray:
+    """n_assets assets with the same volatility and the same correlation
+    between every pair."""
+    covariance = np.full((n_assets, n_assets), correlation * volatility * volatility)
+    np.fill_diagonal(covariance, volatility * volatility)
+    return covariance
 
 
 def test_equicorrelation_limit_matches_the_closed_form():
-    # With equal volatilities and a shared rho, an equal-weight basket tends to
-    # sigma * sqrt(rho) as the asset count grows. The report quotes this to say
-    # what another name of the same kind would add, so pin it to the algebra.
-    sigma, rho = 0.5, 0.64
-    result = diversification_metrics.diversification(equicorrelated_covariance(6, sigma, rho))
-    assert result["equicorrelation_limit_vol"] == pytest.approx(sigma * 0.8)
+    # With equal volatilities and a shared correlation, an equal-weight basket
+    # tends to volatility * sqrt(correlation) as the asset count grows. The
+    # report quotes this to say what another name of the same kind would add,
+    # so pin it to the algebra.
+    volatility, correlation = 0.5, 0.64
+    diversification_result = diversification_metrics.diversification(
+        equicorrelated_covariance(6, volatility, correlation)
+    )
+    assert diversification_result["equicorrelation_limit_vol"] == pytest.approx(
+        volatility * 0.8
+    )
 
 
 def test_equicorrelation_limit_is_approached_from_above_as_n_grows():
-    sigma, rho = 0.5, 0.64
-    limit = sigma * np.sqrt(rho)
+    volatility, correlation = 0.5, 0.64
+    limit = volatility * np.sqrt(correlation)
     previous = None
     for n_assets in (2, 4, 8, 32, 256):
         vol = diversification_metrics.diversification(
-            equicorrelated_covariance(n_assets, sigma, rho)
+            equicorrelated_covariance(n_assets, volatility, correlation)
         )["equal_weight_portfolio_vol"]
         assert vol > limit
         if previous is not None:
@@ -113,14 +125,19 @@ def test_equicorrelation_limit_is_approached_from_above_as_n_grows():
 
 
 def test_equicorrelation_limit_is_the_asset_itself_when_everything_moves_together():
-    # rho = 1 means the basket never beats one name, so the limit is sigma.
-    result = diversification_metrics.diversification(equicorrelated_covariance(5, 0.4, 1.0))
-    assert result["equicorrelation_limit_vol"] == pytest.approx(0.4)
+    # A correlation of 1 means the basket never beats one name, so the limit is
+    # the single-asset volatility.
+    diversification_result = diversification_metrics.diversification(
+        equicorrelated_covariance(5, 0.4, 1.0)
+    )
+    assert diversification_result["equicorrelation_limit_vol"] == pytest.approx(0.4)
 
 
 def test_equicorrelation_limit_is_zero_when_assets_are_independent():
-    result = diversification_metrics.diversification(equicorrelated_covariance(5, 0.4, 0.0))
-    assert result["equicorrelation_limit_vol"] == pytest.approx(0.0)
+    diversification_result = diversification_metrics.diversification(
+        equicorrelated_covariance(5, 0.4, 0.0)
+    )
+    assert diversification_result["equicorrelation_limit_vol"] == pytest.approx(0.0)
 
 
 def test_equal_weights_sum_to_one():
@@ -139,62 +156,67 @@ def test_perfectly_correlated_panel_captures_no_diversification():
     """Columns that are scalar multiples of one another correlate at 1, so the
     equal-weight portfolio volatility equals the weighted average of the single
     asset volatilities and nothing is removed."""
-    cov = diversification_metrics.annualized_covariance(collinear_panel())
-    result = diversification_metrics.diversification(cov)
-    assert result["equal_weight_portfolio_vol"] == pytest.approx(
-        result["average_single_asset_vol"]
+    covariance = diversification_metrics.annualized_covariance(collinear_panel())
+    diversification_result = diversification_metrics.diversification(covariance)
+    assert diversification_result["equal_weight_portfolio_vol"] == pytest.approx(
+        diversification_result["average_single_asset_vol"]
     )
-    assert result["risk_removed_actual"] == pytest.approx(0.0, abs=1e-12)
-    assert result["diversification_captured"] == pytest.approx(0.0, abs=1e-12)
+    assert diversification_result["risk_removed_actual"] == pytest.approx(0.0, abs=1e-12)
+    assert diversification_result["diversification_captured"] == pytest.approx(0.0, abs=1e-12)
     # The counterfactual still has room to move, so the ratio is a real zero
     # rather than zero divided by zero.
-    assert result["risk_removed_if_uncorrelated"] > 0.3
+    assert diversification_result["risk_removed_if_uncorrelated"] > 0.3
 
 
 def test_uncorrelated_panel_captures_all_available_diversification():
-    cov = diversification_metrics.annualized_covariance(orthogonal_panel())
-    off = diversification_metrics.off_diagonal(cov)
-    assert np.allclose(off, 0.0)
-    result = diversification_metrics.diversification(cov)
-    assert result["equal_weight_portfolio_vol"] == pytest.approx(result["zero_correlation_vol"])
-    assert result["diversification_captured"] == pytest.approx(1.0, abs=1e-12)
+    covariance = diversification_metrics.annualized_covariance(orthogonal_panel())
+    off_diagonal_values = diversification_metrics.off_diagonal(covariance)
+    assert np.allclose(off_diagonal_values, 0.0)
+    diversification_result = diversification_metrics.diversification(covariance)
+    assert diversification_result["equal_weight_portfolio_vol"] == pytest.approx(
+        diversification_result["zero_correlation_vol"]
+    )
+    assert diversification_result["diversification_captured"] == pytest.approx(1.0, abs=1e-12)
 
 
 def test_diversification_captured_sits_between_the_two_extremes():
     """A panel that is neither collinear nor orthogonal lands strictly inside."""
     returns = orthogonal_panel() + collinear_panel(scales=(0.01, 0.01, 0.01))
-    result = diversification_metrics.diversification(
+    diversification_result = diversification_metrics.diversification(
         diversification_metrics.annualized_covariance(returns)
     )
-    assert 0.0 < result["diversification_captured"] < 1.0
+    assert 0.0 < diversification_result["diversification_captured"] < 1.0
     assert (
-        result["zero_correlation_vol"]
-        < result["equal_weight_portfolio_vol"]
-        < result["average_single_asset_vol"]
+        diversification_result["zero_correlation_vol"]
+        < diversification_result["equal_weight_portfolio_vol"]
+        < diversification_result["average_single_asset_vol"]
     )
 
 
 def test_diversification_reports_equal_weights():
-    cov = diversification_metrics.annualized_covariance(orthogonal_panel())
-    assert diversification_metrics.diversification(cov)["weight_per_asset"] == pytest.approx(1 / 3)
+    covariance = diversification_metrics.annualized_covariance(orthogonal_panel())
+    assert diversification_metrics.diversification(covariance)["weight_per_asset"] == pytest.approx(
+        1 / 3
+    )
 
 
 def test_zero_correlation_volatility_matches_the_closed_form():
     """For equal weights the zero-correlation portfolio volatility is
     sqrt(sum(sigma_i^2)) / n."""
-    cov = np.diag([0.04, 0.09, 0.16])
+    covariance = np.diag([0.04, 0.09, 0.16])
     expected = np.sqrt(0.04 + 0.09 + 0.16) / 3
-    assert diversification_metrics.diversification(cov)["zero_correlation_vol"] == pytest.approx(
-        expected
+    assert (
+        diversification_metrics.diversification(covariance)["zero_correlation_vol"]
+        == pytest.approx(expected)
     )
 
 
 def test_identical_assets_leave_the_portfolio_where_it_started():
-    cov = np.full((4, 4), 0.09)
-    result = diversification_metrics.diversification(cov)
-    assert result["equal_weight_portfolio_vol"] == pytest.approx(0.3)
-    assert result["average_single_asset_vol"] == pytest.approx(0.3)
-    assert result["risk_removed_actual"] == pytest.approx(0.0, abs=1e-12)
+    covariance = np.full((4, 4), 0.09)
+    diversification_result = diversification_metrics.diversification(covariance)
+    assert diversification_result["equal_weight_portfolio_vol"] == pytest.approx(0.3)
+    assert diversification_result["average_single_asset_vol"] == pytest.approx(0.3)
+    assert diversification_result["risk_removed_actual"] == pytest.approx(0.0, abs=1e-12)
 
 
 # --------------------------------------------------------------------------
@@ -216,29 +238,34 @@ def test_annualized_volatility_uses_the_n_minus_one_divisor():
 
 def test_annualized_covariance_diagonal_matches_annualized_variance():
     returns = orthogonal_panel() + collinear_panel(scales=(0.01, 0.02, 0.005))
-    cov = diversification_metrics.annualized_covariance(returns)
-    vols = diversification_metrics.annualized_volatility(returns)
-    assert np.allclose(np.sqrt(np.diag(cov)), vols)
+    covariance = diversification_metrics.annualized_covariance(returns)
+    volatilities = diversification_metrics.annualized_volatility(returns)
+    assert np.allclose(np.sqrt(np.diag(covariance)), volatilities)
 
 
 def test_correlation_matrix_has_a_unit_diagonal_and_is_symmetric():
-    corr = diversification_metrics.correlation_matrix(
+    correlations = diversification_metrics.correlation_matrix(
         orthogonal_panel() + collinear_panel((0.01, 0.02, 0.005))
     )
-    assert np.allclose(np.diag(corr), 1.0)
-    assert np.allclose(corr, corr.T)
+    assert np.allclose(np.diag(correlations), 1.0)
+    assert np.allclose(correlations, correlations.T)
 
 
 def test_off_diagonal_returns_every_entry_but_the_diagonal():
     matrix = np.arange(16, dtype=float).reshape(4, 4)
-    off = diversification_metrics.off_diagonal(matrix)
-    assert len(off) == 12
-    assert 0.0 not in off and 5.0 not in off and 10.0 not in off and 15.0 not in off
+    off_diagonal_values = diversification_metrics.off_diagonal(matrix)
+    assert len(off_diagonal_values) == 12
+    assert (
+        0.0 not in off_diagonal_values
+        and 5.0 not in off_diagonal_values
+        and 10.0 not in off_diagonal_values
+        and 15.0 not in off_diagonal_values
+    )
 
 
 def test_correlation_of_collinear_columns_is_one():
-    corr = diversification_metrics.correlation_matrix(collinear_panel())
-    assert np.allclose(corr, 1.0)
+    correlations = diversification_metrics.correlation_matrix(collinear_panel())
+    assert np.allclose(correlations, 1.0)
 
 
 # --------------------------------------------------------------------------
@@ -266,11 +293,11 @@ def test_max_drawdown_counts_a_fall_from_the_very_first_day():
 
 def test_drawdown_paths_start_at_zero_and_agree_with_max_drawdown():
     returns = orthogonal_panel()
-    paths = diversification_metrics.drawdown_paths(returns)
-    assert paths.shape == (returns.shape[0] + 1, returns.shape[1])
-    assert np.allclose(paths[0], 0.0)
-    assert np.allclose(paths.min(axis=0), diversification_metrics.max_drawdown(returns))
-    assert (paths <= 1e-15).all()
+    drawdowns = diversification_metrics.drawdown_paths(returns)
+    assert drawdowns.shape == (returns.shape[0] + 1, returns.shape[1])
+    assert np.allclose(drawdowns[0], 0.0)
+    assert np.allclose(drawdowns.min(axis=0), diversification_metrics.max_drawdown(returns))
+    assert (drawdowns <= 1e-15).all()
 
 
 # --------------------------------------------------------------------------
@@ -376,9 +403,9 @@ def test_build_close_path_starts_at_the_close_before_the_first_return():
     day_list = dates(3)
     symbols = ["AAA", "BBB"]
     returns = np.array([[0.01, 0.02], [0.03, -0.01], [-0.02, 0.04]])
-    _, path = panel_and_path(day_list, symbols, returns)
-    assert path.dates == [day_list[0] - DAY, *day_list]
-    assert np.allclose(np.diff(np.log(path.closes), axis=0), returns)
+    _, close_path = panel_and_path(day_list, symbols, returns)
+    assert close_path.dates == [day_list[0] - DAY, *day_list]
+    assert np.allclose(np.diff(np.log(close_path.closes), axis=0), returns)
 
 
 def test_build_close_path_keeps_complete_days_the_panel_excludes():
@@ -403,8 +430,14 @@ def test_build_close_path_keeps_complete_days_the_panel_excludes():
         day_list[4]: 81.0,
     }
     closes = [(day, symbol, level) for day, level in levels.items() for symbol in symbols]
-    path = diversification_metrics.build_close_path(closes, panel)
-    assert path.dates == [day_list[0] - DAY, day_list[0], day_list[1], day_list[3], day_list[4]]
+    close_path = diversification_metrics.build_close_path(closes, panel)
+    assert close_path.dates == [
+        day_list[0] - DAY,
+        day_list[0],
+        day_list[1],
+        day_list[3],
+        day_list[4],
+    ]
 
 
 def test_build_close_path_needs_a_close_before_the_first_return():
@@ -455,9 +488,9 @@ def test_panel_metrics_rejects_an_asset_that_never_moved():
     day_list = dates(6)
     symbols = ["AAA", "BBB"]
     returns = np.column_stack([np.array([0.01, -0.02, 0.03, 0.01, -0.01, 0.02]), np.zeros(6)])
-    panel, path = panel_and_path(day_list, symbols, returns)
+    panel, close_path = panel_and_path(day_list, symbols, returns)
     with pytest.raises(ValueError, match="BBB did not move"):
-        diversification_metrics.panel_metrics(panel, path)
+        diversification_metrics.panel_metrics(panel, close_path)
 
 
 def test_classify_excluded_dates_sorts_each_date_into_its_reason():
@@ -518,11 +551,11 @@ def test_panel_metrics_output_is_json_serializable():
     day_list = dates(8)
     returns = orthogonal_panel()
     symbols = ["AAA", "BBB", "CCC"]
-    text = json.dumps(
+    serialized_metrics = json.dumps(
         diversification_metrics.panel_metrics(*panel_and_path(day_list, symbols, returns))
     )
-    assert "NaN" not in text
-    assert "Infinity" not in text
+    assert "NaN" not in serialized_metrics
+    assert "Infinity" not in serialized_metrics
 
 
 # --------------------------------------------------------------------------
@@ -577,6 +610,6 @@ def test_panel_metrics_refuses_a_panel_too_short_for_a_correlation_interval():
     day_list = dates(3)
     symbols = ["AAA", "BBB"]
     returns = np.array([[0.01, 0.02], [0.03, -0.01], [-0.02, 0.04]])
-    panel, path = panel_and_path(day_list, symbols, returns)
+    panel, close_path = panel_and_path(day_list, symbols, returns)
     with pytest.raises(diversification_metrics.PanelDataError, match="needs at least 4"):
-        diversification_metrics.panel_metrics(panel, path)
+        diversification_metrics.panel_metrics(panel, close_path)

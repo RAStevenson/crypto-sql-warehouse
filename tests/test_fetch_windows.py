@@ -34,13 +34,13 @@ def inclusive_bucket_count(window_start: datetime, window_end: datetime) -> int:
     """How many epoch-aligned hourly buckets the API would return for an
     inclusive [start, end] request. Computed here independently of the code
     under test on purpose."""
-    first = window_start.replace(minute=0, second=0, microsecond=0)
-    if window_start != first:  # a start mid-hour cannot claim its own bucket
-        first += HOUR
-    last = window_end.replace(minute=0, second=0, microsecond=0)
-    if last < first:
+    first_bucket = window_start.replace(minute=0, second=0, microsecond=0)
+    if window_start != first_bucket:  # a start mid-hour cannot claim its own bucket
+        first_bucket += HOUR
+    last_bucket = window_end.replace(minute=0, second=0, microsecond=0)
+    if last_bucket < first_bucket:
         return 0
-    return int((last - first) // HOUR) + 1
+    return int((last_bucket - first_bucket) // HOUR) + 1
 
 
 @pytest.mark.parametrize("span", SPANS, ids=lambda span: str(span))
@@ -130,12 +130,12 @@ def test_iter_windows_rejects_a_nonsense_cap():
 def test_floor_hour_converts_an_aware_datetime_to_utc_before_truncating():
     moment = datetime(2026, 10, 3, 13, 30, tzinfo=HALF_HOUR_ZONE)
 
-    result = floor_hour(moment)
+    floored_hour = floor_hour(moment)
 
     # 13:30+05:30 is 08:00 UTC. Truncating in place would give 13:00+05:30,
     # which is 07:30 UTC and not a bucket.
-    assert result == datetime(2026, 10, 3, 8, 0, tzinfo=UTC)
-    assert result.tzinfo is UTC
+    assert floored_hour == datetime(2026, 10, 3, 8, 0, tzinfo=UTC)
+    assert floored_hour.tzinfo is UTC
 
 
 def test_iter_windows_from_a_half_hour_offset_start_tiles_on_the_utc_hour():
@@ -149,8 +149,8 @@ def test_iter_windows_from_a_half_hour_offset_start_tiles_on_the_utc_hour():
     covered: list[datetime] = []
     for window_start, window_end in windows:
         for bound in (window_start, window_end):
-            in_utc = bound.astimezone(UTC)
-            assert (in_utc.minute, in_utc.second, in_utc.microsecond) == (0, 0, 0)
+            bound_in_utc = bound.astimezone(UTC)
+            assert (bound_in_utc.minute, bound_in_utc.second, bound_in_utc.microsecond) == (0, 0, 0)
         bucket = window_start
         while bucket <= window_end:
             covered.append(bucket)

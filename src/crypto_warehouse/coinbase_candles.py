@@ -127,10 +127,10 @@ def parse_candles(payload: object, product_code: str) -> list[Candle]:
                     volume=_to_decimal(row[5]),
                 )
             )
-        except (TypeError, ValueError, OverflowError, decimal.InvalidOperation) as exc:
+        except (TypeError, ValueError, OverflowError, decimal.InvalidOperation) as error:
             raise CandlePayloadError(
-                f"{product_code}: candle {index} has unreadable values {row!r}: {exc}"
-            ) from exc
+                f"{product_code}: candle {index} has unreadable values {row!r}: {error}"
+            ) from error
     return candles
 
 
@@ -138,8 +138,8 @@ def _backoff_seconds(attempt: int) -> float:
     """Return the seconds to wait before the next attempt, which double per
     attempt up to a cap and carry a small random jitter so that retries do not
     repeat at fixed intervals."""
-    base = min(BACKOFF_BASE_SECONDS * (2**attempt), BACKOFF_CAP_SECONDS)
-    return base + random.uniform(0.0, BACKOFF_JITTER_SECONDS)
+    base_delay = min(BACKOFF_BASE_SECONDS * (2**attempt), BACKOFF_CAP_SECONDS)
+    return base_delay + random.uniform(0.0, BACKOFF_JITTER_SECONDS)
 
 
 def _retry_after_seconds(response: requests.Response) -> float | None:
@@ -178,7 +178,7 @@ def fetch_window(
     first try.
     """
     url = f"{API_BASE}/products/{product_code}/candles"
-    params = {
+    query_parameters = {
         "granularity": GRANULARITY_SECONDS,
         "start": window_start.isoformat(),
         "end": window_end.isoformat(),
@@ -187,14 +187,14 @@ def fetch_window(
     last_error: Exception | None = None
     for attempt in range(MAX_ATTEMPTS):
         try:
-            response = session.get(url, params=params, timeout=REQUEST_TIMEOUT_SECONDS)
-        except RETRY_EXCEPTIONS as exc:
-            last_error = exc
+            response = session.get(url, params=query_parameters, timeout=REQUEST_TIMEOUT_SECONDS)
+        except RETRY_EXCEPTIONS as error:
+            last_error = error
             delay = _backoff_seconds(attempt)
             log.warning(
                 "%s: %s on attempt %d/%d, retrying in %.1fs",
                 product_code,
-                type(exc).__name__,
+                type(error).__name__,
                 attempt + 1,
                 MAX_ATTEMPTS,
                 delay,

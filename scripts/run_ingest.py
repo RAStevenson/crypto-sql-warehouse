@@ -90,8 +90,8 @@ def main() -> int:
             apply_floor=args.backfill_days is not None,
             refresh=not args.no_refresh_marts,
         )
-    except (ConfigError, FileNotFoundError) as exc:
-        log.error("%s", exc)
+    except (ConfigError, FileNotFoundError) as error:
+        log.error("%s", error)
         return 2
 
 

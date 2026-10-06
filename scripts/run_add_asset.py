@@ -85,10 +85,10 @@ def main() -> int:
     configure_logging(args.verbose)
 
     try:
-        base, quote = parse_product_code(args.product_code)
-        code = f"{base}-{quote}"
-        symbol = (args.symbol or base).strip().upper()
-        name = args.name or symbol
+        base_currency, quote_currency = parse_product_code(args.product_code)
+        product_code = f"{base_currency}-{quote_currency}"
+        symbol = (args.symbol or base_currency).strip().upper()
+        asset_name = args.name or symbol
 
         # Only the probe touches the network, so only the probe's failures are
         # reported as a failed probe. ConfigError subclasses RuntimeError and
@@ -96,39 +96,39 @@ def main() -> int:
         try:
             with requests.Session() as session:
                 session.headers["User-Agent"] = USER_AGENT
-                probe_product(session, code)
+                probe_product(session, product_code)
         except ConfigError:
             raise
         except (requests.RequestException, RuntimeError, CandlePayloadError):
-            log.error("%s: the Coinbase probe failed", code, exc_info=True)
+            log.error("%s: the Coinbase probe failed", product_code, exc_info=True)
             log.error(
                 "%s was not registered and nothing was written; check the product code "
                 "and rerun",
-                code,
+                product_code,
             )
             return 2
 
-        with closing(connect()) as conn:
-            with conn.cursor() as cur:
+        with closing(connect()) as connection:
+            with connection.cursor() as cursor:
                 asset_id = insert_asset(
-                    cur,
+                    cursor,
                     symbol=symbol,
-                    product_code=code,
-                    asset_name=name,
-                    quote_currency=quote,
+                    product_code=product_code,
+                    asset_name=asset_name,
+                    quote_currency=quote_currency,
                 )
-            conn.commit()
-        log.info("%s registered as asset_id %d (symbol %s)", code, asset_id, symbol)
-    except ConfigError as exc:
-        log.error("%s", exc)
+            connection.commit()
+        log.info("%s registered as asset_id %d (symbol %s)", product_code, asset_id, symbol)
+    except ConfigError as error:
+        log.error("%s", error)
         return 2
 
     if args.no_backfill:
-        log.info("registered without backfill; the next ingest run loads %s", code)
+        log.info("registered without backfill; the next ingest run loads %s", product_code)
         return 0
 
     exit_code = run_ingest(
-        products=[code],
+        products=[product_code],
         backfill_days=backfill_days,
         apply_floor=False,
         refresh=True,
@@ -137,8 +137,8 @@ def main() -> int:
         log.error(
             "%s is registered but its backfill did not finish. Finish it with: "
             "python scripts/run_ingest.py --products %s --backfill-days %d",
-            code,
-            code,
+            product_code,
+            product_code,
             backfill_days,
         )
     return exit_code

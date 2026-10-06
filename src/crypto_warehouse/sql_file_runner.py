@@ -28,7 +28,7 @@ VERIFY_FILE = "05_verify.sql"
 # script reports each passing check as a RAISE NOTICE line, so the list is
 # replaced.
 class NoticeLogger(list):
-    """A replacement for conn.notices that logs each server notice as it arrives.
+    """A replacement for connection.notices that logs each server notice as it arrives.
 
     Nothing is stored, so the list stays empty however long the run is.
     """
@@ -54,12 +54,12 @@ def sql_path(name: str) -> Path:
     return path
 
 
-def run_sql_file(conn, name: str) -> None:
+def run_sql_file(connection, name: str) -> None:
     """Execute one file from sql/ on an open connection in a single execute() call.
 
     This does not commit, so the caller controls the transaction.
     """
     path = sql_path(name)
     log.info("executing sql/%s", path.name)
-    with conn.cursor() as cur:
-        cur.execute(path.read_text(encoding="utf-8"))
+    with connection.cursor() as cursor:
+        cursor.execute(path.read_text(encoding="utf-8"))

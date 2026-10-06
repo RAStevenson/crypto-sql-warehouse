@@ -64,8 +64,8 @@ def main() -> int:
     configure_logging(args.verbose)
     try:
         metrics = run_analysis(Path(args.metrics), Path(args.figures))
-    except ConfigError as exc:
-        log.error("%s", exc)
+    except ConfigError as error:
+        log.error("%s", error)
         return 2
     except psycopg2.OperationalError:
         log.error("could not reach the database", exc_info=True)
@@ -79,22 +79,22 @@ def main() -> int:
             "nothing was written; run scripts/run_setup.py and scripts/run_ingest.py first"
         )
         return 1
-    except PanelDataError as exc:
-        log.error("%s", exc)
+    except PanelDataError as error:
+        log.error("%s", error)
         log.error("nothing was written")
         return 1
 
-    div = metrics["diversification"]
+    diversification = metrics["diversification"]
     log.info(
         "equal-weight portfolio vol %.4f against average single-asset vol %.4f",
-        div["equal_weight_portfolio_vol"],
-        div["average_single_asset_vol"],
+        diversification["equal_weight_portfolio_vol"],
+        diversification["average_single_asset_vol"],
     )
     log.info(
         "risk removed %.1f%% of the %.1f%% removable at zero correlation (%.1f%% captured)",
-        100 * div["risk_removed_actual"],
-        100 * div["risk_removed_if_uncorrelated"],
-        100 * div["diversification_captured"],
+        100 * diversification["risk_removed_actual"],
+        100 * diversification["risk_removed_if_uncorrelated"],
+        100 * diversification["diversification_captured"],
     )
 
     if args.no_report:

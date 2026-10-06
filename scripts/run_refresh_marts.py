@@ -35,10 +35,10 @@ def main() -> int:
 
     configure_logging(args.verbose)
     try:
-        with closing(connect()) as conn:
-            refresh_marts(conn)
-    except (ConfigError, FileNotFoundError) as exc:
-        log.error("%s", exc)
+        with closing(connect()) as connection:
+            refresh_marts(connection)
+    except (ConfigError, FileNotFoundError) as error:
+        log.error("%s", error)
         return 2
     log.info("marts refreshed")
     return 0

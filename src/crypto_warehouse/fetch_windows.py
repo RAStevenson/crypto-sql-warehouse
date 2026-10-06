@@ -48,11 +48,11 @@ def missing_buckets(
 
 def longest_consecutive_run(buckets: list[datetime]) -> int:
     """Length of the longest run of back-to-back hours in a time-ordered bucket list."""
-    longest = run = 0
+    longest = current_run = 0
     previous = None
     for bucket in buckets:
-        run = run + 1 if previous is not None and bucket - previous == HOUR else 1
-        longest = max(longest, run)
+        current_run = current_run + 1 if previous is not None and bucket - previous == HOUR else 1
+        longest = max(longest, current_run)
         previous = bucket
     return longest
 
@@ -74,13 +74,13 @@ def iter_windows(
     # The start is floored, not ceiled, because flooring can request one
     # bucket already held, which the upsert absorbs, while a ceiling would
     # skip an hour.
-    cursor = floor_hour(start)
+    window_start = floor_hour(start)
     # current_hour is still forming, so the last bucket requested is the hour
     # before it.
     last_bucket = floor_hour(current_hour) - HOUR
     span = (max_candles - 1) * HOUR
 
-    while cursor <= last_bucket:
-        window_end = min(cursor + span, last_bucket)
-        yield cursor, window_end
-        cursor = window_end + HOUR
+    while window_start <= last_bucket:
+        window_end = min(window_start + span, last_bucket)
+        yield window_start, window_end
+        window_start = window_end + HOUR
