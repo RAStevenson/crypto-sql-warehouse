@@ -15,6 +15,11 @@ To rebuild from scratch, which deletes every stored candle:
 To apply a changed mart definition without touching the stored candles:
 
     python scripts/run_setup.py --rebuild-marts
+
+To convert a warehouse built before timeframes existed (one whose fact table
+is core.ohlcv_hourly), keeping every stored candle and run record:
+
+    python scripts/run_setup.py --migrate
 """
 
 import sys
@@ -50,12 +55,22 @@ def main() -> None:
             "Raw and core keep their data"
         ),
     )
+    rebuild_options.add_argument(
+        "--migrate",
+        action="store_true",
+        help=(
+            "Convert a warehouse built before timeframes existed (fact table "
+            "core.ohlcv_hourly) in place, keeping every stored candle"
+        ),
+    )
     parser.add_argument("--verbose", action="store_true", help="Debug-level logging")
     args = parser.parse_args()
 
     configure_logging(args.verbose)
     try:
-        sys.exit(run_setup(reset=args.reset, marts_only=args.rebuild_marts))
+        sys.exit(
+            run_setup(reset=args.reset, marts_only=args.rebuild_marts, migrate=args.migrate)
+        )
     except (OperatorError, FileNotFoundError) as error:
         logger.error("%s", error)
         sys.exit(2)

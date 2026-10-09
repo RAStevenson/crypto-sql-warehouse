@@ -19,7 +19,7 @@ from crypto_warehouse.asset_registration import (
     probe_product,
 )
 from crypto_warehouse.database_connection import OperatorError
-from crypto_warehouse.fetch_windows import floor_hour
+from crypto_warehouse.fetch_windows import HOURLY_GRANULARITY_SECONDS, floor_to_bucket
 
 # One real candle row in wire order, enough for the probe to count.
 CANDLE_PAYLOAD = "[[1782871200, 58566.2, 59077.93, 58668.85, 58991.99, 350.09989392]]"
@@ -86,11 +86,11 @@ def test_probe_counts_candles_and_names_the_product_in_the_url():
 
 def test_probe_asks_for_exactly_the_trailing_probe_hours_ending_on_the_current_hour():
     session = FakeSession(FakeResponse(text=CANDLE_PAYLOAD))
-    hour_before = floor_hour(datetime.now(UTC))
+    hour_before = floor_to_bucket(datetime.now(UTC), HOURLY_GRANULARITY_SECONDS)
 
     probe_product(session, "XRP-USD")
 
-    hour_after = floor_hour(datetime.now(UTC))
+    hour_after = floor_to_bucket(datetime.now(UTC), HOURLY_GRANULARITY_SECONDS)
     (call,) = session.calls
     start = datetime.fromisoformat(call["params"]["start"])
     end = datetime.fromisoformat(call["params"]["end"])

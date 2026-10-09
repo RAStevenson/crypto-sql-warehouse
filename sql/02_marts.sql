@@ -47,11 +47,14 @@
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
--- marts.daily_ohlcv: hourly facts rolled up to trading days (UTC).
+-- marts.daily_ohlcv: the 1-hour series rolled up to trading days (UTC).
 --
 -- Daily bars are derived from hourly rather than fetched separately so both
--- granularities come from one source; a discrepancy between granularities
--- can then only be a rollup bug, never a data-source mismatch.
+-- granularities come from one source; a discrepancy between them can then
+-- only be a rollup bug, never a data-source mismatch. Every mart builds
+-- from the 1-hour series alone. The finer timeframes in core.ohlcv are for
+-- intraday questions and the CSV export, and check 8 in 05_verify.sql holds
+-- them against the hourly bars.
 --
 -- open/close use ordered array_agg: aggregates cannot say "first row by
 -- time" directly, and this idiom avoids a second pass with window functions.
@@ -74,7 +77,8 @@ SELECT
     sum(volume)                                  AS volume,
     count(*)                                     AS hours_present,
     count(*) = 24                                AS is_complete
-FROM core.ohlcv_hourly
+FROM core.ohlcv
+WHERE granularity_seconds = 3600
 GROUP BY asset_id, (ts_utc AT TIME ZONE 'UTC')::date;
 
 CREATE UNIQUE INDEX daily_ohlcv_pk ON marts.daily_ohlcv (asset_id, trade_date);

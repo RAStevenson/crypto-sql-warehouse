@@ -6,8 +6,9 @@
 
 The product code is validated against Coinbase before anything is written; it
 has to answer with at least one candle in the trailing probe window. The
-default run then backfills the standard year of history and refreshes the
-marts, so the new asset appears in marts.tableau_daily_extract in the same
+default run then backfills the standard year of history at every active
+timeframe and refreshes the marts, so the new asset appears in
+marts.tableau_daily_extract in the same
 run. The committed report's numbers do not move until
 run_diversification_analysis.py is rerun.
 

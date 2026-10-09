@@ -17,7 +17,7 @@ from psycopg2 import errors as pg_errors
 
 from .coinbase_candles import fetch_window
 from .database_connection import OperatorError
-from .fetch_windows import floor_hour
+from .fetch_windows import HOURLY_GRANULARITY_SECONDS, floor_to_bucket
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +54,9 @@ def probe_product(session: requests.Session, product_code: str) -> int:
     Raises OperatorError when the answer holds no candles, and an unknown
     product raises the client's HTTPError.
     """
-    end = floor_hour(datetime.now(UTC))
+    end = floor_to_bucket(datetime.now(UTC), HOURLY_GRANULARITY_SECONDS)
     start = end - timedelta(hours=PROBE_HOURS)
-    candles = fetch_window(session, product_code, start, end)
+    candles = fetch_window(session, product_code, start, end, HOURLY_GRANULARITY_SECONDS)
     if not candles:
         raise OperatorError(
             f"{product_code}: Coinbase answered but returned no candles in "

@@ -12,6 +12,13 @@
 -- connecting session is set to. See the comment block in 01_schema.sql for
 -- the bug that made this necessary.
 --
+-- Timeframe note: core.ohlcv holds one series per asset per timeframe (1h
+-- always, plus whichever of 1m, 5m and 15m core.timeframes has active).
+-- Each series covers the same trades, so a query over core.ohlcv picks one
+-- timeframe with granularity_seconds. Summing volume across timeframes
+-- would count every trade once per series. The queries below use the 1-hour
+-- series (3600) unless the question is about the timeframes themselves.
+--
 -- Completeness note: marts.daily_metrics reports OHLCV for every day it
 -- observed but leaves derived columns NULL on days built from fewer than 24
 -- hourly candles. Queries below that consume derived columns therefore
@@ -21,18 +28,22 @@
 
 
 -- Q01 --------------------------------------------------------------------
--- What is the latest price on record for each asset, and how fresh is it?
+-- What is the latest price on record for each asset at each timeframe, and
+-- how fresh is each series?
 -- Technique: DISTINCT ON, Postgres's top-1-per-group. ORDER BY must lead
 -- with the DISTINCT ON columns; the trailing sort key decides which row of
--- each group is kept, here the newest. ts_utc is unique per asset, so no
--- tie is possible.
-SELECT DISTINCT ON (a.symbol)
+-- each group is kept, here the newest. ts_utc is unique within an (asset,
+-- timeframe) series, so no tie is possible. The finer series run later than
+-- the hourly one, because a load stops at the last closed bucket of each.
+SELECT DISTINCT ON (a.symbol, t.granularity_seconds)
     a.symbol,
+    t.timeframe_code,
     o.ts_utc,
     o.close
-FROM core.ohlcv_hourly o
+FROM core.ohlcv o
 JOIN core.assets a USING (asset_id)
-ORDER BY a.symbol, o.ts_utc DESC;
+JOIN core.timeframes t USING (granularity_seconds)
+ORDER BY a.symbol, t.granularity_seconds, o.ts_utc DESC;
 
 
 -- Q02 --------------------------------------------------------------------
@@ -46,33 +57,40 @@ SELECT
     a.symbol,
     date_trunc('month', o.ts_utc AT TIME ZONE 'UTC') AS month,
     sum(o.volume)                                    AS monthly_volume
-FROM core.ohlcv_hourly o
+FROM core.ohlcv o
 JOIN core.assets a USING (asset_id)
+WHERE o.granularity_seconds = 3600
 GROUP BY a.symbol, date_trunc('month', o.ts_utc AT TIME ZONE 'UTC')
 HAVING sum(o.volume) > 100000
 ORDER BY a.symbol, month;
 
 
 -- Q03 --------------------------------------------------------------------
--- How much history do we actually hold per asset, including assets that have
--- never loaded a single candle?
--- Technique: INNER vs LEFT JOIN semantics. LEFT JOIN keeps assets with no
--- candles yet (freshly added, is_active toggled), and count(o.ts_utc), not
--- count(*), makes them show 0 instead of 1.
+-- How much history do we actually hold per asset and timeframe, including
+-- pairs that have never loaded a single candle?
+-- Technique: INNER vs LEFT JOIN semantics. The CROSS JOIN lists every pair
+-- the loader is meant to fill, every asset at every active timeframe. The
+-- LEFT JOIN keeps pairs with no candles yet (an asset freshly added, a
+-- timeframe just activated), and count(o.ts_utc), not count(*), makes them
+-- show 0 instead of 1.
 SELECT
     a.symbol,
+    t.timeframe_code,
     a.is_active,
-    count(o.ts_utc)  AS hourly_rows,
+    count(o.ts_utc)  AS candle_rows,
     min(o.ts_utc)    AS first_candle,
     max(o.ts_utc)    AS last_candle
 FROM core.assets a
-LEFT JOIN core.ohlcv_hourly o USING (asset_id)
-GROUP BY a.symbol, a.is_active
-ORDER BY hourly_rows DESC, a.symbol;
+CROSS JOIN core.timeframes t
+LEFT JOIN core.ohlcv o
+       ON o.asset_id = a.asset_id AND o.granularity_seconds = t.granularity_seconds
+WHERE t.is_active
+GROUP BY a.symbol, t.timeframe_code, t.granularity_seconds, a.is_active
+ORDER BY a.symbol, t.granularity_seconds;
 
 
 -- Q04 --------------------------------------------------------------------
--- What do weekly OHLCV bars look like, built from the hourly facts?
+-- What do weekly OHLCV bars look like, built from the 1-hour series?
 -- Technique: aggregation across granularities with date_trunc; ordered
 -- array_agg is the idiom for "first/last value within a group" in a plain
 -- aggregate query. AT TIME ZONE 'UTC' again pins the boundary: under
@@ -86,8 +104,9 @@ SELECT
     min(o.low)                                       AS week_low,
     (array_agg(o.close ORDER BY o.ts_utc DESC))[1]   AS week_close,
     sum(o.volume)                                    AS week_volume
-FROM core.ohlcv_hourly o
+FROM core.ohlcv o
 JOIN core.assets a USING (asset_id)
+WHERE o.granularity_seconds = 3600
 GROUP BY a.symbol, date_trunc('week', o.ts_utc AT TIME ZONE 'UTC')
 ORDER BY a.symbol, week;
 
@@ -435,9 +454,13 @@ LIMIT 10;
 -- LEFT JOIN plus WHERE right-side IS NULL is the anti-join idiom; NOT EXISTS
 -- is the equivalent form. Bounds are per asset, so an asset that started
 -- loading later is not reported as missing the hours before its first candle.
+-- The audit runs on the 1-hour series. A finer series skips every bucket
+-- with no trades, so its holes are mostly quiet minutes, and check 8 in
+-- 05_verify.sql is what tells those apart from lost data.
 WITH bounds AS (
     SELECT asset_id, min(ts_utc) AS first_ts, max(ts_utc) AS last_ts
-    FROM core.ohlcv_hourly
+    FROM core.ohlcv
+    WHERE granularity_seconds = 3600
     GROUP BY asset_id
 ),
 expected AS (
@@ -450,8 +473,10 @@ SELECT
     e.ts AS missing_hour
 FROM expected e
 JOIN core.assets a USING (asset_id)
-LEFT JOIN core.ohlcv_hourly o
-       ON o.asset_id = e.asset_id AND o.ts_utc = e.ts
+LEFT JOIN core.ohlcv o
+       ON o.asset_id = e.asset_id
+      AND o.granularity_seconds = 3600
+      AND o.ts_utc = e.ts
 WHERE o.asset_id IS NULL
 ORDER BY a.symbol, e.ts;
 
@@ -534,8 +559,8 @@ ORDER BY volume_multiple DESC, a.symbol, b.trade_date;
 -- What are the three most recent hourly candles for every asset?
 -- Technique: LATERAL join, a per-row subquery that can reference the outer
 -- row. Compare with Q09's ROW_NUMBER approach: LATERAL can walk the
--- (asset_id, ts_utc) index backwards and stop after 3 rows per asset instead
--- of ranking every row first.
+-- (asset_id, granularity_seconds, ts_utc) index backwards and stop after 3
+-- rows per asset instead of ranking every row first.
 SELECT
     a.symbol,
     recent.ts_utc,
@@ -544,8 +569,9 @@ SELECT
 FROM core.assets a
 CROSS JOIN LATERAL (
     SELECT o.ts_utc, o.close, o.volume
-    FROM core.ohlcv_hourly o
+    FROM core.ohlcv o
     WHERE o.asset_id = a.asset_id
+      AND o.granularity_seconds = 3600
     ORDER BY o.ts_utc DESC
     LIMIT 3
 ) AS recent
@@ -579,6 +605,8 @@ ORDER BY a.symbol;
 -- target must match a unique constraint. EXCLUDED refers to the incoming
 -- row. The DO UPDATE ... WHERE clause skips no-op updates, which avoids dead
 -- tuples and moves updated_at only when a value changed.
+-- The timeframe comes from the run row, since every candle a run fetched
+-- shares its run's granularity.
 -- DISTINCT ON guards against the same bucket appearing twice in one run,
 -- because ON CONFLICT cannot update the same row twice in one statement.
 -- The ORDER BY ends on raw_id DESC, a unique column, so the newest copy of
@@ -590,14 +618,16 @@ ORDER BY a.symbol;
 -- this way.
 --
 -- (Illustrative: run against a real run_id, e.g. the latest succeeded run.)
-INSERT INTO core.ohlcv_hourly
-    (asset_id, ts_utc, open, high, low, close, volume, source_run_id)
+INSERT INTO core.ohlcv
+    (asset_id, granularity_seconds, ts_utc, open, high, low, close, volume, source_run_id)
 SELECT DISTINCT ON (a.asset_id, r.bucket_start)
     a.asset_id,
+    ir.granularity_seconds,
     r.bucket_start,
     r.open, r.high, r.low, r.close, r.volume,
     r.run_id
 FROM raw.candles r
+JOIN raw.ingest_runs ir ON ir.run_id = r.run_id
 JOIN core.assets a ON a.product_code = r.product_code
 WHERE r.run_id = (SELECT max(run_id) FROM raw.ingest_runs WHERE status = 'succeeded')
   AND r.volume >= 0
@@ -606,7 +636,7 @@ WHERE r.run_id = (SELECT max(run_id) FROM raw.ingest_runs WHERE status = 'succee
   AND r.low <= r.open AND r.low <= r.close
   AND r.low > 0
 ORDER BY a.asset_id, r.bucket_start, r.raw_id DESC
-ON CONFLICT (asset_id, ts_utc) DO UPDATE
+ON CONFLICT (asset_id, granularity_seconds, ts_utc) DO UPDATE
 SET open = EXCLUDED.open,
     high = EXCLUDED.high,
     low  = EXCLUDED.low,
@@ -614,7 +644,7 @@ SET open = EXCLUDED.open,
     volume = EXCLUDED.volume,
     source_run_id = EXCLUDED.source_run_id,
     updated_at = now()
-WHERE (core.ohlcv_hourly.open, core.ohlcv_hourly.high, core.ohlcv_hourly.low,
-       core.ohlcv_hourly.close, core.ohlcv_hourly.volume)
+WHERE (core.ohlcv.open, core.ohlcv.high, core.ohlcv.low,
+       core.ohlcv.close, core.ohlcv.volume)
       IS DISTINCT FROM
       (EXCLUDED.open, EXCLUDED.high, EXCLUDED.low, EXCLUDED.close, EXCLUDED.volume);

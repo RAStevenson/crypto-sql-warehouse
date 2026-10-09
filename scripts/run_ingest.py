@@ -1,16 +1,17 @@
-"""Load Coinbase hourly candles into the warehouse, incrementally.
+"""Load Coinbase candles into the warehouse, incrementally.
 
-    python scripts/run_ingest.py                       # every active asset, then the marts
+    python scripts/run_ingest.py                       # every active series, then the marts
     python scripts/run_ingest.py --no-refresh-marts    # load only, leave the marts alone
     python scripts/run_ingest.py --products BTC-USD ETH-USD
+    python scripts/run_ingest.py --timeframes 15m --backfill-days 90
 
 A load ends with the mart refresh in sql/03_refresh_marts.sql unless
 --no-refresh-marts says otherwise, so the default run leaves nothing stale.
 
-Each product resumes from MAX(ts_utc) in core.ohlcv_hourly minus a few hours
-of deliberate overlap, so running it twice in a row is a no-op in core. One
-product failing does not stop the others; the exit code is nonzero if anything
-failed.
+Each (product, timeframe) series resumes from its MAX(ts_utc) in core.ohlcv
+minus a few hours of deliberate overlap, so running it twice in a row is a
+no-op in core. One series failing does not stop the others; the exit code is
+nonzero if anything failed.
 """
 
 import sys
@@ -68,6 +69,17 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--timeframes",
+        nargs="+",
+        default=None,
+        metavar="TIMEFRAME",
+        help=(
+            "Timeframe codes to load, from 1m, 5m, 15m and 1h (default: every "
+            "timeframe with is_active in core.timeframes). Naming a timeframe "
+            "explicitly loads it even if is_active is false; the override is logged."
+        ),
+    )
+    parser.add_argument(
         "--no-refresh-marts",
         action="store_true",
         help="Skip the mart refresh that otherwise runs after loading",
@@ -85,6 +97,7 @@ def main() -> None:
     try:
         sys.exit(run_ingest(
             products=args.products,
+            timeframes=args.timeframes,
             backfill_days=backfill_days,
             extend_to_backfill_days=args.backfill_days is not None,
             refresh=not args.no_refresh_marts,
