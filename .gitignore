@@ -22,3 +22,6 @@ logs/
 # assistant tooling - local only, never published
 CLAUDE.md
 .claude/
+
+# CSV files written by scripts/run_export.py
+exports/
