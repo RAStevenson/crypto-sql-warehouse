@@ -34,6 +34,11 @@ matplotlib==3.11.1
 dbt-core==1.12.5
 dbt-postgres==1.11.0
 
+# src/crypto_warehouse/report_generator.py reads the dbt project's yml to
+# count its tests. dbt installs PyYAML too, but the report imports it
+# directly, so it is pinned here in its own right (added 2026-10-09).
+PyYAML==6.0.3
+
 # Development only: the test runner, the linter, and the type checker (added
 # 2026-10-04). Pinned so the checks on a reader's machine and on the GitHub Actions runner match the ones
 # here. The tests stub the HTTP session rather than pulling in requests-mock

@@ -8,7 +8,10 @@ rem Three steps, each logged: the load (which refreshes the marts through
 rem dbt), the warehouse checks (every dbt test and the timezone check), and
 rem dbt's own freshness check on core.ohlcv, which says how old the newest
 rem candle is. The checks run even when the load failed, so the log says
-rem what state the warehouse was left in.
+rem what state the warehouse was left in. The script then exits with the
+rem load's code if the load failed, otherwise the checks' code, otherwise
+rem the freshness check's, so a failure shows in Task Scheduler's last run
+rem result as well as in the log.
 rem
 rem Output appends to logs\scheduled_ingest.log; the log lines carry their own
 rem UTC timestamps, and raw.ingest_runs in the database is the real audit
@@ -23,5 +26,11 @@ if not exist logs mkdir logs
 set "PYTHON=python"
 if exist ".venv\Scripts\python.exe" set "PYTHON=.venv\Scripts\python.exe"
 "%PYTHON%" scripts\run_ingest.py >> logs\scheduled_ingest.log 2>&1
+set "LOAD_EXIT=%ERRORLEVEL%"
 "%PYTHON%" scripts\run_verify.py >> logs\scheduled_ingest.log 2>&1
+set "VERIFY_EXIT=%ERRORLEVEL%"
 "%PYTHON%" scripts\run_dbt.py source freshness >> logs\scheduled_ingest.log 2>&1
+set "FRESHNESS_EXIT=%ERRORLEVEL%"
+if not "%LOAD_EXIT%"=="0" exit /b %LOAD_EXIT%
+if not "%VERIFY_EXIT%"=="0" exit /b %VERIFY_EXIT%
+exit /b %FRESHNESS_EXIT%

@@ -166,10 +166,10 @@ def test_migrate_leaves_the_marts_alone_when_only_the_request_log_is_pending(mon
     assert connection.log == [f"file {FETCH_WINDOWS_MIGRATION_FILE}", "commit"]
 
 
-def test_migrate_refuses_a_warehouse_that_needs_no_migration(monkeypatch):
+def test_migrate_succeeds_without_running_anything_on_a_current_warehouse(monkeypatch):
     exit_code, connection = run_migrate(monkeypatch, pending=[])
 
-    assert exit_code == 1
+    assert exit_code == 0
     assert connection.log == []
 
 

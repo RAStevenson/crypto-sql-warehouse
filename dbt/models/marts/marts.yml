@@ -82,7 +82,7 @@ models:
         description: volume times close. An approximation, measured 2026-08-04 at -0.04 percent on average against volume times (high+low+close)/3, with a daily range of -4.16 to +3.14 percent.
 
   - name: pairwise_correlations_90d
-    description: Pearson correlation of daily log returns for each unordered pair of assets over the trailing 90 dates that have a return, with the number of shared days.
+    description: Pearson correlation of daily log returns for each unordered pair of assets over the 90 calendar days ending on the latest date that has a return, with the number of shared days. A day without a return shortens the sample rather than extending the window further back.
     columns:
       - name: asset_id_a
         description: The lower asset_id of the pair.

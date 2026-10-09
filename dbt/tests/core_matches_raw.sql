@@ -39,7 +39,7 @@ LEFT JOIN newest_raw nr
 WHERE nr.asset_id IS NULL
 UNION ALL
 SELECT nr.asset_id, nr.granularity_seconds, nr.bucket_start,
-       'raw bucket was never promoted into core' AS reason
+       'raw bucket was never promoted into core; re-run the load that fetched it' AS reason
 FROM newest_raw nr
 LEFT JOIN {{ source('core', 'ohlcv') }} o
   ON o.asset_id = nr.asset_id

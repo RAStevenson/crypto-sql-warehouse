@@ -385,9 +385,12 @@ def _fetch_and_record_window(
                 ],
             )
         cursor.execute(INSERT_FETCH_WINDOW_SQL, (run_id, window_start, window_end, len(candles)))
-    # Committed per window, so a failure late in a long backfill leaves the
-    # fetched windows in raw, where UPSERT_CORE_SQL can promote them under
-    # their run_id without another API call.
+    # Committed per window, so a failure late in a long backfill keeps the
+    # windows already fetched in raw, each with its row in raw.fetch_windows.
+    # No later step promotes a failed run's rows. Their buckets reach core
+    # only when another run fetches the same span and promotes its own copies.
+    # Until then dbt/tests/core_matches_raw.sql lists any of them core does
+    # not already hold as never promoted.
     connection.commit()
     return candles
 
@@ -557,8 +560,10 @@ def load_product(
 
     # Raw commits per window and the core upsert follows in its own
     # transaction, so core never references raw rows that are missing. A crash
-    # between the two leaves unpromoted raw rows, which raw tolerates as extra
-    # copies, and the next run re-fetches that span from the watermark.
+    # between the two leaves unpromoted raw rows. A daily run re-fetches them
+    # only when they fall after the watermark, so rows left by a failed
+    # --backfill-days or --recheck-gaps run stay unpromoted until a run
+    # fetches that span again, such as the same command run again.
     try:
         rows_fetched, short_windows = _fetch_into_raw(
             connection, session, product_code, granularity_seconds, run_id, start, current_bucket
