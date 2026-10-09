@@ -342,8 +342,9 @@ def build_report() -> None:
     # sentence in it, body prose included, until someone rewords it. Four
     # literals describe the shape of Figure 3 and cannot be computed from the
     # metrics ("fall together and rebound together", "mostly depth rather than
-    # timing", "falling together" in section 1, "one deep joint decline" in
-    # section 5), so check them against the figure by eye after a reload.
+    # timing", "falling together" in section 1, "more than one joint decline"
+    # and "in the deepest" in section 5), so check them against the figure by
+    # eye after a reload.
     limit_gap = (
         diversification["equal_weight_portfolio_vol"] - diversification["equicorrelation_limit_vol"]
     ) / diversification["equal_weight_portfolio_vol"]
@@ -465,14 +466,24 @@ that the whole block sits high."""
         f"Of {provenance['observed_dates']} observed dates, {n_dropped} "
         f"{singular_or_plural(n_dropped, 'is', 'are')} excluded"
     )
-    # True only when this run's history is shorter than a default first load,
-    # so the sentence is left out of a report rendered from a full one.
-    fresh_load_sentence = (
-        f" A fresh load reaches back {DEFAULT_BACKFILL_DAYS} days, further than the "
-        "history behind this run, so its panel starts earlier as well."
-        if provenance["observed_dates"] < DEFAULT_BACKFILL_DAYS
-        else ""
-    )
+    # A fresh first load reaches back DEFAULT_BACKFILL_DAYS. When this run's
+    # history is shorter or longer than that, a reader who reproduces it gets a
+    # different panel, so the sentence says which way and how to match it.
+    if provenance["observed_dates"] < DEFAULT_BACKFILL_DAYS:
+        fresh_load_sentence = (
+            f" A fresh load reaches back {DEFAULT_BACKFILL_DAYS} days, further than the "
+            "history behind this run, so its panel starts earlier as well."
+        )
+    elif provenance["observed_dates"] > DEFAULT_BACKFILL_DAYS:
+        fresh_load_sentence = (
+            f" This run's history covers {provenance['observed_dates']:,} dates. A fresh "
+            f"first load reaches back {DEFAULT_BACKFILL_DAYS} days, so it gives a shorter "
+            "panel and different numbers. Passing <code>run_ingest.py</code> a "
+            "<code>--backfill-days</code> value that reaches back past "
+            f"{close_path['first_date']} loads enough history for this panel."
+        )
+    else:
+        fresh_load_sentence = ""
 
     if not exclusion_reasons:
         exclusion_sentence = f"All {provenance['observed_dates']} observed dates are in the panel."
@@ -511,11 +522,11 @@ that the whole block sits high."""
   <p class="doctype">Analytical Report</p>
   <h1>Diversification Across {number_word(n_assets)} Major Crypto Assets</h1>
   <p class="subtitle">How much volatility an equal-weight holding actually
-  removes, measured over {n_days} complete trading days</p>
+  removes, measured over {n_days:,} complete trading days</p>
   <table class="meta">
     <tr><th>Author</th><td>Robert Stevenson</td></tr>
     <tr><th>Repository</th><td>crypto-sql-warehouse</td></tr>
-    <tr><th>Panel</th><td>{n_days} complete trading days, {panel["first_date"]} to
+    <tr><th>Panel</th><td>{n_days:,} complete trading days, {panel["first_date"]} to
       {panel["last_date"]}, {n_assets} assets</td></tr>
     <tr><th>Source</th><td><code>marts.daily_metrics</code> on PostgreSQL
       {provenance["server_version"]}</td></tr>
@@ -541,7 +552,7 @@ to a single position spread across {n_assets} tickers, and the extra fees and
 operational surface of {n_assets} holdings buy very little risk reduction.</p>
 
 <p class="callout">Every volatility, correlation, and diversification figure
-in this report is computed on one basis, the {n_days}-day panel of days where
+in this report is computed on one basis, the {n_days:,}-day panel of days where
 all {n_assets} assets have a clean daily return. Drawdown and total return
 are computed from the daily closes over the same window, as Table 2 states. Section 2
 states how the panel is built and section 5 states what it cannot support.</p>
@@ -558,7 +569,7 @@ them, the portfolio would have come out at
 between the same {n_assets} assets would have given.</p>
 
 <p>Two caveats belong with that number rather than after it. The panel is
-{n_days} days, short enough that {ordering_caveat}. And Figure 3 shows all
+{n_days:,} days, and at that length {ordering_caveat}. And Figure 3 shows all
 {n_assets} assets falling together, each at least
 {format_percent(shallowest_drawdown)} below its peak, so the
 {format_percent(diversification["risk_removed_actual"])} is measured partly through a joint selloff,
@@ -574,9 +585,10 @@ gives both in full.</p>
 <p>Every number comes from <code>marts.daily_metrics</code> in the warehouse
 this repository builds. That mart holds one row per asset per UTC trading day,
 rolled up in SQL from {provenance["hourly_candle_rows"]:,} hourly candles (the open,
-high, low, close, and volume for each hour) in the 1-hour series of
-<code>core.ohlcv</code> into {provenance["daily_ohlcv_rows"]:,} daily bars in
-<code>marts.daily_ohlcv</code>. Daily bars are derived from hourly ones rather
+high, low, close, and volume for each hour) in <code>core.ohlcv</code> into
+{provenance["daily_ohlcv_rows"]:,} daily bars in
+<code>marts.daily_ohlcv</code>. Only the 1-hour rows of
+<code>core.ohlcv</code> feed that rollup. Daily bars are derived from hourly ones rather
 than fetched separately, so any disagreement between the two granularities can
 only be a rollup bug, which is findable, and never a source discrepancy, which
 is not.</p>
@@ -613,7 +625,7 @@ while still labeled as one day.</p>
 the panel keeps only dates where all {n_assets} assets have a non-null log
 return. {exclusion_sentence} Each exclusion removes
 the date for all {n_assets} assets at once, so the panel is not lopsided toward
-any name. What remains is {n_days} days from {panel["first_date"]} to
+any name. What remains is {n_days:,} days from {panel["first_date"]} to
 {panel["last_date"]}, {n_days * n_assets:,} asset-days with no holes.</p>
 
 <p>The alternative, computing each correlation over whatever dates that
@@ -680,7 +692,7 @@ shows the matrix as a heatmap, and Table 1 gives its values.</p>
   <img src="{figure_data_uri("correlation_heatmap.png")}"
        alt="Pairwise correlation heatmap for the {n_assets} assets">
   <figcaption><strong>Figure 1.</strong> Pairwise correlation of daily log
-  returns over the {n_days}-day panel. The color axis runs from
+  returns over the {n_days:,}-day panel. The color axis runs from
   {correlation["heatmap_scale_low"]:.2f} to {correlation["heatmap_scale_high"]:.2f}
   rather than the full -1 to 1 range, because on a full scale every cell here
   would render in nearly the same tone. Read the colors as differences within
@@ -694,7 +706,7 @@ shows the matrix as a heatmap, and Table 1 gives its values.</p>
 
 <table class="data">
   <caption><strong>Table 1.</strong> The full correlation matrix behind Figure
-  1, on the {n_days}-day complete-day panel.</caption>
+  1, on the {n_days:,}-day complete-day panel.</caption>
   <thead><tr><th></th>{correlation_header}</tr></thead>
   <tbody>{correlation_rows}</tbody>
 </table>
@@ -749,7 +761,7 @@ than timing.</p>
 
 <h3>3.4 The diversification result</h3>
 
-<p>Equal weights on the {n_days}-day covariance matrix give an annualized
+<p>Equal weights on the {n_days:,}-day covariance matrix give an annualized
 portfolio volatility of {diversification["equal_weight_portfolio_vol"]:.4f}. The average
 single asset had {diversification["average_single_asset_vol"]:.4f}, so the basket
 removed {format_percent(diversification["risk_removed_actual"])} of the volatility. Holding the same
@@ -830,7 +842,7 @@ window does not cover.</p>
 <section>
 <h2>5. Limitations</h2>
 
-<p>The panel is {n_days} days. A single pair at the average
+<p>The panel is {n_days:,} days. A single pair at the average
 correlation of {correlation["off_diagonal_mean"]:.3f} has a 95% Fisher interval of
 {correlation["mean_ci95_low"]:.3f} to {correlation["mean_ci95_high"]:.3f} on this many
 observations, a width of {interval_width:.3f}. Fisher's method keeps the interval
@@ -849,14 +861,14 @@ loaded there is no way to separate it out.</p>
 <p>Correlations are not stable, and they are widely reported to rise in
 selloffs. This is the limitation that matters most for how the diversification
 result should be read, because a selloff is when diversification is being
-asked to do something. This panel cannot test that pattern on its own. It
-holds one deep joint decline, visible in Figure 3, in which every asset fell at
-least {format_percent(shallowest_drawdown)} below its peak, and one such decline is too little
-to measure how correlation inside a selloff differs from correlation outside
-one. The {format_percent(
+asked to do something. This report does not test that pattern. The panel
+holds more than one joint decline, visible in Figure 3, and in the deepest every
+asset fell at least {format_percent(shallowest_drawdown)} below its peak. No part of this
+analysis separates selloff days from the rest, so it cannot say how
+correlation inside a selloff differs from correlation outside one. The {format_percent(
 diversification["risk_removed_actual"])} is therefore a reading taken partly
 through a stressed market. If correlations do rise in selloffs, the days
-outside the decline lowered the measured correlation below its selloff
+outside the declines lowered the measured correlation below its selloff
 level, so the
 {format_percent(
 diversification["risk_removed_actual"])} is more likely to be optimistic than conservative
@@ -884,7 +896,7 @@ report.</p>
 USD spot pairs, which is one corner of one asset class. I picked them for
 coverage and liquidity when I built the warehouse. They are not a sample of
 anything. A result about {symbols} is a result about those {n_assets} names on
-this venue over these {n_days} days, and reading it as a claim about crypto in
+this venue over these {n_days:,} days, and reading it as a claim about crypto in
 general would be reading it too widely.</p>
 </section>
 
@@ -909,7 +921,7 @@ the database and applies the schema and
 the marts. <code>run_ingest.py</code> backfills candles at every active
 timeframe, which on a fresh setup is 1 hour alone, and refreshes the marts.
 The first run pulls the full backfill and every later run resumes
-from the watermark, the last hour already loaded. <code>run_diversification_analysis.py</code>
+from the watermark, the last candle already loaded. <code>run_diversification_analysis.py</code>
 builds the panel, writes <code>reports/metrics.json</code> and the four figures
 under <code>reports/figures/</code>, prints the main results to the log, and
 then renders this document. When Chrome is installed at its default Windows
@@ -925,12 +937,13 @@ template and stated in section 2.</p>
 scripts/run_verify.py</code> runs {n_checks} checks against a loaded warehouse,
 each fatal on failure, covering hourly gaps, rollup coverage, raw-to-core
 agreement, upsert idempotency, run status, session-timezone invariance of
-the daily rollup, agreement of the two stored daily marts with their
-definitions, and agreement of any finer timeframe with the hourly bars.
+the daily rollup, and agreement of the two stored daily marts with their
+definitions.
 <code>pytest</code> runs {n_tests} test functions, none of which need a
 database or a network. They cover the ingestion windowing and watermark, the
-API client, asset registration, the marts rebuild, and the diversification
-math in this report, and one checks that every function is documented. The
+API client, asset registration, the marts rebuild, the timeframes migration,
+the CSV export, and the diversification math in this report, and one checks
+that every function is documented. The
 {n_queries} annotated queries in <code>sql/04_queries.sql</code> each run
 standalone against a loaded database.</p>
 
@@ -944,7 +957,7 @@ PostgreSQL {provenance["server_version"]}.</p>
 <footer>
 <p>Generated from <code>reports/metrics.json</code> by
 <code>src/crypto_warehouse/report_generator.py</code>. Panel {panel["first_date"]} to
-{panel["last_date"]}, {n_days} complete days, {n_assets} assets,
+{panel["last_date"]}, {n_days:,} complete days, {n_assets} assets,
 {n_days * n_assets:,} asset-days.</p>
 </footer>
 </article>
