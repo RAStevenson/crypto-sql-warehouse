@@ -244,8 +244,13 @@ stops ingestion without deleting history.
 
 On my machine the loader runs daily through Windows Task Scheduler. It has
 run since 2026-08-10, with one pause from 2026-10-05 to 2026-10-09. The
-task `crypto-warehouse-ingest` calls `scripts/scheduled_ingest.cmd` at 07:10
-local time. The script runs the default ingest from the repo root, then
+task `crypto-warehouse-ingest` calls `scripts/scheduled_ingest.cmd` at 12:10
+UTC. That was 07:10 local time when I registered the task in August. Task
+Scheduler stored the trigger with that day's UTC offset, so the task keeps
+its UTC time through each daylight saving change. From November to March it
+runs at 06:10 local.
+
+The script runs the default ingest from the repo root, then
 `run_verify.py`, then dbt's freshness check on `core.ohlcv`. The freshness
 check reports how old the newest candle is and warns when it is more than
 two days old. All three append their output to one log in `logs/`, so the
@@ -263,6 +268,10 @@ Register-ScheduledTask -TaskName 'crypto-warehouse-ingest' `
   -Trigger (New-ScheduledTaskTrigger -Daily -At 07:10) `
   -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 1))
 ```
+
+Task Scheduler stores the `-At` time with the UTC offset of the day you
+register the task, as above, so the task keeps the UTC time of its first run
+year round.
 
 On Mac or Linux the equivalent is one cron line calling
 `scripts/run_ingest.py`.
@@ -520,8 +529,10 @@ scripts/run_diversification_analysis.py
                               compute reports/metrics.json, figures, and the report
 scripts/run_build_report.py   render the report from metrics.json
 src/crypto_warehouse/         the package the scripts import
+dbt/dbt_project.yml           the dbt project; profiles.yml beside it reads the connection from .env
 dbt/models/marts/             the marts, one dbt model each, with the design rationale in comments
-dbt/models/sources.yml        the raw and core tables dbt reads, with their column tests
+dbt/models/marts/marts.yml    every mart column described, with its tests
+dbt/models/sources.yml        the raw and core tables dbt reads, every column described, with their tests and the freshness rule
 dbt/tests/                    the warehouse checks, one SELECT each, returning the rows that break a rule
 dbt/macros/                   the concurrent-refresh override
 sql/01_schema.sql             schema DDL with design rationale in comments
@@ -530,6 +541,7 @@ sql/05_verify.sql             the timezone check, the one assertion that is not 
 sql/migrations/               in-place upgrades for a warehouse built earlier
 tests/                        the test suite, no database or network needed
 tests/fixtures/               a dump of a small loaded warehouse, for the GitHub Actions job
+.github/workflows/tests.yml   the GitHub Actions jobs: the test suite, and the warehouse against PostgreSQL
 reports/                      the generated report, its metrics and figures
 requirements.txt              exact pins the reported numbers were produced with
 ```

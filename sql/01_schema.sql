@@ -128,13 +128,14 @@ CREATE INDEX ingest_runs_product_started_idx
 -- exchange left it out of its answer, because nothing traded or because
 -- Coinbase itself had an outage. A bucket missing from core that sits
 -- inside no such window was never asked for, which on a warehouse loaded
--- since this table existed means a pipeline bug. Check 1 in 05_verify.sql
--- draws exactly that line, so it needs no list of known outages and no
--- comparison between assets, and it holds for any asset at any timeframe.
+-- since this table existed means a pipeline bug. The dbt test
+-- dbt/tests/gaps_without_a_recorded_request.sql draws exactly that line, so
+-- it needs no list of known outages and no comparison between assets, and it
+-- holds for any asset at any timeframe.
 --
 -- Append-only like the rest of raw. A window that comes back empty still
--- gets its row, because that row is what lets check 1 pass every bucket
--- inside it.
+-- gets its row, because that row is what lets the gap test pass every
+-- bucket inside it.
 -- -----------------------------------------------------------------------------
 CREATE TABLE raw.fetch_windows (
     fetch_id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

@@ -974,9 +974,10 @@ scripts/run_verify.py</code> runs the {n_dbt_tests} dbt tests declared in
 {singular_or_plural(n_sql_checks, "check", f"{n_sql_checks} checks")} in
 <code>sql/05_verify.sql</code> that could not be written as a dbt test, and
 exits nonzero if any of them fails. Together they cover candles missing from
-core that the loader never requested, rollup coverage, raw-to-core agreement,
-upsert idempotency, run status, a refresh after the newest load, and
-session-timezone invariance of the daily rollup. Three more hold the marts to
+core that the loader never requested, an active series that has stopped
+loading, rollup coverage, raw-to-core agreement, upsert idempotency, run
+status, a refresh after the newest load, and session-timezone invariance of
+the daily rollup. Three more hold the marts to
 their own rules for incomplete days, warm-up windows, and returns across
 gaps.
 <code>pytest</code> runs {n_tests} test functions, none of which need a

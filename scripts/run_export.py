@@ -4,8 +4,9 @@
     python scripts/run_export.py prices --timeframe 1h          # every active asset, all history
     python scripts/run_export.py daily --products BTC-USD ETH-USD --start 2025-01-01
 
-prices writes the stored candles (time_utc, open, high, low, close, volume)
-for the chosen assets at one timeframe. daily writes the rows of
+prices writes the stored candles for the chosen assets at one timeframe, with
+the symbol, product code, and timeframe on every row ahead of time_utc, open,
+high, low, close, and volume. daily writes the rows of
 marts.tableau_daily_extract: daily prices with returns, moving averages,
 30-day volatility, and drawdown. Both default to every active asset and to
 all stored history, and both write to exports/ unless --output names a file.

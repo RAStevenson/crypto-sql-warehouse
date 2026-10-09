@@ -89,8 +89,8 @@ INSERT_FETCH_WINDOW_SQL = """
 """
 
 # The buckets of one series missing from core that no window of a succeeded
-# run requested. These are the gaps check 1 in sql/05_verify.sql fails on,
-# and the ones --recheck-gaps asks the exchange for again.
+# run requested. These are the rows dbt/tests/gaps_without_a_recorded_request.sql
+# returns, and the ones --recheck-gaps asks the exchange for again.
 UNRECORDED_GAPS_SQL = """
     WITH series AS (
         SELECT o.asset_id, min(o.ts_utc) AS first_ts, max(o.ts_utc) AS last_ts

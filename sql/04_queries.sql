@@ -456,9 +456,9 @@ LIMIT 10;
 -- started loading later is not reported as missing the hours before its
 -- first candle. The audit runs on the 1-hour series. A finer series skips
 -- every bucket with no trades, so an audit of it would mostly list those
--- quiet buckets. Check 1 in 05_verify.sql judges every series, finer ones
--- included, against raw.fetch_windows, the record of what the loader asked
--- for.
+-- quiet buckets. The dbt test dbt/tests/gaps_without_a_recorded_request.sql
+-- judges every series, finer ones included, against raw.fetch_windows, the
+-- record of what the loader asked for.
 WITH bounds AS (
     SELECT asset_id, min(ts_utc) AS first_ts, max(ts_utc) AS last_ts
     FROM core.ohlcv
