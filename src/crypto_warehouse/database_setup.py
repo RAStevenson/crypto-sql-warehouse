@@ -86,6 +86,28 @@ def needs_timeframes_migration(connection) -> bool:
         return bool(cursor.fetchone()[0])
 
 
+def needs_fetch_windows_migration(connection) -> bool:
+    """Return True if the schema is applied but raw.fetch_windows, which
+    migration 002 adds, does not exist yet."""
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT to_regclass('core.assets') IS NOT NULL "
+            "AND to_regclass('raw.fetch_windows') IS NULL"
+        )
+        return bool(cursor.fetchone()[0])
+
+
+def pending_migrations(connection) -> list[str]:
+    """Return the migration files in sql/migrations/ this warehouse still
+    needs, in the order they must run."""
+    pending = []
+    if needs_timeframes_migration(connection):
+        pending.append(sql_file_runner.TIMEFRAMES_MIGRATION_FILE)
+    if needs_fetch_windows_migration(connection):
+        pending.append(sql_file_runner.FETCH_WINDOWS_MIGRATION_FILE)
+    return pending
+
+
 def drop_schemas(connection) -> None:
     """Drop the marts, core, and raw schemas and everything in them.
 
@@ -115,31 +137,37 @@ def rebuild_marts(connection) -> None:
     sql_file_runner.run_sql_file(connection, sql_file_runner.MARTS_FILE)
 
 
-def migrate_timeframes(database_url: str) -> int:
-    """Convert a warehouse built before timeframes existed, keeping every
-    stored candle and run record, and return a process exit code.
+def run_migrations(database_url: str) -> int:
+    """Apply every migration this warehouse still needs, keeping every stored
+    candle and run record, and return a process exit code.
 
-    Runs sql/migrations/001_add_timeframes.sql and then sql/02_marts.sql in
-    one transaction, so a failure leaves the old warehouse as it was. A
-    warehouse that is already converted, or has no schema, returns 1.
+    The pending files run in order in one transaction, so a failure leaves
+    the old warehouse as it was. Migration 001 drops the marts, so when it
+    runs, sql/02_marts.sql runs after it in the same transaction. A warehouse
+    with nothing pending, or with no schema, returns 1.
     """
     if not database_exists(database_url):
         logger.error("the database does not exist; run scripts/run_setup.py with no flag first")
         return 1
     with closing(database_connection.connect(database_url)) as connection:
-        if not needs_timeframes_migration(connection):
-            logger.error(
-                "nothing to migrate: core.ohlcv_hourly is absent or core.ohlcv already "
-                "exists, so the warehouse already has timeframes or has no schema"
-            )
+        if not schema_is_applied(connection):
+            logger.error("core.assets does not exist; run scripts/run_setup.py with no flag first")
             return 1
-        sql_file_runner.run_sql_file(connection, sql_file_runner.TIMEFRAMES_MIGRATION_FILE)
-        sql_file_runner.run_sql_file(connection, sql_file_runner.MARTS_FILE)
+        pending = pending_migrations(connection)
+        if not pending:
+            logger.error("nothing to migrate: this warehouse already has every migration")
+            return 1
+        for name in pending:
+            sql_file_runner.run_sql_file(connection, name)
+        if sql_file_runner.TIMEFRAMES_MIGRATION_FILE in pending:
+            sql_file_runner.run_sql_file(connection, sql_file_runner.MARTS_FILE)
         connection.commit()
-    logger.info(
-        "migrated: core.ohlcv_hourly is now core.ohlcv with every candle labeled 1h, "
-        "core.timeframes is seeded with 1h active, and the marts are rebuilt"
-    )
+    logger.info("migrated: applied %s", ", ".join(pending))
+    if sql_file_runner.FETCH_WINDOWS_MIGRATION_FILE in pending:
+        logger.info(
+            "runs loaded before raw.fetch_windows existed have no windows on record, so "
+            "check 1 fails on their gaps until scripts/run_ingest.py --recheck-gaps runs"
+        )
     return 0
 
 
@@ -150,13 +178,13 @@ def run_setup(*, reset: bool = False, marts_only: bool = False, migrate: bool = 
     A schema that is already applied returns 1 unless reset is set, in which
     case the schemas are dropped and rebuilt. With marts_only, only the marts
     schema is dropped and rebuilt, which is how a changed mart definition
-    reaches a loaded warehouse. With migrate, a warehouse built before
-    timeframes existed is converted in place.
+    reaches a loaded warehouse. With migrate, a warehouse built before the
+    current schema is brought up to date in place.
     """
     database_url = database_connection.load_database_url()
 
     if migrate:
-        return migrate_timeframes(database_url)
+        return run_migrations(database_url)
 
     if marts_only:
         if not database_exists(database_url):
@@ -179,10 +207,10 @@ def run_setup(*, reset: bool = False, marts_only: bool = False, migrate: bool = 
     with closing(database_connection.connect(database_url)) as connection:
         if schema_is_applied(connection) and not created:
             if not reset:
-                if needs_timeframes_migration(connection):
+                if pending_migrations(connection):
                     logger.error(
-                        "this warehouse predates timeframes (it has core.ohlcv_hourly). "
-                        "Re-run with --migrate to convert it in place and keep every "
+                        "this warehouse predates the current schema. Re-run with "
+                        "--migrate to bring it up to date in place and keep every "
                         "stored candle."
                     )
                     return 1

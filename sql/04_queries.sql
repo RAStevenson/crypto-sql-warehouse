@@ -451,12 +451,14 @@ LIMIT 10;
 -- Q15 --------------------------------------------------------------------
 -- Which hours should exist in the series but have no candle?
 -- Technique: anti-join against generate_series, the data quality audit.
--- LEFT JOIN plus WHERE right-side IS NULL is the anti-join idiom; NOT EXISTS
--- is the equivalent form. Bounds are per asset, so an asset that started
--- loading later is not reported as missing the hours before its first candle.
--- The audit runs on the 1-hour series. A finer series skips every bucket
--- with no trades, so its holes are mostly quiet minutes that cannot be
--- told apart from lost data.
+-- LEFT JOIN plus WHERE right-side IS NULL is the anti-join idiom; NOT
+-- EXISTS is the equivalent form. Bounds are per asset, so an asset that
+-- started loading later is not reported as missing the hours before its
+-- first candle. The audit runs on the 1-hour series. A finer series skips
+-- every bucket with no trades, so an audit of it would mostly list those
+-- quiet buckets. Check 1 in 05_verify.sql judges every series, finer ones
+-- included, against raw.fetch_windows, the record of what the loader asked
+-- for.
 WITH bounds AS (
     SELECT asset_id, min(ts_utc) AS first_ts, max(ts_utc) AS last_ts
     FROM core.ohlcv

@@ -14,6 +14,7 @@ from crypto_warehouse.fetch_windows import (
     iter_windows,
     longest_consecutive_run,
     missing_buckets,
+    windows_covering,
 )
 
 ONE_HOUR = timedelta(hours=1)
@@ -288,3 +289,43 @@ def test_longest_consecutive_run_counts_in_buckets_of_the_given_width():
 
     assert longest_consecutive_run(buckets, 300) == 4
     assert longest_consecutive_run(buckets, HOURLY_GRANULARITY_SECONDS) == 1
+
+
+# --------------------------------------------------------------------------
+# windows_covering, the request plan for re-checking scattered gaps.
+# --------------------------------------------------------------------------
+def test_windows_covering_groups_nearby_gaps_and_ends_each_window_on_a_gap():
+    gaps = [
+        BASE_HOUR,
+        BASE_HOUR + timedelta(hours=5),
+        BASE_HOUR + timedelta(hours=299),  # the last bucket that fits with the first
+        BASE_HOUR + timedelta(hours=300),  # one past it, so a second window
+        BASE_HOUR + timedelta(hours=900),
+    ]
+
+    windows = windows_covering(gaps, HOURLY_GRANULARITY_SECONDS)
+
+    assert windows == [
+        (BASE_HOUR, BASE_HOUR + timedelta(hours=299)),
+        (BASE_HOUR + timedelta(hours=300), BASE_HOUR + timedelta(hours=300)),
+        (BASE_HOUR + timedelta(hours=900), BASE_HOUR + timedelta(hours=900)),
+    ]
+
+
+@pytest.mark.parametrize("granularity_seconds", SUPPORTED_GRANULARITIES)
+def test_windows_covering_covers_every_gap_within_the_cap(granularity_seconds):
+    width = timedelta(seconds=granularity_seconds)
+    gaps = [BASE_HOUR + offset * width for offset in (3, 7, 7, 290, 310, 311, 1200, 1201, 2000)]
+
+    windows = windows_covering(list(reversed(gaps)), granularity_seconds)
+
+    for gap in gaps:
+        assert any(start <= gap <= end for start, end in windows)
+    for start, end in windows:
+        assert start in gaps and end in gaps  # no window reaches past a gap
+        assert inclusive_bucket_count(start, end, granularity_seconds) <= MAX_CANDLES_PER_REQUEST
+    assert windows == sorted(windows)
+
+
+def test_windows_covering_of_no_gaps_is_empty():
+    assert windows_covering([], 300) == []

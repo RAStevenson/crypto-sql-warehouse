@@ -88,6 +88,30 @@ def longest_consecutive_run(buckets: list[datetime], granularity_seconds: int) -
     return longest
 
 
+def windows_covering(
+    buckets: list[datetime],
+    granularity_seconds: int,
+    max_candles: int = MAX_CANDLES_PER_REQUEST,
+) -> list[tuple[datetime, datetime]]:
+    """Return inclusive (window_start, window_end) pairs, in time order, that
+    together cover every bucket in buckets and nothing past the last one.
+
+    Each window starts at the earliest bucket not yet covered and ends at the
+    last bucket that fits within max_candles of it, so scattered buckets
+    share a request when they are close and get their own when they are not.
+    """
+    if max_candles < 1:
+        raise ValueError(f"max_candles must be at least 1, got {max_candles}")
+    span = (max_candles - 1) * bucket_width(granularity_seconds)
+    windows: list[tuple[datetime, datetime]] = []
+    for bucket in sorted(buckets):
+        if windows and bucket <= windows[-1][0] + span:
+            windows[-1] = (windows[-1][0], bucket)
+        else:
+            windows.append((bucket, bucket))
+    return windows
+
+
 def iter_windows(
     start: datetime,
     current_time: datetime,

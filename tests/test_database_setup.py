@@ -7,7 +7,12 @@ from __future__ import annotations
 import re
 
 from crypto_warehouse import database_setup
-from crypto_warehouse.sql_file_runner import SCHEMA_FILE, TIMEFRAMES_MIGRATION_FILE, sql_path
+from crypto_warehouse.sql_file_runner import (
+    FETCH_WINDOWS_MIGRATION_FILE,
+    SCHEMA_FILE,
+    TIMEFRAMES_MIGRATION_FILE,
+    sql_path,
+)
 
 
 class FakeCursor:
@@ -94,7 +99,7 @@ def test_marts_only_refuses_when_the_database_is_missing_and_does_not_create_it(
 # --------------------------------------------------------------------------
 # The timeframes migration
 # --------------------------------------------------------------------------
-def run_migrate(monkeypatch, *, database=True, needs_migration=True):
+def run_migrate(monkeypatch, *, database=True, schema=True, pending=None):
     connection = FakeConnection()
     monkeypatch.setattr(database_setup.database_connection, "load_database_url", lambda: "postgresql://x/y")
     monkeypatch.setattr(
@@ -103,8 +108,11 @@ def run_migrate(monkeypatch, *, database=True, needs_migration=True):
         lambda database_url=None, **kwargs: connection,
     )
     monkeypatch.setattr(database_setup, "database_exists", lambda database_url: database)
+    monkeypatch.setattr(database_setup, "schema_is_applied", lambda connection: schema)
     monkeypatch.setattr(
-        database_setup, "needs_timeframes_migration", lambda connection: needs_migration
+        database_setup,
+        "pending_migrations",
+        lambda connection: list(pending if pending is not None else [TIMEFRAMES_MIGRATION_FILE]),
     )
     monkeypatch.setattr(
         database_setup.sql_file_runner,
@@ -114,20 +122,37 @@ def run_migrate(monkeypatch, *, database=True, needs_migration=True):
     return database_setup.run_setup(migrate=True), connection
 
 
-def test_migrate_runs_the_migration_then_the_marts_in_one_commit(monkeypatch):
-    exit_code, connection = run_migrate(monkeypatch)
+def test_migrate_runs_both_migrations_in_order_then_the_marts_in_one_commit(monkeypatch):
+    exit_code, connection = run_migrate(
+        monkeypatch, pending=[TIMEFRAMES_MIGRATION_FILE, FETCH_WINDOWS_MIGRATION_FILE]
+    )
 
     assert exit_code == 0
     assert connection.log == [
         f"file {TIMEFRAMES_MIGRATION_FILE}",
+        f"file {FETCH_WINDOWS_MIGRATION_FILE}",
         f"file {database_setup.sql_file_runner.MARTS_FILE}",
         "commit",
     ]
     assert connection.closed
 
 
+def test_migrate_leaves_the_marts_alone_when_only_the_request_log_is_pending(monkeypatch):
+    exit_code, connection = run_migrate(monkeypatch, pending=[FETCH_WINDOWS_MIGRATION_FILE])
+
+    assert exit_code == 0
+    assert connection.log == [f"file {FETCH_WINDOWS_MIGRATION_FILE}", "commit"]
+
+
 def test_migrate_refuses_a_warehouse_that_needs_no_migration(monkeypatch):
-    exit_code, connection = run_migrate(monkeypatch, needs_migration=False)
+    exit_code, connection = run_migrate(monkeypatch, pending=[])
+
+    assert exit_code == 1
+    assert connection.log == []
+
+
+def test_migrate_refuses_a_database_with_no_schema(monkeypatch):
+    exit_code, connection = run_migrate(monkeypatch, schema=False)
 
     assert exit_code == 1
     assert connection.log == []
@@ -176,3 +201,14 @@ def test_the_migration_keeps_every_candle_and_labels_it_hourly():
     assert migration_sql.index("DROP TABLE core.ohlcv_hourly") > migration_sql.index(
         "INSERT INTO core.ohlcv"
     )
+
+
+def test_the_request_log_migration_creates_the_same_table_and_index_as_the_schema():
+    schema_sql = sql_path(SCHEMA_FILE).read_text(encoding="utf-8")
+    migration_sql = sql_path(FETCH_WINDOWS_MIGRATION_FILE).read_text(encoding="utf-8")
+
+    table = "raw.fetch_windows"
+    assert create_statement(migration_sql, table) == create_statement(schema_sql, table)
+    index = "CREATE INDEX fetch_windows_run_idx ON raw.fetch_windows (run_id);"
+    assert index in schema_sql
+    assert index in migration_sql

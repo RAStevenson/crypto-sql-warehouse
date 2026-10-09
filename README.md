@@ -136,7 +136,8 @@ python scripts/run_ingest.py --timeframes 15m --backfill-days 90
 python scripts/run_add_asset.py XRP-USD --name Ripple   # register and backfill a new asset
 python scripts/run_export.py prices --products BTC-USD --timeframe 15m --start 2024-01-01
 python scripts/run_export.py daily --start 2025-01-01   # daily metrics, every active asset
-python scripts/run_setup.py --migrate           # convert a warehouse built before timeframes
+python scripts/run_setup.py --migrate           # bring an older warehouse up to date
+python scripts/run_ingest.py --recheck-gaps     # once after --migrate, see below
 pytest                                          # the test suite
 ```
 
@@ -148,10 +149,11 @@ Every argument of every script, mirroring `--help`:
   from `sql/02_marts.sql`. Use it to apply a changed mart definition to a
   warehouse that already holds data. Raw and core keep their data. It cannot
   be combined with `--reset`.
-- `run_setup.py --migrate` converts, in place, a warehouse built before
-  timeframes existed, whose price table is `core.ohlcv_hourly`. Every stored
-  candle is kept and labeled 1h, every run record is kept, and the marts are
-  rebuilt. It cannot be combined with `--reset` or `--rebuild-marts`.
+- `run_setup.py --migrate` brings a warehouse built before the current schema
+  up to date in place, by applying whichever files in `sql/migrations/` it
+  still needs. Every stored candle and run record is kept. A warehouse whose
+  price table is still `core.ohlcv_hourly` gets its candles labeled 1h and its
+  marts rebuilt. It cannot be combined with `--reset` or `--rebuild-marts`.
 - `run_ingest.py --backfill-days N` sets how far back to reach, in days
   (default 365). For a product and timeframe with no rows yet it is the depth
   of the first load. Passing it explicitly also makes it a floor on an
@@ -165,6 +167,13 @@ Every argument of every script, mirroring `--help`:
   to load, from 1m, 5m, 15m, and 1h (default: every timeframe with
   `is_active` in `core.timeframes`). Naming a timeframe explicitly loads it
   even when `is_active` is false, and the override is logged.
+- `run_ingest.py --recheck-gaps` replaces the usual load, which runs forward
+  from the newest stored candle. It asks Coinbase again for every candle
+  missing from core that no recorded request covers, as described under
+  Design decisions, and loads any that come back. It records each window it
+  asks for as it goes. A warehouse loaded before `raw.fetch_windows` existed
+  needs it once after `--migrate`, because until then verify fails on every
+  gap the earlier runs left. It cannot be combined with `--backfill-days`.
 - `run_ingest.py --no-refresh-marts` skips the mart refresh that otherwise
   runs after loading.
 - `run_add_asset.py PRODUCT` takes the Coinbase product code as its one
@@ -250,9 +259,10 @@ Coinbase Exchange API (public, no key)
         v  scripts/run_ingest.py  (windowed fetch, 300 candles/request,
         |                          per asset per active timeframe)
 +-------------------+
-| raw               |  as-landed candles, append-only, plus a run audit table
+| raw               |  as-landed candles, append-only, plus run and request records
 |  raw.candles      |
 |  raw.ingest_runs  |  each run records its timeframe
+|  raw.fetch_windows|  every window requested, and how many candles came back
 +-------------------+
         |
         v  one INSERT ... ON CONFLICT per run
@@ -305,6 +315,26 @@ never move past it. The cost is
 a candle missing from core for that product and timeframe, and `run_verify.py`
 fails on it until a valid copy is loaded.
 
+Gaps are judged against a record of what was asked for. Each request asks
+Coinbase for one window, a stretch of up to 300 consecutive candles.
+`raw.fetch_windows` records every window the loader requests and how many
+candles came back. Coinbase leaves a candle out of its answer when nothing
+traded and when the exchange itself is down, so core has holes the pipeline
+did not make. When a candle is missing from core but sits inside a window that
+a successful run requested, Coinbase was asked for it and left it out, so
+verify counts it and lets it pass. When it sits inside no such window, the
+loader never asked for it, and verify fails. A candle the exchange did send but
+the pipeline then lost would still pass this test. Once that candle has reached
+raw, the check that compares core with raw catches it.
+
+An earlier version guessed instead, by comparing assets. It called an hour
+missing for every asset an outage and an hour missing for only some a pipeline
+bug. At 17:00 and 21:00 UTC on 2023-03-04, Coinbase has hourly candles for BTC
+and ETH but none for the other four assets, so that guess failed verify on two
+hours the exchange itself has no candles for. Because each asset is now judged
+by its own requests, the check holds for any asset added later, and it covers
+every timeframe instead of only the 1-hour series.
+
 Prices are stored as `numeric(20,8)` and volumes as `numeric(30,8)`. The API
 returns JSON numbers,
 which Python would ordinarily parse as float64, a type that cannot hold most
@@ -335,9 +365,10 @@ discrepancy, which is not.
 
 Each timeframe is fetched from the API on its own rather than built from
 1-minute candles. Coinbase leaves out any candle with no trades, so a thinly
-traded pair's 1-minute series is full of holes that cannot be told apart from
-lost data. A 15-minute bar built from that series could lack a lost minute
-with nothing to show it. Building it that way would also mean storing fifteen
+traded pair's 1-minute series is full of holes. Nothing in the answer says
+whether a hole is a quiet minute or a minute the exchange failed to record. A
+15-minute bar built from that series would treat every hole as a quiet minute
+without saying so. Building it that way would also mean storing fifteen
 1-minute rows for every 15-minute bar.
 
 The price of fetching separately is that the timeframes can disagree, and on
@@ -422,9 +453,9 @@ measured, are in the report.
 ## What I would build next
 
 A dbt port of the marts layer would add tests and lineage. After that I would
-add a data-quality report built from `raw.ingest_runs`
-and the gap-detection query, since the loader now logs short API responses
-but nothing surfaces them yet.
+add a data-quality report built from `raw.ingest_runs`,
+`raw.fetch_windows`, and the gap-detection query, since the warehouse now
+records every short API response but nothing summarizes them yet.
 
 ## Layout
 
