@@ -245,9 +245,13 @@ stops ingestion without deleting history.
 On my machine the loader runs daily through Windows Task Scheduler. It has
 run since 2026-08-10, with one pause from 2026-10-05 to 2026-10-09. The
 task `crypto-warehouse-ingest` calls `scripts/scheduled_ingest.cmd` at 07:10
-local time. The script runs the default ingest from the repo root and appends
-its log to `logs/`. It uses the Python in the repo's `.venv` when there is
-one, and the `python` on PATH otherwise. Because every run resumes from the
+local time. The script runs the default ingest from the repo root, then
+`run_verify.py`, then dbt's freshness check on `core.ohlcv`. The freshness
+check reports how old the newest candle is and warns when it is more than
+two days old. All three append their output to one log in `logs/`, so the
+daily log says whether the load ran and whether the warehouse passed its
+checks afterward. The script uses the Python in the repo's `.venv` when
+there is one, and the `python` on PATH otherwise. Because every run resumes from the
 watermark, a day the machine was off is made up in full by the next run, and
 `raw.ingest_runs` records what each run did. To register the same task, with
 the repo path substituted:
@@ -313,9 +317,20 @@ raw and core tables the loader fills. All but one of the warehouse checks are
 dbt tests. A test is either a column rule in a yml file, such as `not_null`,
 or a SELECT under `dbt/tests/` that returns the rows breaking a rule. A test
 passes when it returns nothing. The scripts call dbt for you, and
-`scripts/run_dbt.py` passes any other dbt command through, including
-`docs generate`, which writes a map of how every table depends on every other,
-with the columns of each, under `dbt/target/`.
+`scripts/run_dbt.py` passes any other dbt command through. Two are worth
+knowing. `docs generate` writes a map of how every table depends on every
+other, with a description of every column, under `dbt/target/`. `source
+freshness` checks how old the newest candle is.
+
+The warehouse is also built and tested on every push to main, by a job that
+GitHub runs on a server of its own (GitHub Actions). The job starts a
+PostgreSQL server, runs `run_setup.py`, loads
+`tests/fixtures/warehouse_sample.sql` in place of a call to Coinbase, refreshes
+the marts, and runs `run_verify.py` and both exports. The fixture is two
+products at two timeframes over two days, dumped from a warehouse the loader
+had filled, so its rows have the shape real loads produce. A model or test
+that is wrong fails in that job before it reaches the warehouse on my
+machine.
 
 ## Design decisions
 
@@ -514,6 +529,7 @@ sql/04_queries.sql            annotated analytical queries, each standalone
 sql/05_verify.sql             the timezone check, the one assertion that is not a dbt test
 sql/migrations/               in-place upgrades for a warehouse built earlier
 tests/                        the test suite, no database or network needed
+tests/fixtures/               a dump of a small loaded warehouse, for the GitHub Actions job
 reports/                      the generated report, its metrics and figures
 requirements.txt              exact pins the reported numbers were produced with
 ```
