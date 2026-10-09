@@ -75,6 +75,17 @@ def schema_is_applied(connection) -> bool:
         return bool(cursor.fetchone()[0])
 
 
+def needs_timeframes_migration(connection) -> bool:
+    """Return True if the warehouse still has the 1-hour-only fact table
+    core.ohlcv_hourly and not core.ohlcv, the shape migration 001 converts."""
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT to_regclass('core.ohlcv_hourly') IS NOT NULL "
+            "AND to_regclass('core.ohlcv') IS NULL"
+        )
+        return bool(cursor.fetchone()[0])
+
+
 def drop_schemas(connection) -> None:
     """Drop the marts, core, and raw schemas and everything in them.
 
@@ -104,16 +115,48 @@ def rebuild_marts(connection) -> None:
     sql_file_runner.run_sql_file(connection, sql_file_runner.MARTS_FILE)
 
 
-def run_setup(*, reset: bool = False, marts_only: bool = False) -> int:
+def migrate_timeframes(database_url: str) -> int:
+    """Convert a warehouse built before timeframes existed, keeping every
+    stored candle and run record, and return a process exit code.
+
+    Runs sql/migrations/001_add_timeframes.sql and then sql/02_marts.sql in
+    one transaction, so a failure leaves the old warehouse as it was. A
+    warehouse that is already converted, or has no schema, returns 1.
+    """
+    if not database_exists(database_url):
+        logger.error("the database does not exist; run scripts/run_setup.py with no flag first")
+        return 1
+    with closing(database_connection.connect(database_url)) as connection:
+        if not needs_timeframes_migration(connection):
+            logger.error(
+                "nothing to migrate: core.ohlcv_hourly is absent or core.ohlcv already "
+                "exists, so the warehouse already has timeframes or has no schema"
+            )
+            return 1
+        sql_file_runner.run_sql_file(connection, sql_file_runner.TIMEFRAMES_MIGRATION_FILE)
+        sql_file_runner.run_sql_file(connection, sql_file_runner.MARTS_FILE)
+        connection.commit()
+    logger.info(
+        "migrated: core.ohlcv_hourly is now core.ohlcv with every candle labeled 1h, "
+        "core.timeframes is seeded with 1h active, and the marts are rebuilt"
+    )
+    return 0
+
+
+def run_setup(*, reset: bool = False, marts_only: bool = False, migrate: bool = False) -> int:
     """Create the database if needed, apply the schema and mart DDL, and return
     a process exit code.
 
     A schema that is already applied returns 1 unless reset is set, in which
     case the schemas are dropped and rebuilt. With marts_only, only the marts
     schema is dropped and rebuilt, which is how a changed mart definition
-    reaches a loaded warehouse.
+    reaches a loaded warehouse. With migrate, a warehouse built before
+    timeframes existed is converted in place.
     """
     database_url = database_connection.load_database_url()
+
+    if migrate:
+        return migrate_timeframes(database_url)
 
     if marts_only:
         if not database_exists(database_url):
@@ -136,6 +179,13 @@ def run_setup(*, reset: bool = False, marts_only: bool = False) -> int:
     with closing(database_connection.connect(database_url)) as connection:
         if schema_is_applied(connection) and not created:
             if not reset:
+                if needs_timeframes_migration(connection):
+                    logger.error(
+                        "this warehouse predates timeframes (it has core.ohlcv_hourly). "
+                        "Re-run with --migrate to convert it in place and keep every "
+                        "stored candle."
+                    )
+                    return 1
                 logger.error(
                     "core.assets already exists; the schema is applied. "
                     "Re-run with --reset to drop schemas raw, core and marts "

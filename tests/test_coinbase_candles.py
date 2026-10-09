@@ -71,9 +71,10 @@ def recorded_sleeps(monkeypatch):
     return slept
 
 
-def sample_window():
+def sample_request():
+    """Return (window_start, window_end, granularity_seconds) for a small hourly request."""
     start = datetime(2026, 7, 1, 0, tzinfo=UTC)
-    return start, datetime(2026, 7, 1, 5, tzinfo=UTC)
+    return start, datetime(2026, 7, 1, 5, tzinfo=UTC), 3600
 
 
 # --------------------------------------------------------------------------
@@ -190,19 +191,20 @@ def test_parse_candles_rejects_nan_or_infinity_in_any_price_or_volume_field(posi
 # --------------------------------------------------------------------------
 # The request
 # --------------------------------------------------------------------------
-def test_fetch_window_sends_the_window_start_and_end_and_hourly_granularity_as_params(
-    recorded_sleeps,
+@pytest.mark.parametrize("granularity_seconds", [60, 300, 900, 3600])
+def test_fetch_window_sends_the_window_start_and_end_and_granularity_as_params(
+    recorded_sleeps, granularity_seconds
 ):
     session = FakeSession([FakeResponse(200, LIVE_PAYLOAD_TEXT)])
-    window_start, window_end = sample_window()
+    window_start, window_end, _ = sample_request()
     assert window_start != window_end  # a swap of the two has to be visible
 
-    fetch_window(session, "BTC-USD", window_start, window_end)
+    fetch_window(session, "BTC-USD", window_start, window_end, granularity_seconds)
 
     (call,) = session.calls
     assert "/products/BTC-USD/candles" in call["url"]
     assert call["params"] == {
-        "granularity": 3600,
+        "granularity": granularity_seconds,
         "start": window_start.isoformat(),
         "end": window_end.isoformat(),
     }
@@ -220,7 +222,7 @@ def test_fetch_window_retries_429_then_succeeds(recorded_sleeps):
         ]
     )
 
-    candles = fetch_window(session, "BTC-USD", *sample_window())
+    candles = fetch_window(session, "BTC-USD", *sample_request())
 
     assert len(candles) == 1
     assert len(session.calls) == 3
@@ -235,7 +237,7 @@ def test_fetch_window_honors_retry_after_on_429(recorded_sleeps):
         ]
     )
 
-    fetch_window(session, "BTC-USD", *sample_window())
+    fetch_window(session, "BTC-USD", *sample_request())
 
     assert recorded_sleeps == [7.0]
 
@@ -248,7 +250,7 @@ def test_fetch_window_ignores_unparseable_retry_after(recorded_sleeps):
         ]
     )
 
-    fetch_window(session, "BTC-USD", *sample_window())
+    fetch_window(session, "BTC-USD", *sample_request())
 
     assert recorded_sleeps == [1.0]  # fell back to the exponential schedule
 
@@ -264,7 +266,7 @@ def test_fetch_window_falls_back_to_its_own_backoff_on_a_zero_or_nan_retry_after
         ]
     )
 
-    fetch_window(session, "BTC-USD", *sample_window())
+    fetch_window(session, "BTC-USD", *sample_request())
 
     assert recorded_sleeps == [1.0]  # the first backoff step, not 0 and not nan
 
@@ -277,7 +279,7 @@ def test_fetch_window_caps_a_retry_after_larger_than_the_maximum(recorded_sleeps
         ]
     )
 
-    fetch_window(session, "BTC-USD", *sample_window())
+    fetch_window(session, "BTC-USD", *sample_request())
 
     assert recorded_sleeps == [coinbase_candles.MAX_RETRY_AFTER_SECONDS]
     assert coinbase_candles.MAX_RETRY_AFTER_SECONDS < 86400
@@ -287,7 +289,7 @@ def test_fetch_window_gives_up(recorded_sleeps):
     session = FakeSession([FakeResponse(429) for _ in range(coinbase_candles.MAX_ATTEMPTS)])
 
     with pytest.raises(RuntimeError) as caught:
-        fetch_window(session, "BTC-USD", *sample_window())
+        fetch_window(session, "BTC-USD", *sample_request())
 
     assert "BTC-USD" in str(caught.value)
     assert len(session.calls) == coinbase_candles.MAX_ATTEMPTS
@@ -300,7 +302,7 @@ def test_fetch_window_gives_up(recorded_sleeps):
 def test_fetch_window_retries_5xx(recorded_sleeps, status):
     session = FakeSession([FakeResponse(status), FakeResponse(200, LIVE_PAYLOAD_TEXT)])
 
-    candles = fetch_window(session, "BTC-USD", *sample_window())
+    candles = fetch_window(session, "BTC-USD", *sample_request())
 
     assert len(candles) == 1
     assert len(session.calls) == 2
@@ -311,7 +313,7 @@ def test_fetch_window_retries_5xx(recorded_sleeps, status):
 def test_fetch_window_retries_http_408_and_the_proxy_timeout_524(recorded_sleeps, status):
     session = FakeSession([FakeResponse(status), FakeResponse(200, LIVE_PAYLOAD_TEXT)])
 
-    candles = fetch_window(session, "BTC-USD", *sample_window())
+    candles = fetch_window(session, "BTC-USD", *sample_request())
 
     assert len(candles) == 1
     assert len(session.calls) == 2
@@ -324,7 +326,7 @@ def test_fetch_window_retries_a_chunked_encoding_error_and_returns_the_second_at
     cut_off = requests.exceptions.ChunkedEncodingError("response ended mid-body")
     session = FakeSession([cut_off, FakeResponse(200, LIVE_PAYLOAD_TEXT)])
 
-    candles = fetch_window(session, "BTC-USD", *sample_window())
+    candles = fetch_window(session, "BTC-USD", *sample_request())
 
     assert [candle.close for candle in candles] == [Decimal("58991.99")]
     assert len(session.calls) == 2
@@ -342,7 +344,7 @@ def test_fetch_window_retries_a_chunked_encoding_error_and_returns_the_second_at
 def test_fetch_window_retries_transport_failures(recorded_sleeps, error):
     session = FakeSession([error, FakeResponse(200, LIVE_PAYLOAD_TEXT)])
 
-    candles = fetch_window(session, "BTC-USD", *sample_window())
+    candles = fetch_window(session, "BTC-USD", *sample_request())
 
     assert len(candles) == 1
     assert len(session.calls) == 2
@@ -353,7 +355,7 @@ def test_fetch_window_gives_up_on_repeated_timeouts(recorded_sleeps):
     session = FakeSession([requests.Timeout("read timed out")] * coinbase_candles.MAX_ATTEMPTS)
 
     with pytest.raises(RuntimeError):
-        fetch_window(session, "BTC-USD", *sample_window())
+        fetch_window(session, "BTC-USD", *sample_request())
 
     assert len(session.calls) == coinbase_candles.MAX_ATTEMPTS
     assert recorded_sleeps == [1.0, 2.0, 4.0, 8.0]
@@ -364,7 +366,7 @@ def test_fetch_window_does_not_retry_other_4xx(recorded_sleeps, status):
     session = FakeSession([FakeResponse(status), FakeResponse(200, LIVE_PAYLOAD_TEXT)])
 
     with pytest.raises(requests.HTTPError):
-        fetch_window(session, "BTC-USD", *sample_window())
+        fetch_window(session, "BTC-USD", *sample_request())
 
     assert len(session.calls) == 1
     assert recorded_sleeps == []
@@ -374,7 +376,7 @@ def test_fetch_window_decodes_with_decimal(recorded_sleeps):
     """The retry path must not lose parse_float=Decimal on the way through."""
     session = FakeSession([FakeResponse(503), FakeResponse(200, LIVE_PAYLOAD_TEXT)])
 
-    (candle,) = fetch_window(session, "BTC-USD", *sample_window())
+    (candle,) = fetch_window(session, "BTC-USD", *sample_request())
 
     assert isinstance(candle.close, Decimal)
     assert candle.close == Decimal("58991.99")

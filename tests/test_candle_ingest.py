@@ -14,12 +14,16 @@ from crypto_warehouse import candle_ingest
 from crypto_warehouse.candle_ingest import (
     OVERLAP_HOURS,
     LoadResult,
+    Timeframe,
     find_resume_point,
     resolve_products,
+    resolve_timeframes,
 )
 from crypto_warehouse.coinbase_candles import Candle
 from crypto_warehouse.database_connection import OperatorError
-from crypto_warehouse.fetch_windows import ONE_HOUR
+
+ONE_HOUR = timedelta(hours=1)
+HOURLY = Timeframe("1h", 3600)
 
 NOW = datetime(2026, 8, 3, 14, 27, 41, 123456, tzinfo=UTC)
 NOW_HOUR = NOW.replace(minute=0, second=0, microsecond=0)
@@ -49,6 +53,7 @@ def resume_point(latest_timestamp, backfill_days=365, *, extend_to_backfill_days
     return find_resume_point(
         cursor,
         "BTC-USD",
+        3600,
         backfill_days,
         extend_to_backfill_days=extend_to_backfill_days,
         now_utc=NOW,
@@ -128,13 +133,58 @@ def test_find_resume_point_floor_does_not_skip_a_stale_watermark():
     assert fetch_start == latest_timestamp - timedelta(hours=OVERLAP_HOURS)
 
 
-def test_find_resume_point_queries_the_named_product():
+def test_find_resume_point_queries_the_named_series():
     cursor = StubCursor([(None,)])
 
-    find_resume_point(cursor, "SOL-USD", 30, now_utc=NOW)
+    find_resume_point(cursor, "SOL-USD", 900, 30, now_utc=NOW)
 
-    (_, params) = cursor.executed[0]
-    assert params == ("SOL-USD",)
+    (sql, params) = cursor.executed[0]
+    assert params == ("SOL-USD", 900)
+    assert "granularity_seconds = %s" in sql
+
+
+def test_find_resume_point_cold_start_is_hour_aligned_at_a_finer_timeframe():
+    cursor = StubCursor([(None,)])
+
+    fetch_start = find_resume_point(cursor, "SOL-USD", 300, 7, now_utc=NOW)
+
+    # Every timeframe of a backfill starts on the same hour.
+    assert fetch_start == NOW_HOUR - timedelta(days=7)
+
+
+def test_resolve_timeframes_defaults_to_active_timeframes_finest_first():
+    cursor = StubCursor([("5m", 300), ("1h", 3600)])
+
+    assert resolve_timeframes(cursor, None) == [Timeframe("5m", 300), Timeframe("1h", 3600)]
+    assert "is_active" in cursor.executed[0][0]
+    assert "ORDER BY granularity_seconds" in cursor.executed[0][0]
+
+
+def test_resolve_timeframes_named_explicitly_overrides_is_active(caplog):
+    cursor = StubCursor([("1h", 3600, True), ("1m", 60, False)])
+
+    with caplog.at_level("WARNING"):
+        timeframes = resolve_timeframes(cursor, ["1h", "1m"])
+
+    assert timeframes == [Timeframe("1m", 60), Timeframe("1h", 3600)]
+    assert "1m" in caplog.text  # the override is never silent
+
+
+def test_resolve_timeframes_rejects_unknown_codes_and_lists_the_known_ones():
+    cursor = StubCursor([("1h", 3600, True)])
+
+    def known_codes_after_the_first_query(sql, params=None):
+        cursor.executed.append((sql, params))
+        if len(cursor.executed) == 2:
+            cursor.rows = [("1m",), ("5m",), ("15m",), ("1h",)]
+
+    cursor.execute = known_codes_after_the_first_query
+
+    with pytest.raises(OperatorError) as caught:
+        resolve_timeframes(cursor, ["1h", "4h"])
+
+    assert "4h" in str(caught.value)
+    assert "15m" in str(caught.value)
 
 
 def test_resolve_products_defaults_to_active_assets():
@@ -242,7 +292,7 @@ def raw_writes(monkeypatch):
 def serve_candles(monkeypatch, candles):
     """Make fetch_window answer every window with the same candles."""
 
-    def fake_fetch_window(session, product_code, window_start, window_end):
+    def fake_fetch_window(session, product_code, window_start, window_end, granularity_seconds):
         return list(candles)
 
     monkeypatch.setattr(candle_ingest, "fetch_window", fake_fetch_window)
@@ -263,7 +313,7 @@ def window_of_300_without(missing_offsets):
 
 def fetch_300_hour_window(connection):
     return candle_ingest._fetch_into_raw(
-        connection, None, "BTC-USD", 42, WINDOW_START, WINDOW_START + 300 * ONE_HOUR
+        connection, None, "BTC-USD", 3600, 42, WINDOW_START, WINDOW_START + 300 * ONE_HOUR
     )
 
 
@@ -281,7 +331,7 @@ def test_fetch_into_raw_writes_each_candle_to_raw_in_ddl_column_order(monkeypatc
     connection = FakeConnection()
 
     rows_fetched, _ = candle_ingest._fetch_into_raw(
-        connection, None, "BTC-USD", 42, WINDOW_START, WINDOW_START + ONE_HOUR
+        connection, None, "BTC-USD", 3600, 42, WINDOW_START, WINDOW_START + ONE_HOUR
     )
 
     ((sql, rows),) = raw_writes
@@ -330,6 +380,64 @@ def test_fetch_into_raw_does_not_count_a_window_missing_two_isolated_hours_of_30
     assert [record for record in caplog.records if record.levelname == "WARNING"] == []
 
 
+@pytest.mark.parametrize(("missing_in_a_row", "expected_short"), [(11, 0), (12, 1)])
+def test_fetch_into_raw_measures_the_gap_line_in_hours_at_fifteen_minutes(
+    monkeypatch, raw_writes, missing_in_a_row, expected_short
+):
+    # Three hours is twelve 15-minute buckets, well under the 30 that the
+    # 10 percent rule would need in a 300-bucket window, so only the gap line
+    # can flag this window.
+    fifteen_minutes = timedelta(minutes=15)
+    candles = [
+        flat_candle(WINDOW_START + index * fifteen_minutes)
+        for index in range(300)
+        if not 100 <= index < 100 + missing_in_a_row
+    ]
+    serve_candles(monkeypatch, candles)
+
+    window_end = WINDOW_START + 300 * fifteen_minutes
+    _, short_windows = candle_ingest._fetch_into_raw(
+        FakeConnection(), None, "BTC-USD", 900, 42, WINDOW_START, window_end
+    )
+
+    assert short_windows == expected_short
+
+
+def test_fetch_into_raw_logs_empty_windows_before_the_first_candle_once(
+    monkeypatch, raw_writes, caplog
+):
+    # A deep backfill of a product listed later: the first two windows come
+    # back empty, the third holds the first candles.
+    answers = [[], [], [flat_candle(WINDOW_START + 600 * ONE_HOUR + index * ONE_HOUR)
+                        for index in range(300)]]
+
+    def fake_fetch_window(session, product_code, window_start, window_end, granularity_seconds):
+        return answers.pop(0)
+
+    monkeypatch.setattr(candle_ingest, "fetch_window", fake_fetch_window)
+
+    with caplog.at_level("INFO"):
+        rows_fetched, short_windows = candle_ingest._fetch_into_raw(
+            FakeConnection(), None, "SOL-USD", 3600, 42, WINDOW_START, WINDOW_START + 900 * ONE_HOUR
+        )
+
+    assert rows_fetched == 300
+    assert short_windows == 0
+    assert [record for record in caplog.records if record.levelname == "WARNING"] == []
+    assert "(2 empty window(s)); history starts there" in caplog.text
+
+
+def test_fetch_into_raw_flags_a_run_that_finds_no_candle_at_all(monkeypatch, raw_writes, caplog):
+    serve_candles(monkeypatch, [])
+
+    with caplog.at_level("WARNING"):
+        rows_fetched, short_windows = fetch_300_hour_window(FakeConnection())
+
+    assert rows_fetched == 0
+    assert short_windows == 1
+    assert "came back empty" in caplog.text
+
+
 def test_fetch_into_raw_drops_candles_outside_the_requested_window(monkeypatch, raw_writes, caplog):
     current_hour = WINDOW_START + 3 * ONE_HOUR
     inside = [flat_candle(WINDOW_START + i * ONE_HOUR) for i in range(3)]
@@ -339,7 +447,7 @@ def test_fetch_into_raw_drops_candles_outside_the_requested_window(monkeypatch, 
 
     with caplog.at_level("WARNING"):
         rows_fetched, short_windows = candle_ingest._fetch_into_raw(
-            FakeConnection(), None, "BTC-USD", 42, WINDOW_START, current_hour
+            FakeConnection(), None, "BTC-USD", 3600, 42, WINDOW_START, current_hour
         )
 
     ((_, rows),) = raw_writes
@@ -355,7 +463,7 @@ def test_fetch_into_raw_drops_candles_outside_the_requested_window(monkeypatch, 
     ids=["RuntimeError", "KeyboardInterrupt"],
 )
 def test_load_product_marks_the_run_failed_and_reraises_when_the_fetch_raises(monkeypatch, error):
-    def failing_fetch_window(session, product_code, window_start, window_end):
+    def failing_fetch_window(session, product_code, window_start, window_end, granularity_seconds):
         raise error
 
     monkeypatch.setattr(candle_ingest, "fetch_window", failing_fetch_window)
@@ -364,7 +472,7 @@ def test_load_product_marks_the_run_failed_and_reraises_when_the_fetch_raises(mo
     connection = FakeConnection(rows=[(None,), (17,)])
 
     with pytest.raises(type(error)) as caught:
-        candle_ingest.load_product(connection, None, "BTC-USD", backfill_days=1)
+        candle_ingest.load_product(connection, None, "BTC-USD", HOURLY, backfill_days=1)
 
     assert caught.value is error
     assert connection.rollbacks == 1
@@ -376,33 +484,54 @@ def test_load_product_marks_the_run_failed_and_reraises_when_the_fetch_raises(mo
     assert connection.log[connection.log.index(sql) + 1] == "commit"
 
 
-def test_run_ingest_keeps_going_after_a_failed_product_and_rolls_back_before_the_next(
+def test_run_ingest_keeps_going_after_a_failed_series_and_rolls_back_before_the_next(
     monkeypatch,
 ):
     connection = FakeConnection()
     # Each attempt, with the rollback count the connection showed as it began.
-    attempts: list[tuple[str, int]] = []
+    attempts: list[tuple[str, str, int]] = []
 
     def fake_load_product(
-        connection, session, product_code, backfill_days, *, extend_to_backfill_days=False
+        connection,
+        session,
+        product_code,
+        timeframe,
+        backfill_days,
+        *,
+        extend_to_backfill_days=False,
     ):
-        attempts.append((product_code, connection.rollbacks))
-        if product_code == "AAA-USD":
-            raise RuntimeError("the first product fails")
+        attempts.append((product_code, timeframe.timeframe_code, connection.rollbacks))
+        if (product_code, timeframe.timeframe_code) == ("AAA-USD", "15m"):
+            raise RuntimeError("one series fails")
         return LoadResult(
-            product_code, run_id=5, rows_fetched=10, rows_upserted=10, short_windows=0
+            product_code,
+            timeframe.timeframe_code,
+            run_id=5,
+            rows_fetched=10,
+            rows_upserted=10,
+            short_windows=0,
         )
 
     monkeypatch.setattr(candle_ingest.database_connection, "connect", lambda: connection)
     monkeypatch.setattr(
         candle_ingest, "resolve_products", lambda cursor, requested: ["AAA-USD", "BBB-USD"]
     )
+    monkeypatch.setattr(
+        candle_ingest,
+        "resolve_timeframes",
+        lambda cursor, requested: [Timeframe("15m", 900), Timeframe("1h", 3600)],
+    )
     monkeypatch.setattr(candle_ingest, "load_product", fake_load_product)
 
     exit_code = candle_ingest.run_ingest()
 
     assert exit_code == 1
-    assert attempts == [("AAA-USD", 0), ("BBB-USD", 1)]
+    assert attempts == [
+        ("AAA-USD", "15m", 0),
+        ("AAA-USD", "1h", 1),
+        ("BBB-USD", "15m", 1),
+        ("BBB-USD", "1h", 1),
+    ]
     assert connection.closed
 
 
@@ -420,9 +549,9 @@ def split_sql_conditions(sql_text: str) -> set[str]:
 
 
 def core_check_constraints() -> set[str]:
-    """Every CHECK comparison the DDL declares on core.ohlcv_hourly."""
+    """Every CHECK comparison the DDL declares on core.ohlcv."""
     schema_sql = (REPO_ROOT / "sql" / "01_schema.sql").read_text(encoding="utf-8")
-    table = schema_sql[schema_sql.index("CREATE TABLE core.ohlcv_hourly") :]
+    table = schema_sql[schema_sql.index("CREATE TABLE core.ohlcv (") :]
     table = table[: table.index(");")]
     found: set[str] = set()
     for body in re.findall(r"CHECK \(([^()]*)\)", table):
@@ -467,7 +596,7 @@ def test_promote_to_core_warns_about_rows_core_would_reject_and_still_promotes(c
 
     statements = [statement for statement, _ in connection.executed]
     assert statements[0].startswith("SELECT r.bucket_start FROM raw.candles r")
-    assert statements[1].startswith("INSERT INTO core.ohlcv_hourly")
+    assert statements[1].startswith("INSERT INTO core.ohlcv ")
     assert "status = 'succeeded'" in statements[2]
     assert connection.commits == 1
     assert "2 raw candle(s) fail core's constraints" in caplog.text

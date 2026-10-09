@@ -71,7 +71,8 @@ ORDER BY m.trade_date, a.symbol
 PROVENANCE_QUERY = """
 WITH active AS (SELECT asset_id FROM core.assets WHERE is_active)
 SELECT
-    (SELECT count(*) FROM core.ohlcv_hourly JOIN active USING (asset_id)) AS hourly_rows,
+    (SELECT count(*) FROM core.ohlcv JOIN active USING (asset_id)
+      WHERE granularity_seconds = 3600)                                    AS hourly_rows,
     (SELECT count(*) FROM marts.daily_ohlcv JOIN active USING (asset_id)) AS daily_rows,
     (SELECT count(*) FROM marts.daily_ohlcv JOIN active USING (asset_id)
       WHERE NOT is_complete)                                              AS incomplete_asset_days,
@@ -506,7 +507,7 @@ def fetch_provenance(connection, panel: ReturnPanel) -> dict:
     reasons = classify_excluded_dates(observed, panel)
     excluded_dates = sorted(trade_date for dates in reasons.values() for trade_date in dates)
     return {
-        "ohlcv_hourly_rows": int(hourly_rows),
+        "hourly_candle_rows": int(hourly_rows),
         "daily_ohlcv_rows": int(daily_rows),
         "incomplete_asset_days": int(incomplete_asset_days),
         "observed_dates": len(observed),

@@ -573,9 +573,9 @@ gives both in full.</p>
 
 <p>Every number comes from <code>marts.daily_metrics</code> in the warehouse
 this repository builds. That mart holds one row per asset per UTC trading day,
-rolled up in SQL from {provenance["ohlcv_hourly_rows"]:,} hourly candles (the open,
-high, low, close, and volume for each hour) in <code>core.ohlcv_hourly</code>
-into {provenance["daily_ohlcv_rows"]:,} daily bars in
+rolled up in SQL from {provenance["hourly_candle_rows"]:,} hourly candles (the open,
+high, low, close, and volume for each hour) in the 1-hour series of
+<code>core.ohlcv</code> into {provenance["daily_ohlcv_rows"]:,} daily bars in
 <code>marts.daily_ohlcv</code>. Daily bars are derived from hourly ones rather
 than fetched separately, so any disagreement between the two granularities can
 only be a rollup bug, which is findable, and never a source discrepancy, which
@@ -906,8 +906,9 @@ python scripts/run_diversification_analysis.py</code></pre>
 <p>Between the copy and <code>run_setup.py</code>, edit <code>DATABASE_URL</code>
 in <code>.env</code> to point at your server. <code>run_setup.py</code> creates
 the database and applies the schema and
-the marts. <code>run_ingest.py</code> backfills hourly candles and refreshes
-the marts. The first run pulls the full backfill and every later run resumes
+the marts. <code>run_ingest.py</code> backfills candles at every active
+timeframe, which on a fresh setup is 1 hour alone, and refreshes the marts.
+The first run pulls the full backfill and every later run resumes
 from the watermark, the last hour already loaded. <code>run_diversification_analysis.py</code>
 builds the panel, writes <code>reports/metrics.json</code> and the four figures
 under <code>reports/figures/</code>, prints the main results to the log, and
@@ -924,8 +925,8 @@ template and stated in section 2.</p>
 scripts/run_verify.py</code> runs {n_checks} checks against a loaded warehouse,
 each fatal on failure, covering hourly gaps, rollup coverage, raw-to-core
 agreement, upsert idempotency, run status, session-timezone invariance of
-the daily rollup, and agreement of the two stored daily marts with their
-definitions.
+the daily rollup, agreement of the two stored daily marts with their
+definitions, and agreement of any finer timeframe with the hourly bars.
 <code>pytest</code> runs {n_tests} test functions, none of which need a
 database or a network. They cover the ingestion windowing and watermark, the
 API client, asset registration, the marts rebuild, and the diversification

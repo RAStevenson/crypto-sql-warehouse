@@ -22,7 +22,6 @@ import requests
 logger = logging.getLogger(__name__)
 
 COINBASE_EXCHANGE_URL = "https://api.exchange.coinbase.com"
-GRANULARITY_SECONDS = 3600
 REQUEST_TIMEOUT_SECONDS = 30
 
 MAX_ATTEMPTS = 5
@@ -52,7 +51,7 @@ class CandlePayloadError(ValueError):
 
 
 class Candle(NamedTuple):
-    """Holds one hourly bar, with its fields in the order Coinbase sends them
+    """Holds one bar, with its fields in the order Coinbase sends them
     (time, low, high, open, close, volume).
 
     That order differs from the open/high/low/close order of the table
@@ -169,9 +168,10 @@ def fetch_window(
     product_code: str,
     window_start: datetime,
     window_end: datetime,
+    granularity_seconds: int,
 ) -> list[Candle]:
-    """Fetch one inclusive [window_start, window_end] window of hourly candles
-    and return it as a list of Candle rows.
+    """Fetch one inclusive [window_start, window_end] window of candles of
+    width granularity_seconds and return it as a list of Candle rows.
 
     Rate limiting, 408, 5xx, and transport failures are retried up to
     MAX_ATTEMPTS times before a RuntimeError, and any other 4xx raises on the
@@ -179,7 +179,7 @@ def fetch_window(
     """
     url = f"{COINBASE_EXCHANGE_URL}/products/{product_code}/candles"
     query_parameters = {
-        "granularity": GRANULARITY_SECONDS,
+        "granularity": granularity_seconds,
         "start": window_start.isoformat(),
         "end": window_end.isoformat(),
     }

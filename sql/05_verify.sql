@@ -14,7 +14,7 @@
 -- has a simpler form, the comment below names it and what that form gets
 -- wrong.
 
--- Check 1: no asset-specific gaps in the hourly series.
+-- Check 1: no asset-specific gaps in the 1-hour series.
 -- Hours missing for EVERY asset that has history at that hour are exchange
 -- outages and allowed; an hour missing for only some of them means the
 -- pipeline dropped data, the loader left a candle in raw because core's
@@ -23,7 +23,7 @@
 -- The denominator is computed PER HOUR from the same LATERAL expansion that
 -- produces the numerator, rather than from a separate count of active
 -- assets. Counting core.assets WHERE is_active and comparing that to a
--- missing-count derived from core.ohlcv_hourly puts two different
+-- missing-count derived from the 1-hour series puts two different
 -- populations on the two sides:
 --   - a new active asset with no candles yet raises the denominator to 7
 --     while no hour can ever reach 7 missing, which turns 5 genuine outage
@@ -33,6 +33,12 @@
 --     match neither FILTER and vanish from both counters.
 -- Counting expected and missing in the same GROUP BY makes both impossible,
 -- and the >= in the outage filter means nothing can fall between the two.
+--
+-- The check reads the 1-hour series only. The marts build from it, and a
+-- finer series legitimately skips every bucket with no trades, which on a
+-- thin product at 5 minutes is a large share of them. Check 8 holds the
+-- finer series against the hourly one instead, which is what tells a quiet
+-- bucket from a lost one.
 --
 -- What the gap count cannot see, stated so nobody assumes otherwise. Each
 -- asset's expected hours run from its own first candle to its own last, so
@@ -51,7 +57,8 @@ DECLARE
 BEGIN
     WITH bounds AS (
         SELECT asset_id, min(ts_utc) AS first_ts, max(ts_utc) AS last_ts
-        FROM core.ohlcv_hourly
+        FROM core.ohlcv
+        WHERE granularity_seconds = 3600
         GROUP BY asset_id
     ),
     by_hour AS (
@@ -61,8 +68,10 @@ BEGIN
             count(*) FILTER (WHERE o.asset_id IS NULL)      AS assets_missing
         FROM bounds b
         CROSS JOIN LATERAL generate_series(b.first_ts, b.last_ts, interval '1 hour') AS e(ts)
-        LEFT JOIN core.ohlcv_hourly o
-               ON o.asset_id = b.asset_id AND o.ts_utc = e.ts
+        LEFT JOIN core.ohlcv o
+               ON o.asset_id = b.asset_id
+              AND o.granularity_seconds = 3600
+              AND o.ts_utc = e.ts
         GROUP BY e.ts
     )
     SELECT
@@ -76,33 +85,36 @@ BEGIN
             partial_gap_hours;
     END IF;
 
-    -- An active asset whose newest candle trails the newest candle of any
-    -- active asset by more than two days has stopped loading. Two days,
-    -- because a daily schedule plus a load of a single product can
-    -- legitimately leave the others a day behind.
+    -- An active series (active asset at an active timeframe) whose newest
+    -- candle trails the newest candle of any active series by more than two
+    -- days has stopped loading. Two days, because a daily schedule plus a
+    -- load of a single product can legitimately leave the others a day
+    -- behind. The series end within an hour of each other, since each load
+    -- stops at the last closed bucket of its timeframe.
     WITH newest AS (
-        SELECT a.product_code, max(o.ts_utc) AS last_ts
+        SELECT a.product_code, t.timeframe_code, max(o.ts_utc) AS last_ts
         FROM core.assets a
-        JOIN core.ohlcv_hourly o USING (asset_id)
-        WHERE a.is_active
-        GROUP BY a.product_code
+        JOIN core.ohlcv o USING (asset_id)
+        JOIN core.timeframes t USING (granularity_seconds)
+        WHERE a.is_active AND t.is_active
+        GROUP BY a.product_code, t.timeframe_code
     )
     SELECT count(*),
-           string_agg(format('%s (last candle %s)', product_code, last_ts), ', '
-                      ORDER BY product_code)
+           string_agg(format('%s %s (last candle %s)', product_code, timeframe_code, last_ts),
+                      ', ' ORDER BY product_code, timeframe_code)
     INTO stale_assets, stale_detail
     FROM newest
     WHERE last_ts < (SELECT max(last_ts) FROM newest) - interval '48 hours';
 
     IF stale_assets > 0 THEN
-        RAISE EXCEPTION 'gap check failed: % active asset(s) stopped loading more than 48 hours before the newest candle: %',
+        RAISE EXCEPTION 'gap check failed: % active series stopped loading more than 48 hours before the newest candle: %',
             stale_assets, stale_detail;
     END IF;
-    RAISE NOTICE 'gap check passed: 0 asset-specific gaps, % exchange-wide outage hour(s) tolerated, no active asset more than 48 hours behind', outage_hours;
+    RAISE NOTICE 'gap check passed: 0 asset-specific gaps in the 1-hour series, % exchange-wide outage hour(s) tolerated, no active series more than 48 hours behind', outage_hours;
 END $$;
 
 -- Check 2: the daily rollup covers exactly the (asset, day) pairs present in
--- the hourly facts. No dropped days, no invented ones.
+-- the 1-hour series. No dropped days, no invented ones.
 --
 -- This compares SETS, not cardinalities. Comparing count(marts.daily_ohlcv)
 -- against count(DISTINCT (asset, day)) in core leaves both integers equal
@@ -117,7 +129,8 @@ DECLARE
 BEGIN
     WITH hourly_pairs AS (
         SELECT DISTINCT asset_id, (ts_utc AT TIME ZONE 'UTC')::date AS trade_date
-        FROM core.ohlcv_hourly
+        FROM core.ohlcv
+        WHERE granularity_seconds = 3600
     ),
     mart_pairs AS (
         SELECT asset_id, trade_date FROM marts.daily_ohlcv
@@ -150,6 +163,8 @@ END $$;
 -- it, so a membership check runs in each direction beside it. A bucket the
 -- loader left in raw because core's constraints reject it fails here too,
 -- as never promoted or, when core holds an earlier copy, as a mismatch.
+-- A raw row's timeframe comes from its run, so every comparison here is
+-- per (asset, timeframe, bucket).
 DO $$
 DECLARE
     mismatched bigint;
@@ -157,34 +172,41 @@ DECLARE
     raw_unpromoted bigint;
 BEGIN
     WITH newest_raw AS (
-        SELECT DISTINCT ON (a.asset_id, r.bucket_start)
-            a.asset_id, r.bucket_start,
+        SELECT DISTINCT ON (a.asset_id, ir.granularity_seconds, r.bucket_start)
+            a.asset_id, ir.granularity_seconds, r.bucket_start,
             r.open, r.high, r.low, r.close, r.volume
         FROM raw.candles r
+        JOIN raw.ingest_runs ir ON ir.run_id = r.run_id
         JOIN core.assets a ON a.product_code = r.product_code
-        ORDER BY a.asset_id, r.bucket_start, r.raw_id DESC
+        ORDER BY a.asset_id, ir.granularity_seconds, r.bucket_start, r.raw_id DESC
     ),
     value_mismatch AS (
         SELECT count(*) AS c
-        FROM core.ohlcv_hourly o
+        FROM core.ohlcv o
         JOIN newest_raw nr
-          ON nr.asset_id = o.asset_id AND nr.bucket_start = o.ts_utc
+          ON nr.asset_id = o.asset_id
+         AND nr.granularity_seconds = o.granularity_seconds
+         AND nr.bucket_start = o.ts_utc
         WHERE (o.open, o.high, o.low, o.close, o.volume)
               IS DISTINCT FROM
               (nr.open, nr.high, nr.low, nr.close, nr.volume)
     ),
     core_without_raw AS (
         SELECT count(*) AS c
-        FROM core.ohlcv_hourly o
+        FROM core.ohlcv o
         LEFT JOIN newest_raw nr
-          ON nr.asset_id = o.asset_id AND nr.bucket_start = o.ts_utc
+          ON nr.asset_id = o.asset_id
+         AND nr.granularity_seconds = o.granularity_seconds
+         AND nr.bucket_start = o.ts_utc
         WHERE nr.asset_id IS NULL
     ),
     raw_without_core AS (
         SELECT count(*) AS c
         FROM newest_raw nr
-        LEFT JOIN core.ohlcv_hourly o
-          ON o.asset_id = nr.asset_id AND o.ts_utc = nr.bucket_start
+        LEFT JOIN core.ohlcv o
+          ON o.asset_id = nr.asset_id
+         AND o.granularity_seconds = nr.granularity_seconds
+         AND o.ts_utc = nr.bucket_start
         WHERE o.asset_id IS NULL
     )
     SELECT value_mismatch.c, core_without_raw.c, raw_without_core.c
@@ -203,8 +225,8 @@ BEGIN
     RAISE NOTICE 'raw/core check passed: values agree, no core orphans, no unpromoted raw buckets';
 END $$;
 
--- Check 4: idempotency. The latest succeeded run per product must not have
--- rewritten a row whose values did not change.
+-- Check 4: idempotency. The latest succeeded run per product and timeframe
+-- must not have rewritten a row whose values did not change.
 --
 -- The upsert's IS DISTINCT FROM guard is what makes a rerun leave core alone,
 -- and this is the state a broken guard would leave behind: a core row whose
@@ -227,22 +249,27 @@ DECLARE
     example text;
 BEGIN
     WITH latest AS (
-        SELECT DISTINCT ON (product_code)
-            product_code, run_id, rows_upserted
+        SELECT DISTINCT ON (product_code, granularity_seconds)
+            product_code, granularity_seconds, run_id, rows_upserted
         FROM raw.ingest_runs
         WHERE status = 'succeeded'
-        ORDER BY product_code, run_id DESC
+        ORDER BY product_code, granularity_seconds, run_id DESC
     ),
     rewritten_rows AS (
-        SELECT l.product_code, c.ts_utc
+        SELECT l.product_code, l.granularity_seconds, c.ts_utc
         FROM latest l
         JOIN core.assets a ON a.product_code = l.product_code
-        JOIN core.ohlcv_hourly c
-          ON c.asset_id = a.asset_id AND c.source_run_id = l.run_id
+        JOIN core.ohlcv c
+          ON c.asset_id = a.asset_id
+         AND c.granularity_seconds = l.granularity_seconds
+         AND c.source_run_id = l.run_id
         JOIN LATERAL (
             SELECT r.open, r.high, r.low, r.close, r.volume
             FROM raw.candles r
-            JOIN raw.ingest_runs pr ON pr.run_id = r.run_id AND pr.status = 'succeeded'
+            JOIN raw.ingest_runs pr
+              ON pr.run_id = r.run_id
+             AND pr.status = 'succeeded'
+             AND pr.granularity_seconds = l.granularity_seconds
             WHERE r.product_code = l.product_code
               AND r.bucket_start = c.ts_utc
               AND r.run_id < l.run_id
@@ -257,8 +284,8 @@ BEGIN
     SELECT
         (SELECT count(*) FROM rewritten_rows),
         (SELECT count(*) FROM latest WHERE rows_upserted IS NULL),
-        (SELECT format('%s at %s', product_code, ts_utc)
-         FROM rewritten_rows ORDER BY product_code, ts_utc LIMIT 1)
+        (SELECT format('%s at %s (granularity %s s)', product_code, ts_utc, granularity_seconds)
+         FROM rewritten_rows ORDER BY product_code, granularity_seconds, ts_utc LIMIT 1)
     INTO rewritten, unrecorded, example;
 
     IF unrecorded > 0 THEN
@@ -269,10 +296,10 @@ BEGIN
         RAISE EXCEPTION 'idempotency check failed: the latest run rewrote % row(s) whose values had not changed (e.g. %)',
             rewritten, example;
     END IF;
-    RAISE NOTICE 'idempotency check passed: the latest run per product rewrote no unchanged row';
+    RAISE NOTICE 'idempotency check passed: the latest run per product and timeframe rewrote no unchanged row';
 END $$;
 
--- Check 5: the newest run per product actually succeeded.
+-- Check 5: the newest run per product and timeframe actually succeeded.
 --
 -- Split out from check 4 rather than folded into it. Check 4 filters to
 -- status = 'succeeded' INSIDE its DISTINCT ON, which means that if the most
@@ -286,22 +313,24 @@ DECLARE
     detail text;
 BEGIN
     WITH newest_run AS (
-        SELECT DISTINCT ON (product_code)
-            product_code, run_id, status
+        SELECT DISTINCT ON (product_code, granularity_seconds)
+            product_code, granularity_seconds, run_id, status
         FROM raw.ingest_runs
-        ORDER BY product_code, run_id DESC
+        ORDER BY product_code, granularity_seconds, run_id DESC
     )
-    SELECT count(*), string_agg(format('%s (run %s: %s)', product_code, run_id, status), ', '
-                                ORDER BY product_code)
+    SELECT count(*),
+           string_agg(format('%s at %s s (run %s: %s)', product_code, granularity_seconds,
+                             run_id, status),
+                      ', ' ORDER BY product_code, granularity_seconds)
     INTO offending, detail
     FROM newest_run
     WHERE status <> 'succeeded';
 
     IF offending > 0 THEN
-        RAISE EXCEPTION 'freshness check failed: newest run did not succeed for % product(s): %',
+        RAISE EXCEPTION 'freshness check failed: newest run did not succeed for % series: %',
             offending, detail;
     END IF;
-    RAISE NOTICE 'freshness check passed: newest run per product succeeded';
+    RAISE NOTICE 'freshness check passed: newest run per product and timeframe succeeded';
 END $$;
 
 -- Check 6: the daily rollup buckets identically under any session timezone.
@@ -393,4 +422,170 @@ BEGIN
         END IF;
     END LOOP;
     RAISE NOTICE 'stale-mart check passed: daily_ohlcv and daily_metrics match their definitions run now';
+END $$;
+
+-- Check 8: every finer timeframe agrees with the 1-hour series.
+--
+-- Each timeframe is fetched from Coinbase separately, so nothing in the
+-- load makes four 15-minute bars add up to the hour they cover. This check
+-- does. For every asset and every timeframe finer than an hour, the finer
+-- bars are combined into hours (first open, highest high, lowest low, last
+-- close, summed volume) and compared with the stored 1-hour bar.
+--
+-- Three failures, because each catches a different bad state:
+--   - a price difference: any open, high, low or close that differs at all;
+--   - a missing hour: an hour with a 1-hour bar but no finer bars, or the
+--     reverse. A finer series skips buckets with no trades, so a hole inside
+--     an hour is normal, but an hour that traded has at least one trade in
+--     some finer bucket;
+--   - a volume shortfall: finer bars that add up to more than 1 percent less
+--     volume than the hourly bar. A finer bucket lost by the pipeline takes
+--     its volume with it, so a shortfall is what a dropped bucket looks like.
+--
+-- Volume the other way, finer bars carrying MORE than the hourly bar, is
+-- reported and does not fail. That direction is the exchange's own data, not
+-- the pipeline's. A read-only probe of the Coinbase API on 2026-10-09 found
+-- prices identical across timeframes in every hour sampled (BTC, LINK and
+-- DOGE in 2021, 2024 and 2026), while in 2026 about one hour in seventy
+-- carried more volume in its finer bars than in its hourly bar. A three-day
+-- load the same day found the same pattern, at most 1.2 percent more and
+-- never less, and re-fetching the 1.2 percent hour returned the identical
+-- numbers, so it is not a revision the next load would correct. A check
+-- that failed on it would fail on every warehouse and could never be fixed
+-- by the operator. The count and the largest excess are reported instead.
+--
+-- What the check cannot see. It compares whole hours, so a finer bar that
+-- is wrong without moving its hour's open, high, low, close or volume, such
+-- as a high raised but still below the hour's high, passes here. Check 3 is
+-- what catches a stored value that differs from what the exchange sent.
+-- Measured 2026-10-09 inside rolled-back transactions: a 15-minute high
+-- raised by $1 under the hour's high passed this check and failed check 3; a
+-- 5-minute high raised above the hour's high, one 5-minute bucket deleted,
+-- and one hour of 15-minute bars deleted each failed this check.
+--
+-- Only hours both series fully cover are compared. A finer series that
+-- starts or ends partway through an hour, or that was loaded later than the
+-- hourly one, is held to the hours they share. The boundary rule is
+-- conservative: an hour at either end whose first or last finer bucket had
+-- no trades is left out rather than compared on partial data.
+--
+-- date_trunc runs on ts_utc AT TIME ZONE 'UTC' for the same reason as
+-- everywhere else in the warehouse. On a timestamptz it would truncate in
+-- the session's timezone, which for a zone with a half-hour offset lands
+-- every hour boundary in the wrong place.
+DO $$
+DECLARE
+    hours_compared bigint;
+    price_mismatches bigint;
+    missing_hours bigint;
+    volume_shortfalls bigint;
+    volume_excesses bigint;
+    largest_volume_excess numeric;
+    example text;
+BEGIN
+    WITH fine AS (
+        SELECT
+            o.asset_id,
+            o.granularity_seconds,
+            date_trunc('hour', o.ts_utc AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS hour_utc,
+            (array_agg(o.open  ORDER BY o.ts_utc ASC ))[1] AS open,
+            max(o.high)                                    AS high,
+            min(o.low)                                     AS low,
+            (array_agg(o.close ORDER BY o.ts_utc DESC))[1] AS close,
+            sum(o.volume)                                  AS volume
+        FROM core.ohlcv o
+        WHERE o.granularity_seconds < 3600
+        GROUP BY o.asset_id, o.granularity_seconds,
+                 date_trunc('hour', o.ts_utc AT TIME ZONE 'UTC')
+    ),
+    fine_bounds AS (
+        -- The first hour whose first bucket is present, and the last hour
+        -- whose last bucket is present.
+        SELECT
+            asset_id,
+            granularity_seconds,
+            date_trunc('hour', (min(ts_utc) AT TIME ZONE 'UTC')
+                               + interval '1 hour' - interval '1 microsecond')
+                AT TIME ZONE 'UTC'                                           AS first_hour,
+            date_trunc('hour', (max(ts_utc) AT TIME ZONE 'UTC')
+                               + make_interval(secs => granularity_seconds))
+                AT TIME ZONE 'UTC' - interval '1 hour'                       AS last_hour
+        FROM core.ohlcv
+        WHERE granularity_seconds < 3600
+        GROUP BY asset_id, granularity_seconds
+    ),
+    hourly_bounds AS (
+        SELECT asset_id, min(ts_utc) AS first_hour, max(ts_utc) AS last_hour
+        FROM core.ohlcv
+        WHERE granularity_seconds = 3600
+        GROUP BY asset_id
+    ),
+    shared AS (
+        SELECT
+            fb.asset_id,
+            fb.granularity_seconds,
+            greatest(fb.first_hour, hb.first_hour) AS first_hour,
+            least(fb.last_hour, hb.last_hour)      AS last_hour
+        FROM fine_bounds fb
+        JOIN hourly_bounds hb USING (asset_id)
+    ),
+    hourly AS (
+        SELECT sh.granularity_seconds AS fine_granularity, o.*
+        FROM shared sh
+        JOIN core.ohlcv o
+          ON o.asset_id = sh.asset_id
+         AND o.granularity_seconds = 3600
+         AND o.ts_utc BETWEEN sh.first_hour AND sh.last_hour
+    ),
+    fine_in_range AS (
+        SELECT f.*
+        FROM fine f
+        JOIN shared sh
+          ON sh.asset_id = f.asset_id
+         AND sh.granularity_seconds = f.granularity_seconds
+         AND f.hour_utc BETWEEN sh.first_hour AND sh.last_hour
+    ),
+    paired AS (
+        SELECT
+            coalesce(h.asset_id, f.asset_id)                     AS asset_id,
+            coalesce(h.fine_granularity, f.granularity_seconds)  AS granularity_seconds,
+            coalesce(h.ts_utc, f.hour_utc)                       AS hour_utc,
+            h.asset_id IS NULL OR f.asset_id IS NULL             AS one_side_missing,
+            (h.open, h.high, h.low, h.close)
+                IS DISTINCT FROM (f.open, f.high, f.low, f.close) AS prices_differ,
+            (f.volume - h.volume) / NULLIF(h.volume, 0)          AS finer_volume_excess
+        FROM hourly h
+        FULL JOIN fine_in_range f
+          ON f.asset_id = h.asset_id
+         AND f.granularity_seconds = h.fine_granularity
+         AND f.hour_utc = h.ts_utc
+    )
+    SELECT
+        count(*) FILTER (WHERE NOT one_side_missing),
+        count(*) FILTER (WHERE NOT one_side_missing AND prices_differ),
+        count(*) FILTER (WHERE one_side_missing),
+        count(*) FILTER (WHERE finer_volume_excess < -0.01),
+        count(*) FILTER (WHERE finer_volume_excess > 0),
+        coalesce(max(finer_volume_excess), 0),
+        (SELECT format('asset %s at %s s, hour %s: %s', p.asset_id, p.granularity_seconds,
+                       p.hour_utc,
+                       CASE WHEN p.one_side_missing THEN 'present in only one series'
+                            WHEN p.prices_differ THEN 'prices differ'
+                            ELSE format('finer volume short by %s',
+                                        round(-p.finer_volume_excess, 6))
+                       END)
+         FROM paired p
+         WHERE p.one_side_missing OR p.prices_differ OR p.finer_volume_excess < -0.01
+         ORDER BY p.asset_id, p.granularity_seconds, p.hour_utc
+         LIMIT 1)
+    INTO hours_compared, price_mismatches, missing_hours, volume_shortfalls,
+         volume_excesses, largest_volume_excess, example
+    FROM paired;
+
+    IF price_mismatches > 0 OR missing_hours > 0 OR volume_shortfalls > 0 THEN
+        RAISE EXCEPTION 'timeframe check failed: % hour(s) with differing prices, % present in only one series, % with finer volume more than 1%% short (e.g. %)',
+            price_mismatches, missing_hours, volume_shortfalls, example;
+    END IF;
+    RAISE NOTICE 'timeframe check passed: % (asset, timeframe, hour) comparison(s), prices identical and no volume shortfall in any; % carry more volume in the finer bars, the largest % more',
+        hours_compared, volume_excesses, round(largest_volume_excess, 6);
 END $$;

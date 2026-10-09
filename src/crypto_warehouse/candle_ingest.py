@@ -2,19 +2,23 @@
 
 The data source is the public Coinbase Exchange candles endpoint. It needs no
 API key and reports real traded volume. It caps a request at 300 candles, so
-any load longer than 300 hours has to be fetched as a series of windows.
+any load longer than 300 buckets has to be fetched as a series of windows.
 
-Flow per product:
-  1. Watermark: MAX(ts_utc) in core.ohlcv_hourly, minus a re-fetch overlap.
-  2. Fetch [watermark, current hour) in 300-hour windows into raw.candles,
-     committing each window.
+The work list is every active asset at every active timeframe, from
+core.assets and core.timeframes. Flow per (product, timeframe) series:
+  1. Watermark: MAX(ts_utc) of the series in core.ohlcv, minus a re-fetch
+     overlap.
+  2. Fetch [watermark, current bucket) in 300-bucket windows into
+     raw.candles, committing each window.
   3. One INSERT ... ON CONFLICT statement promotes the run's raw rows to core,
      leaving out any row core's constraints would reject.
-  4. The run row in raw.ingest_runs records what happened.
+  4. The run row in raw.ingest_runs records what happened, including the
+     timeframe, which is how every raw row of the run is labeled.
 
-Idempotency comes from two properties: core's primary key (asset_id, ts_utc) is
-the upsert conflict target, and raw tolerates duplicates by design. Re-running
-any window changes nothing in core unless the source data actually changed.
+Idempotency comes from two properties: core's primary key (asset_id,
+granularity_seconds, ts_utc) is the upsert conflict target, and raw tolerates
+duplicates by design. Re-running any window changes nothing in core unless the
+source data actually changed.
 """
 
 from __future__ import annotations
@@ -29,11 +33,13 @@ import psycopg2.extras
 import requests
 
 from . import database_connection, sql_file_runner
-from .coinbase_candles import GRANULARITY_SECONDS, fetch_window
+from .coinbase_candles import fetch_window
 from .database_connection import OperatorError
 from .fetch_windows import (
+    HOURLY_GRANULARITY_SECONDS,
     bucket_count,
-    floor_hour,
+    bucket_width,
+    floor_to_bucket,
     iter_windows,
     longest_consecutive_run,
     missing_buckets,
@@ -43,23 +49,26 @@ logger = logging.getLogger(__name__)
 
 USER_AGENT = "crypto-sql-warehouse (portfolio project)"
 
-# Re-fetch the trailing few hours on every run: a completed candle can be
-# revised shortly after its hour closes, and the upsert leaves an unrevised
-# row in core untouched.
+# Re-fetch the trailing few hours on every run, at every timeframe: a
+# completed candle can be revised shortly after its bucket closes, and the
+# upsert leaves an unrevised row in core untouched.
 OVERLAP_HOURS = 3
 DEFAULT_BACKFILL_DAYS = 365
 REQUEST_PAUSE_SECONDS = 0.15  # public endpoint allows ~10 req/s; stay well under
 
 # A window is logged as short when it is missing this fraction of its buckets
 # or more, or when it is missing this many consecutive hours or more. The
-# fraction rounds down with a floor of one bucket, so a window under 20 hours
-# is flagged by a single hole and an ordinary daily window by two.
-# Zero-trade hours are legitimately absent from the response, so an isolated
-# hole in a long backfill window on an illiquid pair is normal. Several hours missing in a row is
-# what an exchange outage looks like, and a fraction alone would not see it:
-# six hours is 2% of a 300-hour window. The MAX() watermark makes any hole
-# permanent unless somebody notices it. Three hours is a judgment line, not a
-# measured bound.
+# fraction rounds down with a floor of one bucket, so a window under 20
+# buckets is flagged by a single hole and an ordinary daily hourly window by
+# two. Zero-trade buckets are legitimately absent from the response, so an
+# isolated hole in a long backfill window on an illiquid pair is normal, and
+# at 5 minutes a thin pair has many. Several hours missing in a row is what an
+# exchange outage looks like, and a fraction alone would not see it: six hours
+# is 2% of a 300-hour window. The gap line is a duration, so it means the same
+# outage at every timeframe. At 5 minutes and finer, three hours is more
+# buckets than 10 percent of a window, so there the fraction fires first. The
+# MAX() watermark makes any hole permanent unless somebody notices it. Three
+# hours is a judgment line, not a measured bound.
 SHORT_WINDOW_TOLERANCE = 0.10
 GAP_WARNING_HOURS = 3
 
@@ -71,7 +80,7 @@ INSERT_RAW_SQL = """
     VALUES %s
 """
 
-# The conditions core.ohlcv_hourly enforces with CHECK constraints, written
+# The conditions core.ohlcv enforces with CHECK constraints, written
 # against r, the alias of raw.candles. One raw row that fails any of them
 # would abort the whole upsert, and because the watermark would then never
 # move, every later run for that product too. Such a row is left in raw and
@@ -93,18 +102,21 @@ REJECTED_ROWS_SQL = f"""
     ORDER BY r.bucket_start
 """
 
+# The timeframe comes from the run row, since every candle a run fetched
+# shares its run's granularity.
 UPSERT_CORE_SQL = f"""
-    INSERT INTO core.ohlcv_hourly
-        (asset_id, ts_utc, open, high, low, close, volume, source_run_id)
+    INSERT INTO core.ohlcv
+        (asset_id, granularity_seconds, ts_utc, open, high, low, close, volume, source_run_id)
     SELECT DISTINCT ON (a.asset_id, r.bucket_start)
-        a.asset_id, r.bucket_start,
+        a.asset_id, ir.granularity_seconds, r.bucket_start,
         r.open, r.high, r.low, r.close, r.volume, r.run_id
     FROM raw.candles r
+    JOIN raw.ingest_runs ir ON ir.run_id = r.run_id
     JOIN core.assets a ON a.product_code = r.product_code
     WHERE r.run_id = %s
       AND ({CORE_ROW_CHECKS}      )
     ORDER BY a.asset_id, r.bucket_start, r.raw_id DESC
-    ON CONFLICT (asset_id, ts_utc) DO UPDATE
+    ON CONFLICT (asset_id, granularity_seconds, ts_utc) DO UPDATE
     SET open = EXCLUDED.open,
         high = EXCLUDED.high,
         low = EXCLUDED.low,
@@ -112,18 +124,27 @@ UPSERT_CORE_SQL = f"""
         volume = EXCLUDED.volume,
         source_run_id = EXCLUDED.source_run_id,
         updated_at = now()
-    WHERE (core.ohlcv_hourly.open, core.ohlcv_hourly.high, core.ohlcv_hourly.low,
-           core.ohlcv_hourly.close, core.ohlcv_hourly.volume)
+    WHERE (core.ohlcv.open, core.ohlcv.high, core.ohlcv.low,
+           core.ohlcv.close, core.ohlcv.volume)
           IS DISTINCT FROM
           (EXCLUDED.open, EXCLUDED.high, EXCLUDED.low, EXCLUDED.close, EXCLUDED.volume)
 """
 
 
+class Timeframe(NamedTuple):
+    """Holds one row of core.timeframes: its code, such as '15m', and its
+    width in seconds."""
+
+    timeframe_code: str
+    granularity_seconds: int
+
+
 class LoadResult(NamedTuple):
-    """Holds the outcome of one product's load, with its run id, its row counts,
+    """Holds the outcome of one series' load, with its run id, its row counts,
     and the number of windows that came back short."""
 
     product_code: str
+    timeframe_code: str
     run_id: int
     rows_fetched: int
     rows_upserted: int
@@ -160,33 +181,75 @@ def resolve_products(cursor, requested: list[str] | None) -> list[str]:
     return [row[0] for row in cursor.fetchall()]
 
 
+def resolve_timeframes(cursor, requested: list[str] | None) -> list[Timeframe]:
+    """Return the timeframes to load, finest first, which are the requested
+    codes or, with none requested, every active timeframe.
+
+    A requested code is loaded even when inactive, with a warning, and one
+    that is missing from core.timeframes raises OperatorError.
+    """
+    if requested:
+        cursor.execute(
+            "SELECT timeframe_code, granularity_seconds, is_active FROM core.timeframes "
+            "WHERE timeframe_code = ANY(%s)",
+            (list(requested),),
+        )
+        found = {code: (granularity, active) for code, granularity, active in cursor.fetchall()}
+        missing = sorted(set(requested) - set(found))
+        if missing:
+            cursor.execute(
+                "SELECT timeframe_code FROM core.timeframes ORDER BY granularity_seconds"
+            )
+            known = [row[0] for row in cursor.fetchall()]
+            raise OperatorError(f"not in core.timeframes: {missing}. Known timeframes: {known}.")
+        # Same rule as products: naming a timeframe is a direct instruction.
+        inactive = sorted(code for code, (_, active) in found.items() if not active)
+        if inactive:
+            logger.warning(
+                "loading inactive timeframe(s) %s because --timeframes named them explicitly",
+                inactive,
+            )
+        return sorted(
+            (Timeframe(code, granularity) for code, (granularity, _) in found.items()),
+            key=lambda timeframe: timeframe.granularity_seconds,
+        )
+
+    cursor.execute(
+        "SELECT timeframe_code, granularity_seconds FROM core.timeframes "
+        "WHERE is_active ORDER BY granularity_seconds"
+    )
+    return [Timeframe(code, granularity) for code, granularity in cursor.fetchall()]
+
+
 def find_resume_point(
     cursor,
     product_code: str,
+    granularity_seconds: int,
     backfill_days: int,
     *,
     extend_to_backfill_days: bool = False,
     now_utc: datetime | None = None,
 ) -> datetime:
-    """Return the UTC time this product's fetch should start from.
+    """Return the UTC time this series' fetch should start from.
 
     With no rows it is the current hour minus backfill_days, and with rows it
-    is MAX(ts_utc) minus the overlap, or the earlier of that and the backfill
-    point when extend_to_backfill_days is set.
+    is MAX(ts_utc) of the series minus the overlap, or the earlier of that and
+    the backfill point when extend_to_backfill_days is set.
     """
-    # Floored to the hour so the window_start stored in the run record is a
-    # bucket boundary.
-    now_hour = floor_hour(now_utc or datetime.now(UTC))
+    # Floored to the hour, which is a bucket boundary at every supported
+    # timeframe, so the window_start stored in the run record is one too and
+    # every timeframe of a backfill starts at the same instant.
+    now_hour = floor_to_bucket(now_utc or datetime.now(UTC), HOURLY_GRANULARITY_SECONDS)
     backfill_floor = now_hour - timedelta(days=backfill_days)
 
     cursor.execute(
         """
         SELECT max(o.ts_utc)
-        FROM core.ohlcv_hourly o
+        FROM core.ohlcv o
         JOIN core.assets a USING (asset_id)
-        WHERE a.product_code = %s
+        WHERE a.product_code = %s AND o.granularity_seconds = %s
         """,
-        (product_code,),
+        (product_code, granularity_seconds),
     )
     latest_timestamp = cursor.fetchone()[0]
     if latest_timestamp is None:
@@ -226,23 +289,39 @@ def _mark_run_failed(connection, run_id: int) -> None:
 
 
 def _fetch_into_raw(
-    connection, session, product_code: str, run_id: int, start: datetime, current_hour: datetime
+    connection,
+    session,
+    product_code: str,
+    granularity_seconds: int,
+    run_id: int,
+    start: datetime,
+    current_bucket: datetime,
 ) -> tuple[int, int]:
-    """Fetch every window from start up to the current hour into raw.candles,
-    committing each window, and return (rows_fetched, short_windows)."""
+    """Fetch every window from start up to the current bucket into raw.candles,
+    committing each window, and return (rows_fetched, short_windows).
+
+    Windows that come back empty before the first candle of the run are the
+    span before the product's history starts, which a deep backfill of a
+    later listing reaches. They are counted and logged once rather than each
+    flagged as short, and a run that finds no candle at all is flagged.
+    """
     rows_fetched = 0
     short_windows = 0
+    leading_empty_windows = 0
+    gap_warning_buckets = max(
+        1, timedelta(hours=GAP_WARNING_HOURS) // bucket_width(granularity_seconds)
+    )
 
-    for window_start, window_end in iter_windows(start, current_hour):
-        fetched = fetch_window(session, product_code, window_start, window_end)
+    for window_start, window_end in iter_windows(start, current_bucket, granularity_seconds):
+        fetched = fetch_window(session, product_code, window_start, window_end, granularity_seconds)
         # Keep only what was asked for. iter_windows already stops before the
-        # forming hour, and a candle outside the window would otherwise count
+        # forming bucket, and a candle outside the window would otherwise count
         # toward the completeness check below.
         candles = [
             candle
             for candle in fetched
             if window_start <= candle.bucket_start <= window_end
-            and candle.bucket_start < current_hour
+            and candle.bucket_start < current_bucket
         ]
         if len(candles) != len(fetched):
             logger.warning(
@@ -253,19 +332,36 @@ def _fetch_into_raw(
                 window_end.isoformat(),
             )
 
-        expected = bucket_count(window_start, window_end)
+        if not candles and not rows_fetched:
+            leading_empty_windows += 1
+            time.sleep(REQUEST_PAUSE_SECONDS)
+            continue
+        if leading_empty_windows and not rows_fetched:
+            logger.info(
+                "%s at %d s: no candles before %s (%d empty window(s)); history starts there",
+                product_code,
+                granularity_seconds,
+                min(candle.bucket_start for candle in candles).isoformat(),
+                leading_empty_windows,
+            )
+
+        expected = bucket_count(window_start, window_end, granularity_seconds)
         missing = missing_buckets(
-            window_start, window_end, {candle.bucket_start for candle in candles}
+            window_start,
+            window_end,
+            {candle.bucket_start for candle in candles},
+            granularity_seconds,
         )
-        longest_gap = longest_consecutive_run(missing)
-        if longest_gap >= GAP_WARNING_HOURS or (
+        longest_gap = longest_consecutive_run(missing, granularity_seconds)
+        if longest_gap >= gap_warning_buckets or (
             missing and len(missing) >= max(1, int(expected * SHORT_WINDOW_TOLERANCE))
         ):
             short_windows += 1
             logger.warning(
-                "%s: window %s..%s is missing %d of %d buckets, longest gap %d hour(s) "
-                "starting %s",
+                "%s at %d s: window %s..%s is missing %d of %d buckets, longest gap %d "
+                "bucket(s) starting %s",
                 product_code,
+                granularity_seconds,
                 window_start.isoformat(),
                 window_end.isoformat(),
                 len(missing),
@@ -301,6 +397,15 @@ def _fetch_into_raw(
 
         time.sleep(REQUEST_PAUSE_SECONDS)
 
+    if leading_empty_windows and not rows_fetched:
+        short_windows += 1
+        logger.warning(
+            "%s at %d s: all %d window(s) from %s came back empty",
+            product_code,
+            granularity_seconds,
+            leading_empty_windows,
+            start.isoformat(),
+        )
     return rows_fetched, short_windows
 
 
@@ -340,22 +445,25 @@ def load_product(
     connection,
     session,
     product_code: str,
+    timeframe: Timeframe,
     backfill_days: int,
     *,
     extend_to_backfill_days: bool = False,
 ) -> LoadResult:
-    """Load one product by finding its resume point, fetching into raw, and
-    promoting to core, and return a LoadResult.
+    """Load one product at one timeframe by finding its resume point, fetching
+    into raw, and promoting to core, and return a LoadResult.
 
     On any failure, Ctrl+C included, the run row is marked failed and the
     exception is re-raised.
     """
-    current_hour = floor_hour(datetime.now(UTC))
+    granularity_seconds = timeframe.granularity_seconds
+    current_bucket = floor_to_bucket(datetime.now(UTC), granularity_seconds)
 
     with connection.cursor() as cursor:
         start = find_resume_point(
             cursor,
             product_code,
+            granularity_seconds,
             backfill_days,
             extend_to_backfill_days=extend_to_backfill_days,
         )
@@ -366,7 +474,7 @@ def load_product(
             VALUES (%s, %s, %s, %s)
             RETURNING run_id
             """,
-            (product_code, GRANULARITY_SECONDS, start, current_hour),
+            (product_code, granularity_seconds, start, current_bucket),
         )
         run_id = cursor.fetchone()[0]
     connection.commit()  # run row is visible even if the fetch below fails
@@ -377,7 +485,7 @@ def load_product(
     # copies, and the next run re-fetches that span from the watermark.
     try:
         rows_fetched, short_windows = _fetch_into_raw(
-            connection, session, product_code, run_id, start, current_hour
+            connection, session, product_code, granularity_seconds, run_id, start, current_bucket
         )
         rows_upserted = _promote_to_core(connection, run_id, rows_fetched)
     except BaseException:
@@ -388,12 +496,15 @@ def load_product(
 
     if short_windows:
         logger.warning(
-            "%s: %d window(s) came back materially short; run %d may have holes",
+            "%s %s: %d window(s) came back materially short; run %d may have holes",
             product_code,
+            timeframe.timeframe_code,
             short_windows,
             run_id,
         )
-    return LoadResult(product_code, run_id, rows_fetched, rows_upserted, short_windows)
+    return LoadResult(
+        product_code, timeframe.timeframe_code, run_id, rows_fetched, rows_upserted, short_windows
+    )
 
 
 def _rollback_quietly(connection) -> None:
@@ -416,16 +527,17 @@ def refresh_marts(connection) -> None:
 
 def run_ingest(
     products: list[str] | None = None,
+    timeframes: list[str] | None = None,
     backfill_days: int = DEFAULT_BACKFILL_DAYS,
     *,
     extend_to_backfill_days: bool = False,
     refresh: bool = False,
 ) -> int:
-    """Load every requested product, refresh the marts when asked, and return a
-    process exit code.
+    """Load every requested product at every requested timeframe, refresh the
+    marts when asked, and return a process exit code.
 
-    A product that fails is logged and the run continues with the next one,
-    and the exit code is 1 if any product or the refresh failed.
+    A series that fails is logged and the run continues with the next one,
+    and the exit code is 1 if any series or the refresh failed.
     """
     failures: list[str] = []
 
@@ -434,37 +546,50 @@ def run_ingest(
 
         with connection.cursor() as cursor:
             targets = resolve_products(cursor, products)
+            target_timeframes = resolve_timeframes(cursor, timeframes)
         connection.commit()
 
         if not targets:
             logger.warning("no products to load; core.assets has no active rows")
             return 0
+        if not target_timeframes:
+            logger.warning("no timeframes to load; core.timeframes has no active rows")
+            return 0
 
-        logger.info("loading %d product(s): %s", len(targets), ", ".join(targets))
+        logger.info(
+            "loading %d product(s) at %d timeframe(s): %s at %s",
+            len(targets),
+            len(target_timeframes),
+            ", ".join(targets),
+            ", ".join(timeframe.timeframe_code for timeframe in target_timeframes),
+        )
         for product_code in targets:
-            try:
-                load_result = load_product(
-                    connection,
-                    session,
-                    product_code,
-                    backfill_days,
-                    extend_to_backfill_days=extend_to_backfill_days,
+            for timeframe in target_timeframes:
+                series = f"{product_code} {timeframe.timeframe_code}"
+                try:
+                    load_result = load_product(
+                        connection,
+                        session,
+                        product_code,
+                        timeframe,
+                        backfill_days,
+                        extend_to_backfill_days=extend_to_backfill_days,
+                    )
+                except Exception as error:
+                    failures.append(series)
+                    logger.error("%s: load failed: %s", series, error, exc_info=True)
+                    # A failure before the run row exists never reaches the
+                    # rollback in _mark_run_failed, and an aborted transaction
+                    # would fail every series after this one.
+                    _rollback_quietly(connection)
+                    continue
+                logger.info(
+                    "%s: fetched %d, upserted %d (run %d)",
+                    series,
+                    load_result.rows_fetched,
+                    load_result.rows_upserted,
+                    load_result.run_id,
                 )
-            except Exception as error:
-                failures.append(product_code)
-                logger.error("%s: load failed: %s", product_code, error, exc_info=True)
-                # A failure before the run row exists never reaches the
-                # rollback in _mark_run_failed, and an aborted transaction
-                # would fail every product after this one.
-                _rollback_quietly(connection)
-                continue
-            logger.info(
-                "%s: fetched %d, upserted %d (run %d)",
-                load_result.product_code,
-                load_result.rows_fetched,
-                load_result.rows_upserted,
-                load_result.run_id,
-            )
 
         # The refresh runs even after a failed product, so the products that
         # did load reach the marts.
@@ -480,5 +605,10 @@ def run_ingest(
         logger.error("finished with %d failure(s): %s", len(failures), ", ".join(failures))
         return 1
 
-    logger.info("all %d product(s) loaded", len(targets))
+    logger.info(
+        "all %d series loaded (%d product(s) at %d timeframe(s))",
+        len(targets) * len(target_timeframes),
+        len(targets),
+        len(target_timeframes),
+    )
     return 0
