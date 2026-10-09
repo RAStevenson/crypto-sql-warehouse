@@ -53,8 +53,8 @@
 -- granularities come from one source; a discrepancy between them can then
 -- only be a rollup bug, never a data-source mismatch. Every mart builds
 -- from the 1-hour series alone. The finer timeframes in core.ohlcv are for
--- intraday questions and the CSV export, and check 8 in 05_verify.sql holds
--- them against the hourly bars.
+-- intraday questions and the CSV export, and Q21 in 04_queries.sql
+-- compares them with the hourly bars.
 --
 -- open/close use ordered array_agg: aggregates cannot say "first row by
 -- time" directly, and this idiom avoids a second pass with window functions.
