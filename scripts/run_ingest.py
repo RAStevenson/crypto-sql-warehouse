@@ -48,9 +48,9 @@ def main() -> None:
         default=None,
         help=(
             f"How far back to reach, in days (default {DEFAULT_BACKFILL_DAYS}). "
-            "For a product with no rows yet this is the depth of the first "
-            "load. Passing the flag explicitly ALSO makes it a floor on an "
-            "existing product's resume point, so --backfill-days 365 against a "
+            "For a product and timeframe with no rows yet this is the depth of "
+            "the first load. Passing the flag explicitly ALSO makes it a floor on "
+            "an existing resume point, so --backfill-days 365 against a "
             "90-day warehouse extends it back to a year. Omitting the flag "
             "leaves an ordinary run purely incremental: the floor is not "
             "applied, and only the trailing overlap gets re-fetched."
