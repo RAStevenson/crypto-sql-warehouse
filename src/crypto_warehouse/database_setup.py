@@ -168,7 +168,8 @@ def run_migrations(database_url: str) -> int:
     if sql_file_runner.FETCH_WINDOWS_MIGRATION_FILE in pending:
         logger.info(
             "runs loaded before raw.fetch_windows existed have no windows on record, so "
-            "check 1 fails on their gaps until scripts/run_ingest.py --recheck-gaps runs"
+            "the dbt test gaps_without_a_recorded_request fails on their gaps until "
+            "scripts/run_ingest.py --recheck-gaps runs"
         )
     return 0
 
