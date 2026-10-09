@@ -165,7 +165,8 @@ CREATE INDEX candles_run_idx ON raw.candles (run_id);
 -- thinly traded product's 1-minute series is full of holes that cannot be
 -- told apart from lost data, and building 15-minute bars from it would
 -- cost fifteen times the rows. The price of fetching separately is that the
--- timeframes could disagree; check 8 in 05_verify.sql compares them.
+-- timeframes can disagree, and on Coinbase they do; Q21 in 04_queries.sql
+-- measures how often.
 --
 -- CHECK constraints encode OHLC invariants. They have caught real API
 -- glitches in similar pipelines, and checking at insert time costs little.
@@ -178,8 +179,9 @@ CREATE INDEX candles_run_idx ON raw.candles (run_id);
 -- and accepts whatever the API sent, so a bad payload is still inspectable.
 --
 -- Not partitioned. Six assets at 5-minute, 15-minute and 1-hour grain from
--- 2020 is about five and a half million rows, and range partitioning on
--- ts_utc becomes worth its operational cost somewhere past tens of millions.
+-- 2020 is about 5.4 million rows (measured 2026-10-09), and range
+-- partitioning on ts_utc usually becomes worth its operational cost only past
+-- tens of millions.
 -- The 1-minute timeframe is what would approach that line: six assets over
 -- six years is about nineteen million rows on its own. Below the line partitioning only
 -- complicates the upsert and vacuum story, and the PK already leads with

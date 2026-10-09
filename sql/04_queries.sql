@@ -1,5 +1,5 @@
 -- =============================================================================
--- crypto-sql-warehouse: 20 analytical queries.
+-- crypto-sql-warehouse: 21 analytical queries.
 --
 -- Each query is headed by the question it answers, then by the SQL technique
 -- it uses. They are ordered roughly from the simpler techniques to the more
@@ -455,8 +455,8 @@ LIMIT 10;
 -- is the equivalent form. Bounds are per asset, so an asset that started
 -- loading later is not reported as missing the hours before its first candle.
 -- The audit runs on the 1-hour series. A finer series skips every bucket
--- with no trades, so its holes are mostly quiet minutes, and check 8 in
--- 05_verify.sql is what tells those apart from lost data.
+-- with no trades, so its holes are mostly quiet minutes that cannot be
+-- told apart from lost data.
 WITH bounds AS (
     SELECT asset_id, min(ts_utc) AS first_ts, max(ts_utc) AS last_ts
     FROM core.ohlcv
@@ -648,3 +648,62 @@ WHERE (core.ohlcv.open, core.ohlcv.high, core.ohlcv.low,
        core.ohlcv.close, core.ohlcv.volume)
       IS DISTINCT FROM
       (EXCLUDED.open, EXCLUDED.high, EXCLUDED.low, EXCLUDED.close, EXCLUDED.volume);
+
+-- Q21 --------------------------------------------------------------------
+-- How often do Coinbase's own timeframes disagree with each other?
+-- Technique: aggregate one series up to the grain of another and join the
+-- two. Each finer series is combined into hours (first open, highest high,
+-- lowest low, last close, summed volume) and set against the stored 1-hour
+-- bar for the same asset and hour. Only hours present in both series are
+-- compared, and the first and last hour of a finer series can be partial.
+--
+-- This started as a verify check that failed on any price difference. It
+-- could not stay one, because the disagreement is in the source. Measured
+-- 2026-10-09 over the load from 2020: prices agree in nearly every hour of
+-- 2020 to 2022 and of 2026, but the 5-minute series disagrees with the
+-- hourly bar in about one hour in five from April to December 2023, and both
+-- the 5-minute and 15-minute series disagree in stretches of August and
+-- September 2024 and of January to May 2025. The smaller coins carry most of
+-- it (June 2023 at 5 minutes: LINK 425 of 720 hours, BTC 2). The differences
+-- are small, a median of 0.015 percent on the open and at most 1.8 percent
+-- on any price. Fetching sample hours again returned exactly the stored
+-- values at every timeframe, so the stored data matches what Coinbase
+-- serves and the disagreement is Coinbase's. A check that failed on it would
+-- fail on every warehouse and could never be fixed by the operator.
+--
+-- Volume differs in the same stretches, in both directions, and elsewhere
+-- in a few dozen hours a year, except in 2026, where the 5-minute bars carry
+-- more volume than the hourly bar in about one hour in fifty. One hour also
+-- exists in only one series: on 2023-03-04 at 17:00 Coinbase has an hourly
+-- BTC bar but no 5-minute or 15-minute bars.
+WITH fine AS (
+    SELECT
+        asset_id,
+        granularity_seconds,
+        date_trunc('hour', ts_utc AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS hour_utc,
+        (array_agg(open  ORDER BY ts_utc ASC ))[1]  AS open,
+        max(high)                                   AS high,
+        min(low)                                    AS low,
+        (array_agg(close ORDER BY ts_utc DESC))[1]  AS close,
+        sum(volume)                                 AS volume
+    FROM core.ohlcv
+    WHERE granularity_seconds < 3600
+    GROUP BY asset_id, granularity_seconds, date_trunc('hour', ts_utc AT TIME ZONE 'UTC')
+)
+SELECT
+    t.timeframe_code,
+    extract(year FROM f.hour_utc AT TIME ZONE 'UTC')::int              AS year,
+    count(*)                                                           AS hours_compared,
+    count(*) FILTER (WHERE (f.open, f.high, f.low, f.close)
+                           IS DISTINCT FROM (h.open, h.high, h.low, h.close))
+                                                                       AS hours_prices_differ,
+    count(*) FILTER (WHERE f.volume < h.volume)                        AS hours_finer_volume_less,
+    count(*) FILTER (WHERE f.volume > h.volume)                        AS hours_finer_volume_more
+FROM fine f
+JOIN core.ohlcv h
+  ON h.asset_id = f.asset_id
+ AND h.granularity_seconds = 3600
+ AND h.ts_utc = f.hour_utc
+JOIN core.timeframes t ON t.granularity_seconds = f.granularity_seconds
+GROUP BY t.timeframe_code, t.granularity_seconds, year
+ORDER BY t.granularity_seconds, year;
