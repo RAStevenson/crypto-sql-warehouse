@@ -35,9 +35,13 @@ jobs:
   warehouse:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # The image comes from Amazon's public mirror of Docker's official images
+    # rather than from Docker Hub, whose limit on anonymous downloads stopped
+    # this job before its first step on 2026-10-09. It is the same official
+    # postgres image.
     services:
       postgres:
-        image: postgres:17
+        image: public.ecr.aws/docker/library/postgres:17
         env:
           POSTGRES_PASSWORD: postgres
         ports:
