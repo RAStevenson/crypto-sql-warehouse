@@ -250,16 +250,19 @@ Scheduler stored the trigger with that day's UTC offset, so the task keeps
 its UTC time through each daylight saving change. From November to March it
 runs at 06:10 local.
 
-The script runs the default ingest from the repo root, then
-`run_verify.py`, then dbt's freshness check on `core.ohlcv`. The freshness
-check reports how old the newest candle is and warns when it is more than
-two days old. All three append their output to one log in `logs/`, so the
-daily log says whether the load ran and whether the warehouse passed its
-checks afterward. The script uses the Python in the repo's `.venv` when
-there is one, and the `python` on PATH otherwise. Because every run resumes from the
-watermark, a day the machine was off is made up in full by the next run, and
-`raw.ingest_runs` records what each run did. To register the same task, with
-the repo path substituted:
+The script runs the default ingest from the repo root, then `run_verify.py`,
+then dbt's freshness check on `core.ohlcv`. The freshness check reports how
+old the newest candle is. It warns when that candle is more than two days old
+and fails past four days. All three append their output to one log in
+`logs/`, so the daily log says whether the load ran and whether the warehouse
+passed its checks afterward. The script exits with the code of the first step
+that failed, so Task Scheduler's last run result shows a failure as well. A
+freshness warning is not a failure, so it appears only in the log. The script
+uses the Python in the repo's `.venv` when there is one, and the `python` on
+PATH otherwise. Because every run resumes from the watermark, a day the
+machine was off is made up in full by the next run, and `raw.ingest_runs`
+records what each run did. To register the same task, with the repo path
+substituted:
 
 ```
 $repo = "C:\path\to\crypto-sql-warehouse"
@@ -334,12 +337,16 @@ freshness` checks how old the newest candle is.
 The warehouse is also built and tested on every push to main, by a job that
 GitHub runs on a server of its own (GitHub Actions). The job starts a
 PostgreSQL server, runs `run_setup.py`, loads
-`tests/fixtures/warehouse_sample.sql` in place of a call to Coinbase, refreshes
-the marts, and runs `run_verify.py` and both exports. The fixture is two
-products at two timeframes over two days, dumped from a warehouse the loader
-had filled, so its rows have the shape real loads produce. A model or test
-that is wrong fails in that job before it reaches the warehouse on my
-machine.
+`tests/fixtures/warehouse_sample.sql` in place of a call to Coinbase,
+refreshes the marts, and runs `run_verify.py` and both exports. The fixture
+holds two products, with 45 days of hourly candles and two days of 15-minute
+candles. I dumped it from a warehouse the loader had filled, so its rows have
+the shape real loads produce. With 45 days of hourly candles the daily marts
+fill in returns and 30-day averages, so the tests on those columns have
+values to check. A mart that breaks a rule those tests check, such as a
+30-day average taken over 29 days, fails in that job before it reaches the
+warehouse on my machine. The job does not test the loader, because psql,
+PostgreSQL's command-line client, loads the fixture's rows directly.
 
 ## Design decisions
 

@@ -30,7 +30,7 @@ MATERIALIZED_VIEWS = {
 # --------------------------------------------------------------------------
 # The connection dbt is handed
 # --------------------------------------------------------------------------
-def test_connection_environment_splits_a_url_into_the_five_variables():
+def test_connection_environment_splits_a_url_into_the_six_variables():
     environment = connection_environment("postgresql://alice:s3cret@db.example:5433/warehouse")
 
     assert environment == {
@@ -39,10 +39,13 @@ def test_connection_environment_splits_a_url_into_the_five_variables():
         f"{ENVIRONMENT_PREFIX}USER": "alice",
         f"{ENVIRONMENT_PREFIX}PASSWORD": "s3cret",
         f"{ENVIRONMENT_PREFIX}DATABASE": "warehouse",
+        f"{ENVIRONMENT_PREFIX}SSLMODE": "prefer",
     }
 
 
-def test_connection_environment_defaults_the_port_and_decodes_the_password():
+def test_connection_environment_defaults_the_port_and_decodes_the_password(monkeypatch):
+    monkeypatch.delenv("PGPORT", raising=False)
+
     environment = connection_environment("postgres://bob:p%40ss%2Fword@localhost/crypto")
 
     assert environment[f"{ENVIRONMENT_PREFIX}PORT"] == "5432"
@@ -50,7 +53,37 @@ def test_connection_environment_defaults_the_port_and_decodes_the_password():
     assert environment[f"{ENVIRONMENT_PREFIX}DATABASE"] == "crypto"
 
 
+def test_connection_environment_takes_pguser_before_the_os_user(monkeypatch):
+    monkeypatch.setenv("PGUSER", "loader")
+    monkeypatch.setattr(dbt_project.getpass, "getuser", lambda: "robert")
+
+    environment = connection_environment("postgresql://localhost/crypto")
+
+    assert environment[f"{ENVIRONMENT_PREFIX}USER"] == "loader"
+
+
+def test_connection_environment_takes_pgport_when_the_url_names_no_port(monkeypatch):
+    monkeypatch.setenv("PGPORT", "6543")
+
+    environment = connection_environment("postgresql://localhost/crypto")
+
+    assert environment[f"{ENVIRONMENT_PREFIX}PORT"] == "6543"
+
+
+def test_connection_environment_decodes_the_database_name():
+    environment = connection_environment("postgresql://localhost/crypto%20warehouse")
+
+    assert environment[f"{ENVIRONMENT_PREFIX}DATABASE"] == "crypto warehouse"
+
+
+def test_connection_environment_passes_sslmode_on_to_dbt():
+    environment = connection_environment("postgresql://localhost/crypto?sslmode=verify-full")
+
+    assert environment[f"{ENVIRONMENT_PREFIX}SSLMODE"] == "verify-full"
+
+
 def test_connection_environment_falls_back_to_the_os_user_like_psycopg2(monkeypatch):
+    monkeypatch.delenv("PGUSER", raising=False)
     monkeypatch.setattr(dbt_project.getpass, "getuser", lambda: "robert")
 
     environment = connection_environment("postgresql://localhost/crypto")
@@ -65,6 +98,8 @@ def test_connection_environment_falls_back_to_the_os_user_like_psycopg2(monkeypa
         "host=localhost dbname=crypto user=postgres",  # libpq keyword form
         "postgresql:///crypto",  # no host
         "postgresql://localhost",  # no database
+        "postgresql://localhost:abc/crypto",  # port is not a number
+        "postgresql://localhost/crypto?sslmode=require&sslrootcert=ca.pem",  # not passed to dbt
     ],
 )
 def test_connection_environment_rejects_what_dbt_cannot_take(database_url):
@@ -75,7 +110,7 @@ def test_connection_environment_rejects_what_dbt_cannot_take(database_url):
 def test_the_profile_reads_every_variable_from_the_environment_and_holds_no_secret():
     profile = (DBT_DIR / "profiles.yml").read_text(encoding="utf-8")
 
-    for suffix in ("HOST", "PORT", "USER", "PASSWORD", "DATABASE"):
+    for suffix in ("HOST", "PORT", "USER", "PASSWORD", "DATABASE", "SSLMODE"):
         assert f"env_var('{ENVIRONMENT_PREFIX}{suffix}'" in profile
     # Nothing literal that would tie the project to one machine.
     assert "localhost" not in profile

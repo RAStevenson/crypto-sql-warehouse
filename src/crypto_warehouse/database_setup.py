@@ -150,8 +150,8 @@ def run_migrations(database_url: str) -> int:
             return 1
         pending = pending_migrations(connection)
         if not pending:
-            logger.error("nothing to migrate: this warehouse already has every migration")
-            return 1
+            logger.info("nothing to migrate: this warehouse already has every migration")
+            return 0
         for name in pending:
             sql_file_runner.run_sql_file(connection, name)
         connection.commit()

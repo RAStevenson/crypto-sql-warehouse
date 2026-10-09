@@ -3,9 +3,10 @@
 dbt owns the marts layer. Each mart is a model under dbt/models/marts/, and
 the checks on the sources and the marts are dbt tests. dbt reads its
 connection from dbt/profiles.yml, which takes host, port, user, password,
-and database from five environment variables. This module fills those from
-DATABASE_URL, so the one connection string in .env serves both psycopg2 and
-dbt, and then runs dbt in this process through its programmatic runner.
+database, and SSL mode from six environment variables. This module fills
+those from DATABASE_URL, so the one connection string in .env serves both
+psycopg2 and dbt, and then runs dbt in this process through its programmatic
+runner.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from __future__ import annotations
 import getpass
 import logging
 import os
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from .database_connection import REPO_ROOT, OperatorError, load_database_url
 
@@ -28,13 +29,16 @@ ENVIRONMENT_PREFIX = "CRYPTO_WAREHOUSE_PG"
 
 
 def connection_environment(database_url: str) -> dict[str, str]:
-    """Return the five environment variables dbt/profiles.yml reads, taken
+    """Return the six environment variables dbt/profiles.yml reads, taken
     from a postgresql:// URL.
 
     Raises OperatorError for the libpq keyword form or for a URL that names
-    no host or no database, because dbt takes the parts and not the whole.
-    A URL with no user falls back to the operating-system user, as psycopg2
-    does.
+    no host or no database, because dbt takes the parts and not the whole. A
+    port that is not a number raises it too, and so does any query parameter
+    other than sslmode, since dbt is not given the others and would connect
+    differently from psycopg2. A URL with no user falls back to PGUSER and
+    then the operating-system user, and one with no port to PGPORT and then
+    5432, as psycopg2 does.
     """
     parts = urlsplit(database_url)
     if parts.scheme not in ("postgresql", "postgres"):
@@ -43,17 +47,32 @@ def connection_environment(database_url: str) -> dict[str, str]:
             "postgresql://user:password@host:port/database; the keyword form "
             "(host=... dbname=...) cannot be split into the parts dbt takes"
         )
-    database = parts.path.lstrip("/")
+    database = unquote(parts.path.lstrip("/"))
     if not parts.hostname or not database:
         raise OperatorError("DATABASE_URL names no host or no database, and dbt needs both")
+    try:
+        port = parts.port
+    except ValueError:
+        raise OperatorError("DATABASE_URL's port is not a number") from None
+    parameters = parse_qs(parts.query)
+    unsupported = sorted(set(parameters) - {"sslmode"})
+    if unsupported:
+        raise OperatorError(
+            f"DATABASE_URL sets {', '.join(unsupported)}, which is not passed to dbt; "
+            "only sslmode is, so remove the others or dbt would connect differently "
+            "from the loader"
+        )
     return {
         f"{ENVIRONMENT_PREFIX}HOST": parts.hostname,
-        f"{ENVIRONMENT_PREFIX}PORT": str(parts.port or 5432),
+        f"{ENVIRONMENT_PREFIX}PORT": str(port or os.environ.get("PGPORT", "5432")),
         f"{ENVIRONMENT_PREFIX}USER": (
-            unquote(parts.username) if parts.username else getpass.getuser()
+            unquote(parts.username)
+            if parts.username
+            else os.environ.get("PGUSER") or getpass.getuser()
         ),
         f"{ENVIRONMENT_PREFIX}PASSWORD": unquote(parts.password or ""),
         f"{ENVIRONMENT_PREFIX}DATABASE": database,
+        f"{ENVIRONMENT_PREFIX}SSLMODE": parameters.get("sslmode", ["prefer"])[-1],
     }
 
 

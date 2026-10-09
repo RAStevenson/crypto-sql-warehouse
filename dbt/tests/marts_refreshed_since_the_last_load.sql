@@ -1,34 +1,53 @@
 -- The stored marts were refreshed after the newest load.
 --
--- The rollup-coverage test passes on a stale mart as long as no whole day
--- is missing, and `dbt test` on its own refreshes nothing. A load run with
--- --no-refresh-marts, or a refresh that failed, leaves daily_ohlcv holding
--- yesterday's count of hours for the newest day. So for each asset, the
--- newest day in the 1-hour series must appear in daily_ohlcv with the same
--- number of hours core holds for it, and daily_metrics must carry every
--- daily_ohlcv row with the same hour count, since the two refresh in
--- separate transactions and the second could have failed alone.
-WITH hours_in_core AS (
-    SELECT asset_id, (ts_utc AT TIME ZONE 'UTC')::date AS trade_date, count(*) AS hours_present
+-- A load run with --no-refresh-marts, or a refresh that failed, leaves the
+-- marts holding what core held before, and `dbt test` on its own refreshes
+-- nothing. A check on hour counts would miss a load that changed a candle's
+-- values without adding an hour, such as a revised candle in the three-hour
+-- overlap. A check on the newest day would miss a --recheck-gaps run that
+-- fills an hour on an older day. So daily_ohlcv must hold exactly the rollup
+-- of core as it is now, day for day in both directions and in every column
+-- but is_complete, which follows from hours_present. daily_metrics must
+-- match daily_ohlcv row for row in those same columns, since the two refresh
+-- in separate transactions and the second could have failed alone. The
+-- rollup here repeats the one in daily_ohlcv.sql on purpose, because the
+-- question is whether the stored mart is current, not whether its query is
+-- right. A change to that rollup has to be made here too, or this test fails
+-- on a freshly refreshed mart.
+WITH rollup_in_core AS (
+    SELECT
+        asset_id,
+        (ts_utc AT TIME ZONE 'UTC')::date            AS trade_date,
+        (array_agg(open  ORDER BY ts_utc ASC ))[1]   AS open,
+        max(high)                                    AS high,
+        min(low)                                     AS low,
+        (array_agg(close ORDER BY ts_utc DESC))[1]   AS close,
+        sum(volume)                                  AS volume,
+        count(*)                                     AS hours_present
     FROM {{ source('core', 'ohlcv') }}
     WHERE granularity_seconds = 3600
     GROUP BY asset_id, (ts_utc AT TIME ZONE 'UTC')::date
 ),
-newest_day AS (
-    SELECT DISTINCT ON (asset_id) asset_id, trade_date, hours_present
-    FROM hours_in_core
-    ORDER BY asset_id, trade_date DESC
+stored_ohlcv AS (
+    SELECT asset_id, trade_date, open, high, low, close, volume, hours_present
+    FROM {{ ref('daily_ohlcv') }}
+),
+stored_metrics AS (
+    SELECT asset_id, trade_date, open, high, low, close, volume, hours_present
+    FROM {{ ref('daily_metrics') }}
 )
-SELECT n.asset_id, n.trade_date,
-       'daily_ohlcv does not hold the newest day as core has it; refresh the marts' AS reason
-FROM newest_day n
-LEFT JOIN {{ ref('daily_ohlcv') }} d USING (asset_id, trade_date)
-WHERE d.hours_present IS DISTINCT FROM n.hours_present
+SELECT asset_id, trade_date,
+       'daily_ohlcv does not match core for this day; refresh the marts' AS reason
+FROM (
+    (SELECT * FROM rollup_in_core EXCEPT SELECT * FROM stored_ohlcv)
+    UNION
+    (SELECT * FROM stored_ohlcv EXCEPT SELECT * FROM rollup_in_core)
+) AS differs_from_core
 UNION ALL
 SELECT asset_id, trade_date,
        'daily_metrics and daily_ohlcv disagree; refresh the marts' AS reason
 FROM (
-    SELECT asset_id, trade_date, hours_present FROM {{ ref('daily_ohlcv') }}
-    EXCEPT
-    SELECT asset_id, trade_date, hours_present FROM {{ ref('daily_metrics') }}
-) AS only_in_ohlcv
+    (SELECT * FROM stored_ohlcv EXCEPT SELECT * FROM stored_metrics)
+    UNION
+    (SELECT * FROM stored_metrics EXCEPT SELECT * FROM stored_ohlcv)
+) AS differs_between_marts

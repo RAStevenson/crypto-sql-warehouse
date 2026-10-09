@@ -12,9 +12,9 @@
 # applies. It measures how long ago the newest candle started, from ts_utc.
 # A daily load leaves that under a day. Past two days dbt warns, which means
 # the last two loads brought in nothing new, and past four it reports an
-# error. The
-# scheduled job runs the check after each load. The GitHub Actions job does
-# not, because the fixture it loads is as old as the day it was dumped.
+# error. The scheduled job runs the check after each load. The GitHub Actions
+# job does not, because the fixture it loads is as old as the day it was
+# dumped.
 version: 2
 
 sources:
@@ -58,9 +58,9 @@ sources:
           - name: granularity_seconds
             description: The timeframe the run loaded, as the candle width in seconds.
           - name: window_start
-            description: Where the run started fetching, the resume point.
+            description: Where the run started fetching. For a daily load this is three hours before the newest candle already loaded, or, for a series with no candles yet, the hour 365 days back. With --backfill-days N, N takes the place of 365, and a series that has candles starts at the hour N days back if that is earlier. For a --recheck-gaps run it is the first gap.
           - name: window_end
-            description: The bucket the run stopped before, the one still forming when it ran.
+            description: The bucket the run stopped before. For a daily or backfill load it is the bucket still forming when the run started, and for a --recheck-gaps run it is the bucket after the last gap.
           - name: rows_fetched
             description: Candles received across every window of the run.
           - name: rows_upserted

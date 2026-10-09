@@ -29,9 +29,11 @@ jobs:
   # This job builds and tests the warehouse itself against a real
   # PostgreSQL. It applies the schema, has dbt build the marts, loads a small
   # fixture in place of a call to Coinbase, refreshes the marts, runs every
-  # dbt test and the timezone check, and writes both exports. A model or test
-  # that is wrong fails here before it reaches a warehouse holding real
-  # history.
+  # dbt test and the timezone check, and writes both exports. The fixture's
+  # 45 days of hourly candles give the marts returns and 30-day columns to
+  # fill in, so a mart that breaks a rule on those columns fails here before
+  # it reaches a warehouse holding real history. The job does not test the
+  # loader, because psql loads the fixture's rows directly.
   warehouse:
     runs-on: ubuntu-latest
     timeout-minutes: 20
