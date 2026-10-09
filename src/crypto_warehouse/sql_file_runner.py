@@ -23,6 +23,7 @@ REFRESH_MARTS_FILE = "03_refresh_marts.sql"
 QUERIES_FILE = "04_queries.sql"
 VERIFY_FILE = "05_verify.sql"
 TIMEFRAMES_MIGRATION_FILE = "migrations/001_add_timeframes.sql"
+FETCH_WINDOWS_MIGRATION_FILE = "migrations/002_add_fetch_windows.sql"
 
 
 # psycopg2 keeps notices in a plain list capped at 50 entries, and the verify

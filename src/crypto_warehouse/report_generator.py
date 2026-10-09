@@ -935,15 +935,17 @@ template and stated in section 2.</p>
 
 <p>The pipeline underneath is checked three ways. <code>python
 scripts/run_verify.py</code> runs {n_checks} checks against a loaded warehouse,
-each fatal on failure, covering hourly gaps, rollup coverage, raw-to-core
+each fatal on failure, covering candles missing from core that the loader
+never requested, rollup coverage, raw-to-core
 agreement, upsert idempotency, run status, session-timezone invariance of
 the daily rollup, and agreement of the two stored daily marts with their
 definitions.
 <code>pytest</code> runs {n_tests} test functions, none of which need a
 database or a network. They cover the ingestion windowing and watermark, the
-API client, asset registration, the marts rebuild, the timeframes migration,
-the CSV export, and the diversification math in this report, and one checks
-that every function is documented. The
+API client, the record of each request to Coinbase, the re-request of
+unrecorded gaps, asset registration, the marts rebuild, the migrations, the
+CSV export, and the diversification math in this report, and one checks that
+every function is documented. The
 {n_queries} annotated queries in <code>sql/04_queries.sql</code> each run
 standalone against a loaded database.</p>
 

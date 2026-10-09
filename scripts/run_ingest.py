@@ -80,6 +80,17 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--recheck-gaps",
+        action="store_true",
+        help=(
+            "Instead of loading forward from the newest candle, re-request every "
+            "candle missing from core that no recorded request covers, load any "
+            "that come back, and record the windows asked for. For a warehouse "
+            "loaded before raw.fetch_windows existed. Cannot be combined with "
+            "--backfill-days"
+        ),
+    )
+    parser.add_argument(
         "--no-refresh-marts",
         action="store_true",
         help="Skip the mart refresh that otherwise runs after loading",
@@ -91,6 +102,9 @@ def main() -> None:
     parser.add_argument("--verbose", action="store_true", help="Debug-level logging")
     args = parser.parse_args()
 
+    if args.recheck_gaps and args.backfill_days is not None:
+        parser.error("--recheck-gaps reads its span from the gaps; drop --backfill-days")
+
     configure_logging(args.verbose)
     backfill_days = args.backfill_days if args.backfill_days is not None else DEFAULT_BACKFILL_DAYS
 
@@ -101,6 +115,7 @@ def main() -> None:
             backfill_days=backfill_days,
             extend_to_backfill_days=args.backfill_days is not None,
             refresh=not args.no_refresh_marts,
+            recheck=args.recheck_gaps,
         ))
     except (OperatorError, FileNotFoundError) as error:
         logger.error("%s", error)

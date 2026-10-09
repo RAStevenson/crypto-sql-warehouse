@@ -119,6 +119,36 @@ CREATE INDEX ingest_runs_product_started_idx
     ON raw.ingest_runs (product_code, started_at DESC);
 
 -- -----------------------------------------------------------------------------
+-- raw.fetch_windows: one row per window the loader asked Coinbase for, with
+-- how many candles came back inside it.
+--
+-- This is the record that tells a candle the loader never asked for apart
+-- from one the exchange did not return. A bucket missing from core that
+-- sits inside a window a succeeded run requested was asked for, and the
+-- exchange left it out of its answer, because nothing traded or because
+-- Coinbase itself had an outage. A bucket missing from core that sits
+-- inside no such window was never asked for, which on a warehouse loaded
+-- since this table existed means a pipeline bug. Check 1 in 05_verify.sql
+-- draws exactly that line, so it needs no list of known outages and no
+-- comparison between assets, and it holds for any asset at any timeframe.
+--
+-- Append-only like the rest of raw. A window that comes back empty still
+-- gets its row, because that row is what lets check 1 pass every bucket
+-- inside it.
+-- -----------------------------------------------------------------------------
+CREATE TABLE raw.fetch_windows (
+    fetch_id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    run_id            bigint NOT NULL REFERENCES raw.ingest_runs (run_id),
+    window_start      timestamptz NOT NULL,  -- first bucket requested
+    window_end        timestamptz NOT NULL,  -- last bucket requested, inclusive
+    candles_received  integer NOT NULL CHECK (candles_received >= 0),
+    requested_at      timestamptz NOT NULL DEFAULT now(),
+    CHECK (window_end >= window_start)
+);
+
+CREATE INDEX fetch_windows_run_idx ON raw.fetch_windows (run_id);
+
+-- -----------------------------------------------------------------------------
 -- raw.candles: API responses as landed. Append-only by design.
 --
 -- A raw row's timeframe is its run's granularity_seconds, reached through
@@ -162,11 +192,13 @@ CREATE INDEX candles_run_idx ON raw.candles (run_id);
 --
 -- Each timeframe is fetched from Coinbase on its own rather than built from
 -- 1-minute candles. Coinbase leaves out a bucket with no trades, so a
--- thinly traded product's 1-minute series is full of holes that cannot be
--- told apart from lost data, and building 15-minute bars from it would
--- cost fifteen times the rows. The price of fetching separately is that the
--- timeframes can disagree, and on Coinbase they do; Q21 in 04_queries.sql
--- measures how often.
+-- thinly traded product's 1-minute series is full of holes, and nothing in
+-- the answer says whether a hole is a quiet minute or one the exchange
+-- failed to record. Building 15-minute bars from it would treat every hole
+-- as a quiet minute without saying so, and would cost fifteen times the
+-- rows. The price of fetching separately is that the timeframes can
+-- disagree, and on Coinbase they do; Q21 in 04_queries.sql measures how
+-- often.
 --
 -- CHECK constraints encode OHLC invariants. They have caught real API
 -- glitches in similar pipelines, and checking at insert time costs little.

@@ -13,7 +13,9 @@ core.assets and core.timeframes. Flow per (product, timeframe) series:
   3. One INSERT ... ON CONFLICT statement promotes the run's raw rows to core,
      leaving out any row core's constraints would reject.
   4. The run row in raw.ingest_runs records what happened, including the
-     timeframe, which is how every raw row of the run is labeled.
+     timeframe, which is how every raw row of the run is labeled, and
+     raw.fetch_windows records every window requested and how many candles
+     came back, which is how verify tells an exchange gap from a lost one.
 
 Idempotency comes from two properties: core's primary key (asset_id,
 granularity_seconds, ts_utc) is the upsert conflict target, and raw tolerates
@@ -33,7 +35,7 @@ import psycopg2.extras
 import requests
 
 from . import database_connection, sql_file_runner
-from .coinbase_candles import fetch_window
+from .coinbase_candles import Candle, fetch_window
 from .database_connection import OperatorError
 from .fetch_windows import (
     HOURLY_GRANULARITY_SECONDS,
@@ -43,6 +45,7 @@ from .fetch_windows import (
     iter_windows,
     longest_consecutive_run,
     missing_buckets,
+    windows_covering,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,6 +81,44 @@ INSERT_RAW_SQL = """
     INSERT INTO raw.candles
         (run_id, product_code, bucket_start, open, high, low, close, volume)
     VALUES %s
+"""
+
+INSERT_FETCH_WINDOW_SQL = """
+    INSERT INTO raw.fetch_windows (run_id, window_start, window_end, candles_received)
+    VALUES (%s, %s, %s, %s)
+"""
+
+# The buckets of one series missing from core that no window of a succeeded
+# run requested. These are the gaps check 1 in sql/05_verify.sql fails on,
+# and the ones --recheck-gaps asks the exchange for again.
+UNRECORDED_GAPS_SQL = """
+    WITH series AS (
+        SELECT o.asset_id, min(o.ts_utc) AS first_ts, max(o.ts_utc) AS last_ts
+        FROM core.ohlcv o
+        JOIN core.assets a USING (asset_id)
+        WHERE a.product_code = %(product_code)s
+          AND o.granularity_seconds = %(granularity_seconds)s
+        GROUP BY o.asset_id
+    )
+    SELECT expected.ts
+    FROM series s
+    CROSS JOIN LATERAL generate_series(
+        s.first_ts, s.last_ts, make_interval(secs => %(granularity_seconds)s)
+    ) AS expected(ts)
+    WHERE NOT EXISTS (
+            SELECT 1 FROM core.ohlcv o
+            WHERE o.asset_id = s.asset_id
+              AND o.granularity_seconds = %(granularity_seconds)s
+              AND o.ts_utc = expected.ts)
+      AND NOT EXISTS (
+            SELECT 1
+            FROM raw.fetch_windows w
+            JOIN raw.ingest_runs r USING (run_id)
+            WHERE r.product_code = %(product_code)s
+              AND r.granularity_seconds = %(granularity_seconds)s
+              AND r.status = 'succeeded'
+              AND expected.ts BETWEEN w.window_start AND w.window_end)
+    ORDER BY expected.ts
 """
 
 # The conditions core.ohlcv enforces with CHECK constraints, written
@@ -288,6 +329,69 @@ def _mark_run_failed(connection, run_id: int) -> None:
         )
 
 
+def _fetch_and_record_window(
+    connection,
+    session,
+    product_code: str,
+    granularity_seconds: int,
+    run_id: int,
+    window_start: datetime,
+    window_end: datetime,
+    current_bucket: datetime,
+) -> list[Candle]:
+    """Fetch one window, store its candles in raw.candles and the request in
+    raw.fetch_windows, commit, and return the candles kept.
+
+    A window that comes back empty is still recorded, because an empty answer
+    is what lets verify call a missing bucket the exchange's and not the
+    pipeline's.
+    """
+    fetched = fetch_window(session, product_code, window_start, window_end, granularity_seconds)
+    # Keep only what was asked for. Every caller stops before the forming
+    # bucket, and a candle outside the window would otherwise count toward
+    # the completeness check and the recorded count.
+    candles = [
+        candle
+        for candle in fetched
+        if window_start <= candle.bucket_start <= window_end
+        and candle.bucket_start < current_bucket
+    ]
+    if len(candles) != len(fetched):
+        logger.warning(
+            "%s: dropped %d candle(s) outside the requested window %s..%s",
+            product_code,
+            len(fetched) - len(candles),
+            window_start.isoformat(),
+            window_end.isoformat(),
+        )
+
+    with connection.cursor() as cursor:
+        if candles:
+            psycopg2.extras.execute_values(
+                cursor,
+                INSERT_RAW_SQL,
+                [
+                    (
+                        run_id,
+                        product_code,
+                        candle.bucket_start,
+                        candle.open,
+                        candle.high,
+                        candle.low,
+                        candle.close,
+                        candle.volume,
+                    )
+                    for candle in candles
+                ],
+            )
+        cursor.execute(INSERT_FETCH_WINDOW_SQL, (run_id, window_start, window_end, len(candles)))
+    # Committed per window, so a failure late in a long backfill leaves the
+    # fetched windows in raw, where UPSERT_CORE_SQL can promote them under
+    # their run_id without another API call.
+    connection.commit()
+    return candles
+
+
 def _fetch_into_raw(
     connection,
     session,
@@ -298,12 +402,13 @@ def _fetch_into_raw(
     current_bucket: datetime,
 ) -> tuple[int, int]:
     """Fetch every window from start up to the current bucket into raw.candles,
-    committing each window, and return (rows_fetched, short_windows).
+    recording each request, and return (rows_fetched, short_windows).
 
     Windows that come back empty before the first candle of the run are the
     span before the product's history starts, which a deep backfill of a
     later listing reaches. They are counted and logged once rather than each
-    flagged as short, and a run that finds no candle at all is flagged.
+    flagged as short, the first window with candles is judged from its first
+    candle on, and a run that finds no candle at all is flagged.
     """
     rows_fetched = 0
     short_windows = 0
@@ -313,41 +418,39 @@ def _fetch_into_raw(
     )
 
     for window_start, window_end in iter_windows(start, current_bucket, granularity_seconds):
-        fetched = fetch_window(session, product_code, window_start, window_end, granularity_seconds)
-        # Keep only what was asked for. iter_windows already stops before the
-        # forming bucket, and a candle outside the window would otherwise count
-        # toward the completeness check below.
-        candles = [
-            candle
-            for candle in fetched
-            if window_start <= candle.bucket_start <= window_end
-            and candle.bucket_start < current_bucket
-        ]
-        if len(candles) != len(fetched):
-            logger.warning(
-                "%s: dropped %d candle(s) outside the requested window %s..%s",
-                product_code,
-                len(fetched) - len(candles),
-                window_start.isoformat(),
-                window_end.isoformat(),
-            )
+        candles = _fetch_and_record_window(
+            connection,
+            session,
+            product_code,
+            granularity_seconds,
+            run_id,
+            window_start,
+            window_end,
+            current_bucket,
+        )
+        time.sleep(REQUEST_PAUSE_SECONDS)
 
         if not candles and not rows_fetched:
             leading_empty_windows += 1
-            time.sleep(REQUEST_PAUSE_SECONDS)
             continue
-        if leading_empty_windows and not rows_fetched:
-            logger.info(
-                "%s at %d s: no candles before %s (%d empty window(s)); history starts there",
-                product_code,
-                granularity_seconds,
-                min(candle.bucket_start for candle in candles).isoformat(),
-                leading_empty_windows,
-            )
+        # The first window with candles is judged from its first candle, so the
+        # part of a listing day before trading opened is not counted as holes.
+        judged_from = window_start
+        if not rows_fetched:
+            judged_from = min(candle.bucket_start for candle in candles)
+            if leading_empty_windows:
+                logger.info(
+                    "%s at %d s: no candles before %s (%d empty window(s)); history starts there",
+                    product_code,
+                    granularity_seconds,
+                    judged_from.isoformat(),
+                    leading_empty_windows,
+                )
+        rows_fetched += len(candles)
 
-        expected = bucket_count(window_start, window_end, granularity_seconds)
+        expected = bucket_count(judged_from, window_end, granularity_seconds)
         missing = missing_buckets(
-            window_start,
+            judged_from,
             window_end,
             {candle.bucket_start for candle in candles},
             granularity_seconds,
@@ -369,33 +472,6 @@ def _fetch_into_raw(
                 longest_gap,
                 missing[0].isoformat(),
             )
-
-        if candles:
-            with connection.cursor() as cursor:
-                psycopg2.extras.execute_values(
-                    cursor,
-                    INSERT_RAW_SQL,
-                    [
-                        (
-                            run_id,
-                            product_code,
-                            candle.bucket_start,
-                            candle.open,
-                            candle.high,
-                            candle.low,
-                            candle.close,
-                            candle.volume,
-                        )
-                        for candle in candles
-                    ],
-                )
-            # Committed per window, so a failure late in a long backfill
-            # leaves the fetched windows in raw, where UPSERT_CORE_SQL can promote
-            # them under their run_id without another API call.
-            connection.commit()
-            rows_fetched += len(candles)
-
-        time.sleep(REQUEST_PAUSE_SECONDS)
 
     if leading_empty_windows and not rows_fetched:
         short_windows += 1
@@ -507,6 +583,85 @@ def load_product(
     )
 
 
+def recheck_gaps(connection, session, product_code: str, timeframe: Timeframe) -> LoadResult | None:
+    """Re-request every bucket of one series that is missing from core and
+    covered by no recorded request, record the windows asked for, promote
+    anything the exchange now returns, and return a LoadResult, or None when
+    there is nothing to re-request.
+
+    This is how a warehouse loaded before raw.fetch_windows existed gets a
+    real request on record for each gap its older runs left. On any failure,
+    Ctrl+C included, the run row is marked failed and the exception is
+    re-raised.
+    """
+    granularity_seconds = timeframe.granularity_seconds
+    with connection.cursor() as cursor:
+        cursor.execute(
+            UNRECORDED_GAPS_SQL,
+            {"product_code": product_code, "granularity_seconds": granularity_seconds},
+        )
+        gaps = [row[0] for row in cursor.fetchall()]
+    connection.commit()
+    if not gaps:
+        return None
+
+    windows = windows_covering(gaps, granularity_seconds)
+    current_bucket = floor_to_bucket(datetime.now(UTC), granularity_seconds)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO raw.ingest_runs
+                (product_code, granularity_seconds, window_start, window_end)
+            VALUES (%s, %s, %s, %s)
+            RETURNING run_id
+            """,
+            (
+                product_code,
+                granularity_seconds,
+                windows[0][0],
+                windows[-1][1] + bucket_width(granularity_seconds),
+            ),
+        )
+        run_id = cursor.fetchone()[0]
+    connection.commit()
+
+    try:
+        rows_fetched = 0
+        returned_for_gaps = 0
+        gap_set = set(gaps)
+        for window_start, window_end in windows:
+            candles = _fetch_and_record_window(
+                connection,
+                session,
+                product_code,
+                granularity_seconds,
+                run_id,
+                window_start,
+                window_end,
+                current_bucket,
+            )
+            rows_fetched += len(candles)
+            returned_for_gaps += sum(candle.bucket_start in gap_set for candle in candles)
+            time.sleep(REQUEST_PAUSE_SECONDS)
+        rows_upserted = _promote_to_core(connection, run_id, rows_fetched)
+    except BaseException:
+        _mark_run_failed(connection, run_id)
+        raise
+
+    logger.info(
+        "%s %s: re-requested %d gap bucket(s) in %d window(s); the exchange returned "
+        "%d of them, and the rest are now on record as answered without a candle",
+        product_code,
+        timeframe.timeframe_code,
+        len(gaps),
+        len(windows),
+        returned_for_gaps,
+    )
+    return LoadResult(
+        product_code, timeframe.timeframe_code, run_id, rows_fetched, rows_upserted, 0
+    )
+
+
 def _rollback_quietly(connection) -> None:
     """Roll back, logging instead of raising when the connection itself is gone."""
     try:
@@ -532,12 +687,15 @@ def run_ingest(
     *,
     extend_to_backfill_days: bool = False,
     refresh: bool = False,
+    recheck: bool = False,
 ) -> int:
     """Load every requested product at every requested timeframe, refresh the
     marts when asked, and return a process exit code.
 
-    A series that fails is logged and the run continues with the next one,
-    and the exit code is 1 if any series or the refresh failed.
+    With recheck, each series re-requests its unrecorded gaps (recheck_gaps)
+    instead of loading new candles. A series that fails is logged and the
+    run continues with the next one, and the exit code is 1 if any series or
+    the refresh failed.
     """
     failures: list[str] = []
 
@@ -567,14 +725,20 @@ def run_ingest(
             for timeframe in target_timeframes:
                 series = f"{product_code} {timeframe.timeframe_code}"
                 try:
-                    load_result = load_product(
-                        connection,
-                        session,
-                        product_code,
-                        timeframe,
-                        backfill_days,
-                        extend_to_backfill_days=extend_to_backfill_days,
-                    )
+                    if recheck:
+                        load_result = recheck_gaps(connection, session, product_code, timeframe)
+                        if load_result is None:
+                            logger.info("%s: no unrecorded gaps", series)
+                            continue
+                    else:
+                        load_result = load_product(
+                            connection,
+                            session,
+                            product_code,
+                            timeframe,
+                            backfill_days,
+                            extend_to_backfill_days=extend_to_backfill_days,
+                        )
                 except Exception as error:
                     failures.append(series)
                     logger.error("%s: load failed: %s", series, error, exc_info=True)
@@ -606,8 +770,9 @@ def run_ingest(
         return 1
 
     logger.info(
-        "all %d series loaded (%d product(s) at %d timeframe(s))",
+        "all %d series %s (%d product(s) at %d timeframe(s))",
         len(targets) * len(target_timeframes),
+        "rechecked" if recheck else "loaded",
         len(targets),
         len(target_timeframes),
     )

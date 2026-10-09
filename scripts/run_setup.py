@@ -16,8 +16,9 @@ To apply a changed mart definition without touching the stored candles:
 
     python scripts/run_setup.py --rebuild-marts
 
-To convert a warehouse built before timeframes existed (one whose fact table
-is core.ohlcv_hourly), keeping every stored candle and run record:
+To bring a warehouse built before the current schema up to date in place,
+keeping every stored candle and run record (the files in sql/migrations/ say
+what each step changes):
 
     python scripts/run_setup.py --migrate
 """
@@ -59,8 +60,8 @@ def main() -> None:
         "--migrate",
         action="store_true",
         help=(
-            "Convert a warehouse built before timeframes existed (fact table "
-            "core.ohlcv_hourly) in place, keeping every stored candle"
+            "Apply the migrations in sql/migrations/ that this warehouse still "
+            "needs, in place, keeping every stored candle"
         ),
     )
     parser.add_argument("--verbose", action="store_true", help="Debug-level logging")

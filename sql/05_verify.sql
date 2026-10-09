@@ -14,75 +14,98 @@
 -- has a simpler form, the comment below names it and what that form gets
 -- wrong.
 
--- Check 1: no asset-specific gaps in the 1-hour series.
--- Hours missing for EVERY asset that has history at that hour are exchange
--- outages and allowed; an hour missing for only some of them means the
--- pipeline dropped data, the loader left a candle in raw because core's
--- constraints reject it, or the product had no trades that hour (see below).
+-- Check 1: every candle missing from core was asked for and left out of the
+-- exchange's answer.
 --
--- The denominator is computed PER HOUR from the same LATERAL expansion that
--- produces the numerator, rather than from a separate count of active
--- assets. Counting core.assets WHERE is_active and comparing that to a
--- missing-count derived from the 1-hour series puts two different
--- populations on the two sides:
---   - a new active asset with no candles yet raises the denominator to 7
---     while no hour can ever reach 7 missing, which turns 5 genuine outage
---     hours into a reported pipeline bug;
---   - an asset marked inactive that keeps its history lowers the
---     denominator to 5 while real outages show 6 missing, so those hours
---     match neither FILTER and vanish from both counters.
--- Counting expected and missing in the same GROUP BY makes both impossible,
--- and the >= in the outage filter means nothing can fall between the two.
+-- Coinbase leaves a bucket out of its answer when nothing traded in it and
+-- when the exchange itself was down, so core has holes the pipeline did not
+-- make. The question that separates those from holes the pipeline did make
+-- is whether the bucket was ever requested. raw.fetch_windows records every
+-- window the loader asked for. A bucket missing from core that sits inside
+-- a window of a succeeded run was asked for and left out of the answer, so
+-- it is the exchange's gap, and the check counts it and lets it pass. A
+-- bucket inside no such window was never asked for. Once every run has its
+-- windows on record, only a pipeline bug leaves a bucket unasked, and the
+-- check fails on it.
 --
--- The check reads the 1-hour series only. The marts build from it, and a
--- finer series legitimately skips every bucket with no trades, which on a
--- thin product at 5 minutes is a large share of them, so a hole there cannot
--- be told apart from lost data. For the finer series the guard is the
--- loader's own warning on windows that come back short, not an assertion.
+-- An earlier version guessed instead, by comparing assets. It called an
+-- hour missing for every asset an outage and an hour missing for only some
+-- a pipeline bug. At 17:00 and 21:00 UTC on 2023-03-04, Coinbase has hourly
+-- candles for BTC and ETH but none for the four other assets, so that guess
+-- failed verify on hours the exchange itself has no candles for, as it
+-- would again for any asset added later with gaps of its own. It also could
+-- not judge the finer timeframes at all, where a quiet coin legitimately
+-- misses many 5-minute buckets. This version needs no list of known outages
+-- and no comparison between assets, and it covers every asset at every
+-- timeframe.
 --
--- What the gap count cannot see, stated so nobody assumes otherwise. Each
--- asset's expected hours run from its own first candle to its own last, so
--- an asset that stops loading produces no gap; the second assertion below
--- covers that case for active assets. Where only one asset has history, an
--- hour it lacks counts as an outage, because there is nothing to compare it
--- with. And a thinly traded product with zero-trade hours fails this check
--- by design: the six seeded assets trade every hour, and a product that does
--- not would need a tolerance this check does not have.
+-- What the check cannot see, stated so nobody assumes otherwise. A bucket
+-- inside a requested window that the exchange did send but the pipeline then
+-- dropped would count as the exchange's gap here. Check 3 catches the case
+-- where it reached raw, and the window arithmetic that decides which buckets
+-- a request covers is tested at every start offset and timeframe in
+-- tests/test_fetch_windows.py. Each series' expected buckets run from its own
+-- first candle to its own last, so a series that stops loading produces no
+-- gap; the second assertion below covers that case for active series.
 DO $$
 DECLARE
-    partial_gap_hours bigint;
-    outage_hours bigint;
-    stale_assets bigint;
+    never_requested bigint;
+    answered_without bigint;
+    by_timeframe text;
+    example text;
+    stale_series bigint;
     stale_detail text;
 BEGIN
-    WITH bounds AS (
-        SELECT asset_id, min(ts_utc) AS first_ts, max(ts_utc) AS last_ts
-        FROM core.ohlcv
-        WHERE granularity_seconds = 3600
-        GROUP BY asset_id
+    WITH series AS (
+        SELECT o.asset_id, a.product_code, o.granularity_seconds,
+               min(o.ts_utc) AS first_ts, max(o.ts_utc) AS last_ts
+        FROM core.ohlcv o
+        JOIN core.assets a USING (asset_id)
+        GROUP BY o.asset_id, a.product_code, o.granularity_seconds
     ),
-    by_hour AS (
+    missing AS (
+        SELECT s.asset_id, s.product_code, s.granularity_seconds, expected.ts
+        FROM series s
+        CROSS JOIN LATERAL generate_series(
+            s.first_ts, s.last_ts, make_interval(secs => s.granularity_seconds)
+        ) AS expected(ts)
+        WHERE NOT EXISTS (
+            SELECT 1 FROM core.ohlcv o
+            WHERE o.asset_id = s.asset_id
+              AND o.granularity_seconds = s.granularity_seconds
+              AND o.ts_utc = expected.ts)
+    ),
+    classified AS (
         SELECT
-            e.ts,
-            count(*)                                        AS assets_expected,
-            count(*) FILTER (WHERE o.asset_id IS NULL)      AS assets_missing
-        FROM bounds b
-        CROSS JOIN LATERAL generate_series(b.first_ts, b.last_ts, interval '1 hour') AS e(ts)
-        LEFT JOIN core.ohlcv o
-               ON o.asset_id = b.asset_id
-              AND o.granularity_seconds = 3600
-              AND o.ts_utc = e.ts
-        GROUP BY e.ts
+            m.*,
+            EXISTS (
+                SELECT 1
+                FROM raw.fetch_windows w
+                JOIN raw.ingest_runs r USING (run_id)
+                WHERE r.product_code = m.product_code
+                  AND r.granularity_seconds = m.granularity_seconds
+                  AND r.status = 'succeeded'
+                  AND m.ts BETWEEN w.window_start AND w.window_end
+            ) AS was_requested
+        FROM missing m
     )
     SELECT
-        count(*) FILTER (WHERE assets_missing > 0 AND assets_missing < assets_expected),
-        count(*) FILTER (WHERE assets_missing >= assets_expected)
-    INTO partial_gap_hours, outage_hours
-    FROM by_hour;
+        count(*) FILTER (WHERE NOT was_requested),
+        count(*) FILTER (WHERE was_requested),
+        coalesce((SELECT string_agg(format('%s s: %s', granularity_seconds, n), ', '
+                                    ORDER BY granularity_seconds)
+                  FROM (SELECT granularity_seconds, count(*) AS n
+                        FROM classified WHERE was_requested
+                        GROUP BY granularity_seconds) per_timeframe), 'none'),
+        (SELECT format('%s at %s s, bucket %s', product_code, granularity_seconds, ts)
+         FROM classified WHERE NOT was_requested
+         ORDER BY product_code, granularity_seconds, ts LIMIT 1)
+    INTO never_requested, answered_without, by_timeframe, example
+    FROM classified;
 
-    IF partial_gap_hours > 0 THEN
-        RAISE EXCEPTION 'gap check failed: % hour(s) missing for only some assets (dropped by the pipeline, rejected by core constraints, or not traded; not an outage)',
-            partial_gap_hours;
+    IF never_requested > 0 THEN
+        RAISE EXCEPTION 'gap check failed: % candle(s) missing from core sit in no recorded window of a succeeded run (e.g. %). Either the pipeline skipped them, or the warehouse was loaded before raw.fetch_windows existed and needs scripts/run_ingest.py --recheck-gaps first',
+            never_requested, example;
     END IF;
 
     -- An active series (active asset at an active timeframe) whose newest
@@ -102,15 +125,16 @@ BEGIN
     SELECT count(*),
            string_agg(format('%s %s (last candle %s)', product_code, timeframe_code, last_ts),
                       ', ' ORDER BY product_code, timeframe_code)
-    INTO stale_assets, stale_detail
+    INTO stale_series, stale_detail
     FROM newest
     WHERE last_ts < (SELECT max(last_ts) FROM newest) - interval '48 hours';
 
-    IF stale_assets > 0 THEN
+    IF stale_series > 0 THEN
         RAISE EXCEPTION 'gap check failed: % active series stopped loading more than 48 hours before the newest candle: %',
-            stale_assets, stale_detail;
+            stale_series, stale_detail;
     END IF;
-    RAISE NOTICE 'gap check passed: 0 asset-specific gaps in the 1-hour series, % exchange-wide outage hour(s) tolerated, no active series more than 48 hours behind', outage_hours;
+    RAISE NOTICE 'gap check passed: % candle(s) missing from core, every one inside a requested window that came back without it (per granularity, %); no active series more than 48 hours behind',
+        answered_without, by_timeframe;
 END $$;
 
 -- Check 2: the daily rollup covers exactly the (asset, day) pairs present in

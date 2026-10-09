@@ -611,3 +611,98 @@ def test_promote_to_core_is_silent_when_every_row_passes(caplog):
 
     assert caplog.text == ""
     assert connection.commits == 1
+
+
+# --------------------------------------------------------------------------
+# The request log in raw.fetch_windows, and re-checking gaps against it.
+# --------------------------------------------------------------------------
+def fetch_window_records(connection):
+    """The parameters of every raw.fetch_windows insert the connection saw."""
+    return [
+        params
+        for sql, params in connection.executed
+        if sql.startswith("INSERT INTO raw.fetch_windows")
+    ]
+
+
+def test_every_window_is_recorded_with_its_count_including_an_empty_one(monkeypatch, raw_writes):
+    answers = [[], [flat_candle(WINDOW_START + 300 * ONE_HOUR)]]
+
+    def fake_fetch_window(session, product_code, window_start, window_end, granularity_seconds):
+        return answers.pop(0)
+
+    monkeypatch.setattr(candle_ingest, "fetch_window", fake_fetch_window)
+    connection = FakeConnection()
+
+    candle_ingest._fetch_into_raw(
+        connection, None, "BTC-USD", 3600, 42, WINDOW_START, WINDOW_START + 301 * ONE_HOUR
+    )
+
+    assert fetch_window_records(connection) == [
+        (42, WINDOW_START, WINDOW_START + 299 * ONE_HOUR, 0),
+        (42, WINDOW_START + 300 * ONE_HOUR, WINDOW_START + 300 * ONE_HOUR, 1),
+    ]
+    # One commit per window, the empty one included, so the record of an
+    # empty answer is never lost to a later failure.
+    assert connection.commits == 2
+
+
+def test_the_first_window_with_candles_is_judged_from_its_first_candle(
+    monkeypatch, raw_writes, caplog
+):
+    # A listing at hour 120 of the first window: the 120 hours before it are
+    # not holes in a series that had not started.
+    serve_candles(
+        monkeypatch, [flat_candle(WINDOW_START + offset * ONE_HOUR) for offset in range(120, 300)]
+    )
+
+    with caplog.at_level("WARNING"):
+        rows_fetched, short_windows = fetch_300_hour_window(FakeConnection())
+
+    assert rows_fetched == 180
+    assert short_windows == 0
+
+
+def test_recheck_gaps_requests_only_the_unrecorded_gaps_and_records_the_windows(
+    monkeypatch, raw_writes, caplog
+):
+    gaps = [
+        WINDOW_START + 10 * ONE_HOUR,
+        WINDOW_START + 11 * ONE_HOUR,
+        WINDOW_START + 900 * ONE_HOUR,
+    ]
+    requested: list[tuple] = []
+
+    def fake_fetch_window(session, product_code, window_start, window_end, granularity_seconds):
+        requested.append((window_start, window_end))
+        # The exchange now has one of the three.
+        return [flat_candle(gap) for gap in gaps[:1] if window_start <= gap <= window_end]
+
+    monkeypatch.setattr(candle_ingest, "fetch_window", fake_fetch_window)
+    # Rows: the run id the insert returns. Batches: the gap query's answer,
+    # then the rejected-rows query inside the promotion.
+    connection = FakeConnection(rows=[(77,)])
+    connection.batches = [[(gap,) for gap in gaps], []]
+
+    with caplog.at_level("INFO"):
+        load_result = candle_ingest.recheck_gaps(connection, None, "SOL-USD", HOURLY)
+
+    assert requested == [(gaps[0], gaps[1]), (gaps[2], gaps[2])]
+    assert fetch_window_records(connection) == [
+        (77, gaps[0], gaps[1], 1),
+        (77, gaps[2], gaps[2], 0),
+    ]
+    assert load_result is not None
+    assert (load_result.run_id, load_result.rows_fetched) == (77, 1)
+    assert "re-requested 3 gap bucket(s) in 2 window(s); the exchange returned 1" in caplog.text
+
+
+def test_recheck_gaps_does_nothing_when_every_gap_is_on_record(monkeypatch):
+    def unexpected_fetch(*args):
+        raise AssertionError("no request should be made")
+
+    monkeypatch.setattr(candle_ingest, "fetch_window", unexpected_fetch)
+    connection = FakeConnection()
+
+    assert candle_ingest.recheck_gaps(connection, None, "SOL-USD", HOURLY) is None
+    assert not any(sql.startswith("INSERT INTO raw.ingest_runs") for sql, _ in connection.executed)
