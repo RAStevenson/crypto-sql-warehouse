@@ -35,7 +35,7 @@ dbt-core==1.12.5
 dbt-postgres==1.11.0
 
 # Development only: the test runner, the linter, and the type checker (added
-# 2026-10-04). Pinned so the checks on a reader's machine and on the CI runner match the ones
+# 2026-10-04). Pinned so the checks on a reader's machine and on the GitHub Actions runner match the ones
 # here. The tests stub the HTTP session rather than pulling in requests-mock
 # or responses; a fake with three methods is less to install and less to
 # explain than another dependency.

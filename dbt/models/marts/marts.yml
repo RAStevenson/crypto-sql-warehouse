@@ -9,6 +9,7 @@ models:
     description: The 1-hour series rolled up to UTC trading days, with hours_present and is_complete on every row.
     columns:
       - name: asset_id
+        description: The asset, from core.assets.
         data_tests:
           - not_null
           - relationships:
@@ -16,8 +17,19 @@ models:
                 to: source('core', 'assets')
                 field: asset_id
       - name: trade_date
+        description: The UTC calendar day, pinned with AT TIME ZONE 'UTC' so no session timezone can move it.
         data_tests:
           - not_null
+      - name: open
+        description: Open of the first hour present.
+      - name: high
+        description: Highest hourly high.
+      - name: low
+        description: Lowest hourly low.
+      - name: close
+        description: Close of the last hour present.
+      - name: volume
+        description: Sum of the hourly volumes, in base-currency units.
       - name: hours_present
         description: Hourly candles the day was built from, 1 to 24.
         data_tests:
@@ -31,18 +43,57 @@ models:
     description: Every daily_ohlcv row plus returns, moving averages, 30-day volatility, drawdown from the loaded window's peak, and an approximate dollar volume, each NULL until its rule allows a value.
     columns:
       - name: asset_id
+        description: The asset, from core.assets.
         data_tests:
           - not_null
       - name: trade_date
+        description: The UTC calendar day.
         data_tests:
           - not_null
+      - name: open
+        description: As in daily_ohlcv.
+      - name: high
+        description: As in daily_ohlcv.
+      - name: low
+        description: As in daily_ohlcv.
+      - name: close
+        description: As in daily_ohlcv.
+      - name: volume
+        description: As in daily_ohlcv.
+      - name: hours_present
+        description: As in daily_ohlcv.
       - name: is_complete
+        description: As in daily_ohlcv. Every derived column below is NULL when it is false.
         data_tests:
           - not_null
+      - name: simple_return
+        description: close over the previous complete day's close, minus one. NULL when the previous calendar day is not a complete day.
+      - name: log_return
+        description: Natural log of close over the previous complete day's close. NULL under the same rule as simple_return.
+      - name: ma_7d
+        description: Mean close over the last 7 complete days. NULL until 7 are in the window.
+      - name: ma_30d
+        description: Mean close over the last 30 complete days. NULL until 30 are in the window.
+      - name: volatility_30d_ann
+        description: Sample standard deviation of log_return over the last 30 complete days, times the square root of 365. NULL until 30 returns are in the window.
+      - name: drawdown_from_peak
+        description: close over the highest close seen so far in the loaded window, minus one. Zero at a new peak, negative below it. Not measured from an all-time high.
+      - name: dollar_volume_approx
+        description: volume times close. An approximation, measured 2026-08-04 at -0.04 percent on average against volume times (high+low+close)/3, with a daily range of -4.16 to +3.14 percent.
 
   - name: pairwise_correlations_90d
     description: Pearson correlation of daily log returns for each unordered pair of assets over the trailing 90 dates that have a return, with the number of shared days.
     columns:
+      - name: asset_id_a
+        description: The lower asset_id of the pair.
+      - name: asset_id_b
+        description: The higher asset_id of the pair.
+      - name: symbol_a
+        description: Symbol of asset_id_a.
+      - name: symbol_b
+        description: Symbol of asset_id_b.
+      - name: return_correlation
+        description: Pearson correlation of the two assets' log returns over the shared days in the window.
       - name: n_days
         description: Shared complete days the correlation is computed over, at most 90.
         data_tests:
@@ -52,5 +103,36 @@ models:
     description: daily_metrics joined to the asset names, one row per asset per day, for a live Tableau connection or the CSV export.
     columns:
       - name: symbol
+        description: Ticker symbol, such as BTC.
         data_tests:
           - not_null
+      - name: asset_name
+        description: Human-readable name, such as Bitcoin.
+      - name: trade_date
+        description: The UTC calendar day.
+      - name: open
+        description: As in daily_ohlcv.
+      - name: high
+        description: As in daily_ohlcv.
+      - name: low
+        description: As in daily_ohlcv.
+      - name: close
+        description: As in daily_ohlcv.
+      - name: volume_base_units
+        description: daily_ohlcv's volume, named for what it measures.
+      - name: dollar_volume_approx
+        description: As in daily_metrics.
+      - name: simple_return
+        description: As in daily_metrics.
+      - name: ma_7d
+        description: As in daily_metrics.
+      - name: ma_30d
+        description: As in daily_metrics.
+      - name: volatility_30d_ann
+        description: As in daily_metrics.
+      - name: drawdown_from_peak
+        description: As in daily_metrics.
+      - name: hours_present
+        description: As in daily_ohlcv.
+      - name: is_complete
+        description: As in daily_ohlcv. A moving-average line breaks at a false row instead of closing over it.

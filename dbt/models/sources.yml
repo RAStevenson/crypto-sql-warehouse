@@ -7,6 +7,14 @@
 # primary keys, foreign keys, and CHECK constraints. They are kept so the
 # contract is visible where a dbt reader looks for it, and so a warehouse
 # built some other way fails here before any mart is trusted.
+#
+# The freshness block on core.ohlcv is the rule `dbt source freshness`
+# applies. It measures how long ago the newest candle started, from ts_utc.
+# A daily load leaves that under a day. Past two days dbt warns, which means
+# the last two loads brought in nothing new, and past four it reports an
+# error. The
+# scheduled job runs the check after each load. The GitHub Actions job does
+# not, because the fixture it loads is as old as the day it was dumped.
 version: 2
 
 sources:
@@ -16,27 +24,77 @@ sources:
     tables:
       - name: candles
         description: Every candle every run fetched, duplicates included. Deduplication is core's job.
+        columns:
+          - name: raw_id
+            description: Identity of the row. The newest copy of a bucket is the one with the highest raw_id.
+          - name: run_id
+            description: The run that fetched this candle, which also says its timeframe.
+          - name: product_code
+            description: Coinbase product code, such as BTC-USD.
+          - name: bucket_start
+            description: Start of the candle's interval, UTC.
+          - name: open
+            description: First trade price in the interval.
+          - name: high
+            description: Highest trade price in the interval.
+          - name: low
+            description: Lowest trade price in the interval.
+          - name: close
+            description: Last trade price in the interval.
+          - name: volume
+            description: Quantity traded in the interval, in units of the base currency (BTC for BTC-USD).
+          - name: fetched_at
+            description: When the loader stored the row.
       - name: ingest_runs
         description: One row per product and timeframe per run, with the span requested and the row counts.
         columns:
           - name: run_id
+            description: Identity of the run.
             data_tests:
               - not_null
               - unique
+          - name: product_code
+            description: The product the run loaded.
+          - name: granularity_seconds
+            description: The timeframe the run loaded, as the candle width in seconds.
+          - name: window_start
+            description: Where the run started fetching, the resume point.
+          - name: window_end
+            description: The bucket the run stopped before, the one still forming when it ran.
+          - name: rows_fetched
+            description: Candles received across every window of the run.
+          - name: rows_upserted
+            description: Rows the run inserted into core or changed there.
           - name: status
+            description: running while the run is open, then succeeded or failed.
             data_tests:
               - accepted_values:
                   arguments:
                     values: ["running", "succeeded", "failed"]
+          - name: started_at
+            description: When the run began.
+          - name: finished_at
+            description: When the run ended, NULL for a run still open or one that died.
       - name: fetch_windows
         description: One row per window the loader asked for, with how many candles came back. An empty answer gets its row too.
         columns:
+          - name: fetch_id
+            description: Identity of the request.
           - name: run_id
+            description: The run that made the request.
             data_tests:
               - relationships:
                   arguments:
                     to: source('raw', 'ingest_runs')
                     field: run_id
+          - name: window_start
+            description: First bucket requested.
+          - name: window_end
+            description: Last bucket requested, inclusive.
+          - name: candles_received
+            description: Candles in the answer, after any outside the window were dropped. Zero is a real answer.
+          - name: requested_at
+            description: When the request was recorded.
   - name: core
     description: Typed, deduplicated, constrained facts and dimensions. The layer queries trust.
     schema: core
@@ -45,38 +103,78 @@ sources:
         description: The asset dimension and the ingest work list (is_active).
         columns:
           - name: asset_id
-            data_tests:
-              - not_null
-              - unique
-          - name: product_code
+            description: Surrogate key, the one the fact table carries.
             data_tests:
               - not_null
               - unique
           - name: symbol
+            description: Ticker symbol, such as BTC.
             data_tests:
               - not_null
               - unique
+          - name: product_code
+            description: Coinbase product code, such as BTC-USD, the name the loader requests by.
+            data_tests:
+              - not_null
+              - unique
+          - name: asset_name
+            description: Human-readable name, such as Bitcoin.
+          - name: quote_currency
+            description: The currency prices are quoted in, USD for every seeded asset.
+          - name: is_active
+            description: True while the loader should keep loading the asset. False stops loading without deleting history.
+          - name: added_at
+            description: When the asset was registered.
       - name: timeframes
         description: The four candle widths the warehouse supports, each switched on or off.
         columns:
+          - name: timeframe_code
+            description: The short name, 1m, 5m, 15m, or 1h.
           - name: granularity_seconds
+            description: The candle width in seconds, the value Coinbase takes and the fact table carries.
             data_tests:
               - accepted_values:
                   arguments:
                     values: [60, 300, 900, 3600]
                     quote: false
+          - name: is_active
+            description: True while the loader should load this timeframe for every active asset. Only 1h starts out true.
       - name: ohlcv
         description: One row per asset per timeframe per bucket, UTC. The marts read only the 1-hour rows.
+        loaded_at_field: ts_utc
+        freshness:
+          warn_after: {count: 48, period: hour}
+          error_after: {count: 96, period: hour}
         columns:
           - name: asset_id
+            description: The asset, from core.assets.
             data_tests:
               - relationships:
                   arguments:
                     to: source('core', 'assets')
                     field: asset_id
           - name: granularity_seconds
+            description: The timeframe, from core.timeframes.
             data_tests:
               - relationships:
                   arguments:
                     to: source('core', 'timeframes')
                     field: granularity_seconds
+          - name: ts_utc
+            description: Start of the candle's interval, UTC.
+          - name: open
+            description: First trade price in the interval.
+          - name: high
+            description: Highest trade price in the interval.
+          - name: low
+            description: Lowest trade price in the interval. Constrained above zero.
+          - name: close
+            description: Last trade price in the interval.
+          - name: volume
+            description: Quantity traded in the interval, in units of the base currency.
+          - name: source_run_id
+            description: The run that last inserted or changed this row.
+          - name: inserted_at
+            description: When the row was first inserted.
+          - name: updated_at
+            description: When the row's values last changed. Equal to inserted_at until they do.
