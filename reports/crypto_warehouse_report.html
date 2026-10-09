@@ -432,18 +432,22 @@ the method rests on, the 365-day year and the 24-hour day, are written into the
 template and stated in section 2.</p>
 
 <p>The pipeline underneath is checked three ways. <code>python
-scripts/run_verify.py</code> runs 7 checks against a loaded warehouse,
-each fatal on failure, covering candles missing from core that the loader
-never requested, rollup coverage, raw-to-core
-agreement, upsert idempotency, run status, session-timezone invariance of
-the daily rollup, and agreement of the two stored daily marts with their
-definitions.
-<code>pytest</code> runs 172 test functions, none of which need a
+scripts/run_verify.py</code> runs the 33 dbt tests declared in
+<code>dbt/</code> against the loaded warehouse, then the
+check in
+<code>sql/05_verify.sql</code> that could not be written as a dbt test, and
+exits nonzero if any of them fails. Together they cover candles missing from
+core that the loader never requested, rollup coverage, raw-to-core agreement,
+upsert idempotency, run status, a refresh after the newest load, and
+session-timezone invariance of the daily rollup. Three more hold the marts to
+their own rules for incomplete days, warm-up windows, and returns across
+gaps.
+<code>pytest</code> runs 187 test functions, none of which need a
 database or a network. They cover the ingestion windowing and watermark, the
 API client, the record of each request to Coinbase, the re-request of
-unrecorded gaps, asset registration, the marts rebuild, the migrations, the
-CSV export, and the diversification math in this report, and one checks that
-every function is documented. The
+unrecorded gaps, asset registration, the dbt project's shape and its
+connection settings, the migrations, the CSV export, and the diversification
+math in this report, and one checks that every function is documented. The
 21 annotated queries in <code>sql/04_queries.sql</code> each run
 standalone against a loaded database.</p>
 

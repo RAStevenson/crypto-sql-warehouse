@@ -1,12 +1,14 @@
-"""Create the warehouse database if it is missing, then apply the DDL.
+"""Create the warehouse database if it is missing, apply the DDL, and have
+dbt build the marts.
 
     pip install -r requirements.txt
     python scripts/run_setup.py
 
-Reads DATABASE_URL from the environment or from .env. Everything runs through
-psycopg2, so psql does not have to be installed or on PATH.
+Reads DATABASE_URL from the environment or from .env. The DDL runs through
+psycopg2, so psql does not have to be installed or on PATH, and the marts are
+built by dbt from dbt/models/marts/, with the same connection.
 
-The DDL files use plain CREATE, so they cannot be applied twice. Re-running
+The DDL file uses plain CREATE, so it cannot be applied twice. Re-running
 against a database that already has core.assets stops with an explanation.
 To rebuild from scratch, which deletes every stored candle:
 
@@ -40,7 +42,7 @@ def main() -> None:
     logger = logging.getLogger("run_setup")
     parser = argparse.ArgumentParser(
         prog="run_setup.py",
-        description="Create the database and apply sql/01_schema.sql and sql/02_marts.sql.",
+        description="Create the database, apply sql/01_schema.sql, and build the marts with dbt.",
     )
     rebuild_options = parser.add_mutually_exclusive_group()
     rebuild_options.add_argument(
@@ -52,8 +54,8 @@ def main() -> None:
         "--rebuild-marts",
         action="store_true",
         help=(
-            "Drop and re-create only the marts schema from sql/02_marts.sql. "
-            "Raw and core keep their data"
+            "Drop the marts schema and have dbt build it again from "
+            "dbt/models/marts/. Raw and core keep their data"
         ),
     )
     rebuild_options.add_argument(

@@ -13,6 +13,8 @@ dependencies = [
     "python-dotenv>=1.0",
     "numpy>=1.26",
     "matplotlib>=3.8",
+    "dbt-core>=1.9",
+    "dbt-postgres>=1.9",
 ]
 
 [project.optional-dependencies]

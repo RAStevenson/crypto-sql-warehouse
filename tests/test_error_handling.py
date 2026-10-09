@@ -252,28 +252,52 @@ class FakeConnection:
         pass
 
 
-def run_verify_raising(monkeypatch, error: Exception) -> int:
+def run_verify_raising(monkeypatch, error: Exception | None, dbt_exit_code: int = 0) -> int:
     def run_sql_file(connection, name):
-        raise error
+        if error is not None:
+            raise error
 
     monkeypatch.setattr(
         warehouse_verification.database_connection, "connect", lambda **kwargs: FakeConnection()
     )
     monkeypatch.setattr(warehouse_verification.sql_file_runner, "run_sql_file", run_sql_file)
+    monkeypatch.setattr(warehouse_verification.dbt_project, "test_warehouse", lambda: dbt_exit_code)
     return warehouse_verification.run_verify()
 
 
 def test_a_failed_check_prints_the_server_report_then_the_summary(monkeypatch, caplog):
     with caplog.at_level(logging.ERROR):
         exit_code = run_verify_raising(
-            monkeypatch, psycopg2.errors.RaiseException("gap check failed: 1 hour(s) missing")
+            monkeypatch, psycopg2.errors.RaiseException("timezone check failed: 3 row(s)")
         )
 
     assert exit_code == 1
     messages = [record.getMessage() for record in error_records(caplog)]
     assert messages[0].startswith("full server report:")
-    assert messages[-1].startswith("verification FAILED: gap check failed")
-    assert "did not run" in messages[-1]
+    assert messages[1].startswith("check FAILED: timezone check failed")
+    assert messages[-1] == "verification FAILED"
+
+
+def test_failed_dbt_tests_fail_verify_and_the_sql_check_still_runs(monkeypatch, caplog):
+    ran: list[str] = []
+
+    def run_sql_file(connection, name):
+        ran.append(name)
+
+    monkeypatch.setattr(
+        warehouse_verification.database_connection, "connect", lambda **kwargs: FakeConnection()
+    )
+    monkeypatch.setattr(warehouse_verification.sql_file_runner, "run_sql_file", run_sql_file)
+    monkeypatch.setattr(warehouse_verification.dbt_project, "test_warehouse", lambda: 1)
+
+    with caplog.at_level(logging.ERROR):
+        exit_code = warehouse_verification.run_verify()
+
+    assert exit_code == 1
+    assert ran == [warehouse_verification.sql_file_runner.VERIFY_FILE]
+    messages = [record.getMessage() for record in error_records(caplog)]
+    assert messages[0].startswith("dbt test reported failures")
+    assert messages[-1] == "verification FAILED"
 
 
 def test_a_database_error_that_is_not_a_check_is_let_through(monkeypatch):

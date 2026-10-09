@@ -19,8 +19,11 @@ import re
 import subprocess
 from pathlib import Path
 
+import yaml
+
 from .candle_ingest import DEFAULT_BACKFILL_DAYS
 from .database_connection import REPO_ROOT
+from .dbt_project import DBT_DIR
 from .diversification_metrics import FIGURES_DIR, METRICS_PATH, REPORTS_DIR
 from .sql_file_runner import QUERIES_FILE, SQL_DIR, VERIFY_FILE
 
@@ -65,6 +68,37 @@ def count_verify_checks() -> int:
     return sum(
         line.startswith("DO $$") for line in path.read_text(encoding="utf-8").splitlines()
     )
+
+
+def _count_data_tests(node: object) -> int:
+    """Return how many items sit under every data_tests list inside a parsed
+    dbt yml document, at any depth."""
+    if isinstance(node, dict):
+        return sum(
+            len(value)
+            if key == "data_tests" and isinstance(value, list)
+            else _count_data_tests(value)
+            for key, value in node.items()
+        )
+    if isinstance(node, list):
+        return sum(_count_data_tests(item) for item in node)
+    return 0
+
+
+def count_dbt_tests() -> int:
+    """Return the number of tests in the dbt project, or 0 when it is missing.
+
+    That is one per SQL file under dbt/tests/, the singular tests, plus one
+    per item under a data_tests key in the yml files under dbt/models/, the
+    tests declared on sources and models.
+    """
+    if not DBT_DIR.is_dir():
+        return 0
+    singular = len(list((DBT_DIR / "tests").glob("*.sql")))
+    declared = 0
+    for yml_path in sorted(DBT_DIR.glob("models/**/*.yml")):
+        declared += _count_data_tests(yaml.safe_load(yml_path.read_text(encoding="utf-8")))
+    return singular + declared
 
 
 # Page styles, kept as a plain string so the CSS braces need no doubling.
@@ -307,7 +341,8 @@ def build_report() -> None:
 
     n_tests = count_test_functions()
     n_queries = count_annotated_queries()
-    n_checks = count_verify_checks()
+    n_dbt_tests = count_dbt_tests()
+    n_sql_checks = count_verify_checks()
     symbols = join_with_conjunction(panel["symbols"])
     n_days, n_assets = panel["n_days"], panel["n_assets"]
 
@@ -934,18 +969,22 @@ the method rests on, the 365-day year and the 24-hour day, are written into the
 template and stated in section 2.</p>
 
 <p>The pipeline underneath is checked three ways. <code>python
-scripts/run_verify.py</code> runs {n_checks} checks against a loaded warehouse,
-each fatal on failure, covering candles missing from core that the loader
-never requested, rollup coverage, raw-to-core
-agreement, upsert idempotency, run status, session-timezone invariance of
-the daily rollup, and agreement of the two stored daily marts with their
-definitions.
+scripts/run_verify.py</code> runs the {n_dbt_tests} dbt tests declared in
+<code>dbt/</code> against the loaded warehouse, then the
+{singular_or_plural(n_sql_checks, "check", f"{n_sql_checks} checks")} in
+<code>sql/05_verify.sql</code> that could not be written as a dbt test, and
+exits nonzero if any of them fails. Together they cover candles missing from
+core that the loader never requested, rollup coverage, raw-to-core agreement,
+upsert idempotency, run status, a refresh after the newest load, and
+session-timezone invariance of the daily rollup. Three more hold the marts to
+their own rules for incomplete days, warm-up windows, and returns across
+gaps.
 <code>pytest</code> runs {n_tests} test functions, none of which need a
 database or a network. They cover the ingestion windowing and watermark, the
 API client, the record of each request to Coinbase, the re-request of
-unrecorded gaps, asset registration, the marts rebuild, the migrations, the
-CSV export, and the diversification math in this report, and one checks that
-every function is documented. The
+unrecorded gaps, asset registration, the dbt project's shape and its
+connection settings, the migrations, the CSV export, and the diversification
+math in this report, and one checks that every function is documented. The
 {n_queries} annotated queries in <code>sql/04_queries.sql</code> each run
 standalone against a loaded database.</p>
 

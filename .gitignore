@@ -25,3 +25,9 @@ CLAUDE.md
 
 # CSV files written by scripts/run_export.py
 exports/
+
+# dbt's build artifacts and logs. target/ holds compiled SQL and the docs
+# site, both rebuilt by every run; logs/dbt/ is covered by logs/ above.
+dbt/target/
+dbt/dbt_packages/
+dbt/package-lock.yml

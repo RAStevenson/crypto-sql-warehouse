@@ -23,7 +23,7 @@
 -- observed but leaves derived columns NULL on days built from fewer than 24
 -- hourly candles. Queries below that consume derived columns therefore
 -- filter out NULLs explicitly rather than letting a partial day pass as a
--- quiet trading day. See the header of 02_marts.sql.
+-- quiet trading day. See the header of dbt/models/marts/daily_ohlcv.sql.
 -- =============================================================================
 
 

@@ -1,5 +1,8 @@
 """Locating and running the numbered files in sql/.
 
+The marts are not among them: they are dbt models under dbt/models/marts/,
+built and refreshed through crypto_warehouse.dbt_project.
+
 They go through psycopg2 rather than a psql subprocess so nothing depends on
 psql being installed or on PATH, which on Windows it usually is not. The cost
 is that a file is one execute() call: it succeeds or fails as a unit, inside
@@ -18,8 +21,6 @@ logger = logging.getLogger(__name__)
 SQL_DIR = REPO_ROOT / "sql"
 
 SCHEMA_FILE = "01_schema.sql"
-MARTS_FILE = "02_marts.sql"
-REFRESH_MARTS_FILE = "03_refresh_marts.sql"
 QUERIES_FILE = "04_queries.sql"
 VERIFY_FILE = "05_verify.sql"
 TIMEFRAMES_MIGRATION_FILE = "migrations/001_add_timeframes.sql"

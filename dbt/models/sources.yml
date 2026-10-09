@@ -1,0 +1,82 @@
+# The tables the marts read, loaded by scripts/run_ingest.py, never by dbt.
+# raw holds candles as they arrived and the record of every run and every
+# request; core holds the cleaned, constrained facts. sql/01_schema.sql
+# creates them and says why each is shaped as it is.
+#
+# The tests here restate contracts the database already enforces with
+# primary keys, foreign keys, and CHECK constraints. They are kept so the
+# contract is visible where a dbt reader looks for it, and so a warehouse
+# built some other way fails here before any mart is trusted.
+version: 2
+
+sources:
+  - name: raw
+    description: Candles as the Coinbase API returned them, plus a row per run and a row per request. Append-only.
+    schema: raw
+    tables:
+      - name: candles
+        description: Every candle every run fetched, duplicates included. Deduplication is core's job.
+      - name: ingest_runs
+        description: One row per product and timeframe per run, with the span requested and the row counts.
+        columns:
+          - name: run_id
+            data_tests:
+              - not_null
+              - unique
+          - name: status
+            data_tests:
+              - accepted_values:
+                  arguments:
+                    values: ["running", "succeeded", "failed"]
+      - name: fetch_windows
+        description: One row per window the loader asked for, with how many candles came back. An empty answer gets its row too.
+        columns:
+          - name: run_id
+            data_tests:
+              - relationships:
+                  arguments:
+                    to: source('raw', 'ingest_runs')
+                    field: run_id
+  - name: core
+    description: Typed, deduplicated, constrained facts and dimensions. The layer queries trust.
+    schema: core
+    tables:
+      - name: assets
+        description: The asset dimension and the ingest work list (is_active).
+        columns:
+          - name: asset_id
+            data_tests:
+              - not_null
+              - unique
+          - name: product_code
+            data_tests:
+              - not_null
+              - unique
+          - name: symbol
+            data_tests:
+              - not_null
+              - unique
+      - name: timeframes
+        description: The four candle widths the warehouse supports, each switched on or off.
+        columns:
+          - name: granularity_seconds
+            data_tests:
+              - accepted_values:
+                  arguments:
+                    values: [60, 300, 900, 3600]
+                    quote: false
+      - name: ohlcv
+        description: One row per asset per timeframe per bucket, UTC. The marts read only the 1-hour rows.
+        columns:
+          - name: asset_id
+            data_tests:
+              - relationships:
+                  arguments:
+                    to: source('core', 'assets')
+                    field: asset_id
+          - name: granularity_seconds
+            data_tests:
+              - relationships:
+                  arguments:
+                    to: source('core', 'timeframes')
+                    field: granularity_seconds

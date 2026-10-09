@@ -26,6 +26,14 @@ python-dotenv==1.2.2
 numpy==1.26.3
 matplotlib==3.11.1
 
+# The marts and the warehouse checks are a dbt project (dbt/). dbt Core is
+# the open-source command-line tool, and dbt-postgres is its PostgreSQL
+# adapter. The scripts run dbt in process (scripts/run_setup.py builds the
+# marts, run_ingest.py refreshes them, run_verify.py tests them), so these
+# are runtime pins, not development ones (added 2026-10-09).
+dbt-core==1.12.5
+dbt-postgres==1.11.0
+
 # Development only: the test runner, the linter, and the type checker (added
 # 2026-10-04). Pinned so the checks on a reader's machine and on the CI runner match the ones
 # here. The tests stub the HTTP session rather than pulling in requests-mock

@@ -1,10 +1,12 @@
-"""Running sql/05_verify.sql and turning its result into an exit code.
+"""Running the warehouse checks and turning their result into an exit code.
 
-The checks are DO blocks that RAISE EXCEPTION on failure and RAISE NOTICE with
-their numbers on success. Both go to the client as server messages, so the job
-here is to make sure the operator actually sees them: notices are logged as
-they arrive, and a failure is reported with the exception's own message, which
-is the text that names the check that failed.
+The checks come in two kinds. The dbt tests in dbt/tests/ and the dbt yml
+files are each one SELECT that returns the rows that break a rule, and
+`dbt test` runs them all and reports the failing ones. The one check that
+cannot be a SELECT, because it has to switch the session timezone partway
+through, is a DO block in sql/05_verify.sql that raises an exception on
+failure and a notice with its numbers on success. Both kinds run every time,
+so one run reports everything that is wrong.
 """
 
 from __future__ import annotations
@@ -15,14 +17,14 @@ from contextlib import closing
 import psycopg2
 import psycopg2.errors
 
-from . import database_connection, sql_file_runner
+from . import database_connection, dbt_project, sql_file_runner
 
 logger = logging.getLogger(__name__)
 
 
-def run_verify() -> int:
-    """Run sql/05_verify.sql and return 0 if every check passed or 1 if one
-    failed.
+def run_sql_checks() -> int:
+    """Run sql/05_verify.sql and return 0 if every check in it passed or 1 if
+    one failed.
 
     Any database error other than a failed check is raised.
     """
@@ -39,15 +41,28 @@ def run_verify() -> int:
             # it is printed in full before the one-line summary.
             primary_message = getattr(error.diag, "message_primary", None) or str(error)
             logger.error("full server report:\n%s", str(error).strip())
-            logger.error(
-                "verification FAILED: %s; the checks after it in sql/%s did not run",
-                primary_message,
-                sql_file_runner.VERIFY_FILE,
-            )
+            logger.error("check FAILED: %s", primary_message)
             return 1
+    return 0
 
+
+def run_verify() -> int:
+    """Run `dbt test` and then sql/05_verify.sql, and return 0 if every test
+    and check passed or 1 if any failed.
+
+    The second half runs even when the first fails, so one run reports
+    everything that is wrong.
+    """
+    dbt_exit_code = dbt_project.test_warehouse()
+    if dbt_exit_code != 0:
+        logger.error("dbt test reported failures; they are listed above and in logs/dbt/dbt.log")
+    sql_exit_code = run_sql_checks()
+
+    if dbt_exit_code != 0 or sql_exit_code != 0:
+        logger.error("verification FAILED")
+        return 1
     logger.info(
-        "verification passed: every check in sql/%s raised no exception",
+        "verification passed: every dbt test passed and every check in sql/%s raised no exception",
         sql_file_runner.VERIFY_FILE,
     )
     return 0

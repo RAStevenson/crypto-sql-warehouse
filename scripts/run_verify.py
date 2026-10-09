@@ -1,11 +1,12 @@
-"""Run the warehouse smoke tests in sql/05_verify.sql.
+"""Run the warehouse checks: the dbt tests, then sql/05_verify.sql.
 
     python scripts/run_verify.py
 
-Each check is a DO block that raises on failure, so this exits nonzero when
-one fails and prints the message that names it. The checks hold after an
-ordinary daily load. They fail when a product's load failed, when a candle
-was left out of core, or when the marts were not refreshed.
+`dbt test` runs every test under dbt/ and lists the failing ones; the
+timezone check in sql/05_verify.sql is a DO block that raises on failure.
+This exits nonzero when anything failed. The checks hold after an ordinary
+daily load. They fail when a series' load failed, when a candle was left out
+of core, or when the marts were not refreshed.
 """
 
 import sys
@@ -25,7 +26,7 @@ def main() -> None:
     logger = logging.getLogger("run_verify")
     parser = argparse.ArgumentParser(
         prog="run_verify.py",
-        description="Execute sql/05_verify.sql; nonzero exit if any check fails.",
+        description="Run the dbt tests and sql/05_verify.sql; nonzero exit if anything fails.",
     )
     parser.add_argument("--verbose", action="store_true", help="Debug-level logging")
     args = parser.parse_args()
