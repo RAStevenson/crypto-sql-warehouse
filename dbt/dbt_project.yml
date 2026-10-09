@@ -1,0 +1,27 @@
+# The dbt project for the marts layer. Each mart under models/marts/ is one
+# SELECT that dbt builds in dependency order, and the checks under tests/ and
+# in the yml files run with `dbt test`. The warehouse's own scripts invoke
+# dbt (scripts/run_setup.py builds the marts, scripts/run_ingest.py refreshes
+# them after a load, scripts/run_verify.py tests them), and
+# scripts/run_dbt.py passes any dbt command through with the connection set.
+name: crypto_warehouse
+version: "1.0.0"
+config-version: 2
+profile: crypto_warehouse
+
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+analysis-paths: []
+seed-paths: []
+snapshot-paths: []
+
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  crypto_warehouse:
+    marts:
+      # Materialized views, refreshed concurrently (see macros/). Each model
+      # declares its own unique index, which the concurrent refresh needs.
+      +materialized: materialized_view
+      +on_configuration_change: apply

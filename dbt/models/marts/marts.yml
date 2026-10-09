@@ -1,0 +1,56 @@
+# The marts and the contracts each one keeps. The deeper checks, the ones
+# that compare a mart with the facts beneath it or hold it to a rule its SQL
+# states, are the one-SELECT tests in ../../tests/, which dbt calls singular
+# tests.
+version: 2
+
+models:
+  - name: daily_ohlcv
+    description: The 1-hour series rolled up to UTC trading days, with hours_present and is_complete on every row.
+    columns:
+      - name: asset_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: source('core', 'assets')
+                field: asset_id
+      - name: trade_date
+        data_tests:
+          - not_null
+      - name: hours_present
+        description: Hourly candles the day was built from, 1 to 24.
+        data_tests:
+          - not_null
+      - name: is_complete
+        description: True when all 24 hours were present. Derived columns downstream are NULL when it is false.
+        data_tests:
+          - not_null
+
+  - name: daily_metrics
+    description: Every daily_ohlcv row plus returns, moving averages, 30-day volatility, drawdown from the loaded window's peak, and an approximate dollar volume, each NULL until its rule allows a value.
+    columns:
+      - name: asset_id
+        data_tests:
+          - not_null
+      - name: trade_date
+        data_tests:
+          - not_null
+      - name: is_complete
+        data_tests:
+          - not_null
+
+  - name: pairwise_correlations_90d
+    description: Pearson correlation of daily log returns for each unordered pair of assets over the trailing 90 dates that have a return, with the number of shared days.
+    columns:
+      - name: n_days
+        description: Shared complete days the correlation is computed over, at most 90.
+        data_tests:
+          - not_null
+
+  - name: tableau_daily_extract
+    description: daily_metrics joined to the asset names, one row per asset per day, for a live Tableau connection or the CSV export.
+    columns:
+      - name: symbol
+        data_tests:
+          - not_null

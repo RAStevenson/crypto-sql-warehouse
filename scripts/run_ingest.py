@@ -5,7 +5,7 @@
     python scripts/run_ingest.py --products BTC-USD ETH-USD
     python scripts/run_ingest.py --timeframes 15m --backfill-days 90
 
-A load ends with the mart refresh in sql/03_refresh_marts.sql unless
+A load ends with a mart refresh through dbt (`dbt run`) unless
 --no-refresh-marts says otherwise, so the default run leaves nothing stale.
 
 Each (product, timeframe) series resumes from its MAX(ts_utc) in core.ohlcv

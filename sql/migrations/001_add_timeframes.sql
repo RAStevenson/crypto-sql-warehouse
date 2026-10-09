@@ -8,8 +8,10 @@
 --
 -- Apply it with:
 --   python scripts/run_setup.py --migrate
--- which runs this file and then sql/02_marts.sql in one transaction, so a
--- failure anywhere leaves the old warehouse exactly as it was.
+-- which runs this file in one transaction, so a failure in it leaves the old
+-- warehouse exactly as it was. Once it has committed, dbt builds the marts
+-- again, and if that step fails, scripts/run_setup.py --rebuild-marts
+-- finishes the job.
 --
 -- The new table is created and filled rather than altered in place, so its
 -- column order and constraint names come out identical to a fresh
@@ -21,7 +23,7 @@
 -- the load history and every raw copy survive as they are.
 -- =============================================================================
 
--- The marts read the old table. They are rebuilt from sql/02_marts.sql
+-- The marts read the old table. dbt rebuilds them from dbt/models/marts/
 -- after this file runs.
 DROP SCHEMA marts CASCADE;
 CREATE SCHEMA marts;

@@ -34,7 +34,7 @@ from typing import NamedTuple
 import psycopg2.extras
 import requests
 
-from . import database_connection, sql_file_runner
+from . import database_connection, dbt_project
 from .coinbase_candles import Candle, fetch_window
 from .database_connection import OperatorError
 from .fetch_windows import (
@@ -674,10 +674,12 @@ def _rollback_quietly(connection) -> None:
         )
 
 
-def refresh_marts(connection) -> None:
-    """Run sql/03_refresh_marts.sql in one transaction, so the three views change together."""
-    sql_file_runner.run_sql_file(connection, sql_file_runner.REFRESH_MARTS_FILE)
-    connection.commit()
+def refresh_marts() -> None:
+    """Refresh the marts through dbt (`dbt run`), in dependency order, each
+    view in its own transaction, raising RuntimeError when dbt reports a
+    failure."""
+    if dbt_project.build_marts() != 0:
+        raise RuntimeError("dbt run failed; its output above and logs/dbt/dbt.log say why")
 
 
 def run_ingest(
@@ -759,7 +761,7 @@ def run_ingest(
         # did load reach the marts.
         if refresh:
             try:
-                refresh_marts(connection)
+                refresh_marts()
             except Exception as error:
                 failures.append("refresh-marts")
                 logger.error("mart refresh failed: %s", error, exc_info=True)

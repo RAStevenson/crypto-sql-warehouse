@@ -7,13 +7,16 @@ and the warehouse can keep four timeframes per asset, which are 1 minute, 5
 minutes, 15 minutes, and 1 hour. It stores the candles in three schemas named
 raw, core, and marts, laid out under Architecture. The marts hold daily
 rollups, returns, rolling volatility, drawdowns, and pairwise correlations.
+They are built and tested with dbt, an open-source tool that runs SQL files
+against a database in dependency order, described under Architecture.
 Annotated analytical queries run against the warehouse in
-`sql/04_queries.sql`. `scripts/run_export.py` writes stored candles or the
-daily metrics to a CSV file.
+`sql/04_queries.sql`. `scripts/run_export.py` writes
+stored candles or the daily metrics to a CSV file.
 
 I built it to learn how a warehouse is designed and kept correct, using market
 data I already knew from my own trading research. I later extended it to more
-timeframes and loaded history back to 2020. The CSV export is for quick
+timeframes, loaded history back to 2020, and moved the marts and the checks
+into dbt. The CSV export is for quick
 calculations on stored data, without a fresh download from the exchange.
 
 The [report](reports/crypto_warehouse_report.pdf) asks how much volatility an
@@ -39,7 +42,9 @@ that portfolio if the six assets were uncorrelated.
 
 Requires git, Python 3.11 or 3.12, and a PostgreSQL server you can connect to.
 Verified on PostgreSQL 17.10 and Python 3.11. Nothing in the SQL needs a
-feature newer than PostgreSQL 10.
+feature newer than PostgreSQL 10. dbt installs with the other dependencies in
+step 4 and needs no setup of its own, because the scripts hand it the
+connection from `.env`.
 
 In a terminal, run the following.
 
@@ -77,7 +82,8 @@ In a terminal, run the following.
    copy .env.example .env
    ```
 
-6. Create the schema, load a year of history, and refresh the marts:
+6. Create the schema, have dbt build the marts, load a year of history, and
+   refresh the marts:
 
    ```
    python scripts/run_setup.py
@@ -128,8 +134,9 @@ python scripts/run_ingest.py --timeframes 1h --backfill-days 2500
 Other entry points:
 
 ```
-python scripts/run_verify.py                    # warehouse assertions, nonzero exit on failure
-python scripts/run_refresh_marts.py             # refresh the marts layer only
+python scripts/run_verify.py                    # the dbt tests and the timezone check, nonzero exit on failure
+python scripts/run_dbt.py run                   # refresh the marts only
+python scripts/run_dbt.py docs generate         # dbt's dependency map and column docs, under dbt/target/
 python scripts/run_build_report.py              # rebuild the report alone, without recomputing
 python scripts/run_ingest.py --backfill-days 30 --products BTC-USD
 python scripts/run_ingest.py --timeframes 15m --backfill-days 90
@@ -145,9 +152,9 @@ Every argument of every script, mirroring `--help`:
 
 - `run_setup.py --reset` drops the raw, core, and marts schemas before
   applying the DDL. It deletes all stored data.
-- `run_setup.py --rebuild-marts` drops and re-creates only the marts schema
-  from `sql/02_marts.sql`. Use it to apply a changed mart definition to a
-  warehouse that already holds data. Raw and core keep their data. It cannot
+- `run_setup.py --rebuild-marts` drops the marts schema and has dbt build it
+  again from `dbt/models/marts/`. Use it to apply a changed mart definition to
+  a warehouse that already holds data. Raw and core keep their data. It cannot
   be combined with `--reset`.
 - `run_setup.py --migrate` brings a warehouse built before the current schema
   up to date in place, by applying whichever files in `sql/migrations/` it
@@ -174,8 +181,8 @@ Every argument of every script, mirroring `--help`:
   asks for as it goes. A warehouse loaded before `raw.fetch_windows` existed
   needs it once after `--migrate`, because until then verify fails on every
   gap the earlier runs left. It cannot be combined with `--backfill-days`.
-- `run_ingest.py --no-refresh-marts` skips the mart refresh that otherwise
-  runs after loading.
+- `run_ingest.py --no-refresh-marts` skips the mart refresh (`dbt run`) that
+  otherwise runs after loading.
 - `run_add_asset.py PRODUCT` takes the Coinbase product code as its one
   required argument, e.g. `XRP-USD`.
 - `run_add_asset.py --symbol SYMBOL` sets the ticker symbol to store
@@ -211,15 +218,20 @@ Every argument of every script, mirroring `--help`:
   default directory.
 - `run_diversification_analysis.py --no-report` skips rendering the HTML and
   PDF report after the metrics and figures.
+- `run_dbt.py DBT_COMMAND` passes everything after the script's own options
+  to dbt as given, with the connection set from `DATABASE_URL`, so
+  `run_dbt.py test`, `run_dbt.py run --select daily_ohlcv`, and
+  `run_dbt.py docs generate` all work. It is for the dbt commands the other
+  scripts do not run for you.
 - Every script except `run_build_report.py` accepts `--verbose` for
-  debug-level logging. `run_refresh_marts.py` and `run_verify.py` take no
-  other arguments, and `run_build_report.py` takes none at all.
+  debug-level logging. `run_verify.py` takes no other arguments, and
+  `run_build_report.py` takes none at all.
 
 Rerunning the loader is safe by construction, and `run_verify.py` asserts it.
-One of its checks looks at the rows updated by the latest run for each
+One of its dbt tests looks at the rows updated by the latest run for each
 product and timeframe. If any of them holds the same values as the copy an
 earlier run had already loaded, the run rewrote a row it should have left
-alone, and the check fails.
+alone, and the test fails by returning that row.
 
 The six seeded assets are a starting set, not a limit. `run_add_asset.py`
 registers any Coinbase product after proving it answers with at least one
@@ -273,9 +285,9 @@ Coinbase Exchange API (public, no key)
 |  core.ohlcv       |  PK (asset_id, granularity_seconds, ts_utc), OHLC CHECKs
 +-------------------+
         |
-        v  REFRESH MATERIALIZED VIEW CONCURRENTLY, from the 1-hour series
+        v  dbt run: REFRESH MATERIALIZED VIEW CONCURRENTLY, from the 1-hour series
 +-------------------+
-| marts             |  daily rollups, returns, rolling volatility,
+| marts             |  dbt models: daily rollups, returns, rolling volatility,
 |  daily_ohlcv      |  drawdowns, pairwise correlations
 |  daily_metrics    |
 |  pairwise_correlations_90d  |
@@ -289,6 +301,21 @@ updated, because it holds run status and row counts. Core is the layer
 queries trust. Marts are presentation-shaped and rebuilt from core's 1-hour
 series. The finer timeframes feed the export and a few of the queries, never
 the marts.
+
+The marts are a dbt project, in `dbt/`. dbt (data build tool) is an
+open-source tool that runs the SQL turning loaded tables into tables for
+analysis, in the right order, and then tests what it built. Each mart is one
+SELECT statement in its own file under `dbt/models/marts/`, which dbt calls a
+model. A model names the tables it reads, with `ref()` for another mart and
+`source()` for a loaded table, and that is how dbt knows to build
+`daily_ohlcv` before `daily_metrics`. `dbt/models/sources.yml` declares the
+raw and core tables the loader fills. All but one of the warehouse checks are
+dbt tests. A test is either a column rule in a yml file, such as `not_null`,
+or a SELECT under `dbt/tests/` that returns the rows breaking a rule. A test
+passes when it returns nothing. The scripts call dbt for you, and
+`scripts/run_dbt.py` passes any other dbt command through, including
+`docs generate`, which writes a map of how every table depends on every other,
+with the columns of each, under `dbt/target/`.
 
 ## Design decisions
 
@@ -322,17 +349,17 @@ candles came back. Coinbase leaves a candle out of its answer when nothing
 traded and when the exchange itself is down, so core has holes the pipeline
 did not make. When a candle is missing from core but sits inside a window that
 a successful run requested, Coinbase was asked for it and left it out, so
-verify counts it and lets it pass. When it sits inside no such window, the
-loader never asked for it, and verify fails. A candle the exchange did send but
-the pipeline then lost would still pass this test. Once that candle has reached
-raw, the check that compares core with raw catches it.
+the gap test lets it pass. When it sits inside no such window, the loader
+never asked for it, and the test returns it. A candle the exchange did send
+but the pipeline then lost would still pass this test. Once that candle has
+reached raw, the test that compares core with raw catches it.
 
 An earlier version guessed instead, by comparing assets. It called an hour
 missing for every asset an outage and an hour missing for only some a pipeline
 bug. At 17:00 and 21:00 UTC on 2023-03-04, Coinbase has hourly candles for BTC
 and ETH but none for the other four assets, so that guess failed verify on two
 hours the exchange itself has no candles for. Because each asset is now judged
-by its own requests, the check holds for any asset added later, and it covers
+by its own requests, the test holds for any asset added later, and it covers
 every timeframe instead of only the 1-hour series.
 
 Prices are stored as `numeric(20,8)` and volumes as `numeric(30,8)`. The API
@@ -353,10 +380,12 @@ and any client can override it. `PGOPTIONS='-c timezone=...'` goes straight
 through it, and any client that sets its own session timezone at connect
 time, as JDBC drivers commonly do, gets through it the same way. The queries now use
 `ts_utc AT TIME ZONE 'UTC'`, which returns a plain timestamp and cannot move.
-The database pin stays as a second layer, and the verify suite has a
-regression test. It re-runs the daily rollup's own defining query, read live
+The database pin stays as a second layer, and `run_verify.py` has a
+regression check. It re-runs the daily rollup's own defining query, read live
 from the catalog, once under America/Chicago and once under UTC, and fails if
-any row differs.
+any row differs. That is the one check that is not a dbt test. A dbt test is
+a single SELECT, and this check has to change the session timezone partway
+through, so it stays a DO block in `sql/05_verify.sql`.
 
 Daily bars are derived from hourly ones in SQL rather than fetched at daily
 granularity. Both granularities then come from one source, so a disagreement
@@ -412,9 +441,13 @@ candles as well would add about 19 million rows and bring the question back.
 The DDL comments say where the crossover is.
 
 The three mart materialized views (matviews) have unique indexes so refreshes
-run `CONCURRENTLY` and a live Tableau session never blocks. The loader runs
-the three refreshes in one transaction, so a connected session sees all three views
-change together. `tableau_daily_extract` is a plain view over `daily_metrics`, so it shows
+run `CONCURRENTLY` and a live Tableau session never blocks. dbt's PostgreSQL
+adapter refreshes without `CONCURRENTLY`, so the project replaces that one
+refresh statement with its own in `dbt/macros/`. A macro is a named piece of
+SQL template that dbt fills in. dbt refreshes the three views in dependency order,
+each in its own transaction, so for a moment a connected session can see a
+refreshed `daily_ohlcv` beside a `daily_metrics` from the refresh before.
+`tableau_daily_extract` is a plain view over `daily_metrics`, so it shows
 whatever that matview last committed.
 
 ## Tableau
@@ -446,36 +479,39 @@ latest day that has a return, not a rolling series. `dollar_volume_approx` multi
 daily volume by the daily close rather than a traded average price. Measured
 against volume times `(H+L+C)/3` over the data loaded as of 2026-08-04, the
 error is -0.04 percent on average and ranges from -4.16 to +3.14 percent. The
-column comment in `sql/02_marts.sql` is the source. The analytical caveats, including how the
+column comment in `dbt/models/marts/daily_metrics.sql` is the source. The analytical caveats, including how the
 report's correlation window differs from the mart's and how drawdown is
 measured, are in the report.
 
 ## What I would build next
 
-A dbt port of the marts layer would add tests and lineage. After that I would
-add a data-quality report built from `raw.ingest_runs`,
+I would add a data-quality report built from `raw.ingest_runs`,
 `raw.fetch_windows`, and the gap-detection query, since the warehouse now
-records every short API response but nothing summarizes them yet.
+records every short API response but nothing summarizes them yet. After that
+I would add a second exchange, so that a suspicious print has something to be
+checked against.
 
 ## Layout
 
 ```
-scripts/run_setup.py          create the database and apply the DDL
+scripts/run_setup.py          create the database, apply the DDL, and have dbt build the marts
 scripts/run_ingest.py         incremental, idempotent loader; refreshes the marts
 scripts/run_add_asset.py      validate, register, and backfill a new asset
 scripts/run_export.py         write candles or daily metrics to a CSV file
 scripts/scheduled_ingest.cmd  the Task Scheduler entry point, logs to logs/
-scripts/run_verify.py         run the assertions, nonzero exit on failure
-scripts/run_refresh_marts.py  refresh the marts layer
+scripts/run_verify.py         the dbt tests, then the timezone check; nonzero exit on failure
+scripts/run_dbt.py            any dbt command, with the connection set from .env
 scripts/run_diversification_analysis.py
                               compute reports/metrics.json, figures, and the report
 scripts/run_build_report.py   render the report from metrics.json
 src/crypto_warehouse/         the package the scripts import
+dbt/models/marts/             the marts, one dbt model each, with the design rationale in comments
+dbt/models/sources.yml        the raw and core tables dbt reads, with their column tests
+dbt/tests/                    the warehouse checks, one SELECT each, returning the rows that break a rule
+dbt/macros/                   the concurrent-refresh override
 sql/01_schema.sql             schema DDL with design rationale in comments
-sql/02_marts.sql              derived layers (rollups, volatility, correlations)
-sql/03_refresh_marts.sql      mart refresh, dependency-ordered
 sql/04_queries.sql            annotated analytical queries, each standalone
-sql/05_verify.sql             the assertions, fatal on failure
+sql/05_verify.sql             the timezone check, the one assertion that is not a dbt test
 sql/migrations/               in-place upgrades for a warehouse built earlier
 tests/                        the test suite, no database or network needed
 reports/                      the generated report, its metrics and figures

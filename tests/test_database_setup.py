@@ -46,8 +46,20 @@ class FakeConnection:
         self.closed = True
 
 
-def run_marts_only(monkeypatch, *, database=True, schema=True):
+def fake_dbt(monkeypatch, connection, exit_code=0):
+    """Make dbt_project.build_marts record a 'dbt run' in the connection's
+    log instead of running dbt, and return exit_code."""
+
+    def build_marts(database_url=None):
+        connection.log.append("dbt run")
+        return exit_code
+
+    monkeypatch.setattr(database_setup.dbt_project, "build_marts", build_marts)
+
+
+def run_marts_only(monkeypatch, *, database=True, schema=True, dbt_exit_code=0):
     connection = FakeConnection()
+    fake_dbt(monkeypatch, connection, dbt_exit_code)
     monkeypatch.setattr(database_setup.database_connection, "load_database_url", lambda: "postgresql://x/y")
     monkeypatch.setattr(
         database_setup.database_connection,
@@ -69,17 +81,24 @@ def run_marts_only(monkeypatch, *, database=True, schema=True):
     return database_setup.run_setup(marts_only=True), connection
 
 
-def test_marts_only_drops_and_recreates_the_marts_schema_and_nothing_else(monkeypatch):
+def test_marts_only_drops_the_marts_schema_commits_and_then_has_dbt_build_it(monkeypatch):
     exit_code, connection = run_marts_only(monkeypatch)
 
     assert exit_code == 0
     assert connection.log == [
         "DROP SCHEMA IF EXISTS marts CASCADE",
         "CREATE SCHEMA marts",
-        f"file {database_setup.sql_file_runner.MARTS_FILE}",
         "commit",
+        "dbt run",
     ]
     assert connection.closed
+
+
+def test_marts_only_reports_a_failed_dbt_build(monkeypatch):
+    exit_code, connection = run_marts_only(monkeypatch, dbt_exit_code=1)
+
+    assert exit_code == 1
+    assert connection.log[-1] == "dbt run"
 
 
 def test_marts_only_refuses_when_the_schema_is_not_applied(monkeypatch):
@@ -101,6 +120,7 @@ def test_marts_only_refuses_when_the_database_is_missing_and_does_not_create_it(
 # --------------------------------------------------------------------------
 def run_migrate(monkeypatch, *, database=True, schema=True, pending=None):
     connection = FakeConnection()
+    fake_dbt(monkeypatch, connection)
     monkeypatch.setattr(database_setup.database_connection, "load_database_url", lambda: "postgresql://x/y")
     monkeypatch.setattr(
         database_setup.database_connection,
@@ -122,7 +142,9 @@ def run_migrate(monkeypatch, *, database=True, schema=True, pending=None):
     return database_setup.run_setup(migrate=True), connection
 
 
-def test_migrate_runs_both_migrations_in_order_then_the_marts_in_one_commit(monkeypatch):
+def test_migrate_runs_both_migrations_in_order_commits_then_has_dbt_rebuild_the_marts(
+    monkeypatch,
+):
     exit_code, connection = run_migrate(
         monkeypatch, pending=[TIMEFRAMES_MIGRATION_FILE, FETCH_WINDOWS_MIGRATION_FILE]
     )
@@ -131,8 +153,8 @@ def test_migrate_runs_both_migrations_in_order_then_the_marts_in_one_commit(monk
     assert connection.log == [
         f"file {TIMEFRAMES_MIGRATION_FILE}",
         f"file {FETCH_WINDOWS_MIGRATION_FILE}",
-        f"file {database_setup.sql_file_runner.MARTS_FILE}",
         "commit",
+        "dbt run",
     ]
     assert connection.closed
 

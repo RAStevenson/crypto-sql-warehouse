@@ -14,7 +14,7 @@ from contextlib import closing
 import psycopg2
 from psycopg2 import sql as pgsql
 
-from . import database_connection, sql_file_runner
+from . import database_connection, dbt_project, sql_file_runner
 from .database_connection import OperatorError
 
 logger = logging.getLogger(__name__)
@@ -122,19 +122,14 @@ def drop_schemas(connection) -> None:
             )
 
 
-def rebuild_marts(connection) -> None:
-    """Drop the marts schema and re-create it from sql/02_marts.sql, leaving
-    raw and core untouched.
-
-    This does not commit, so a DDL error leaves the old marts in place.
-    """
-    logger.warning(
-        "dropping schema marts and rebuilding it from sql/%s", sql_file_runner.MARTS_FILE
-    )
+def drop_marts(connection) -> None:
+    """Drop the marts schema and re-create it empty, leaving raw and core
+    untouched, and commit, so that dbt can build the marts afresh."""
+    logger.warning("dropping schema marts; dbt rebuilds it from dbt/models/marts/")
     with connection.cursor() as cursor:
         cursor.execute("DROP SCHEMA IF EXISTS marts CASCADE")
         cursor.execute("CREATE SCHEMA marts")
-    sql_file_runner.run_sql_file(connection, sql_file_runner.MARTS_FILE)
+    connection.commit()
 
 
 def run_migrations(database_url: str) -> int:
@@ -143,8 +138,8 @@ def run_migrations(database_url: str) -> int:
 
     The pending files run in order in one transaction, so a failure leaves
     the old warehouse as it was. Migration 001 drops the marts, so when it
-    runs, sql/02_marts.sql runs after it in the same transaction. A warehouse
-    with nothing pending, or with no schema, returns 1.
+    runs, dbt builds them again once the transaction has committed. A
+    warehouse with nothing pending, or with no schema, returns 1.
     """
     if not database_exists(database_url):
         logger.error("the database does not exist; run scripts/run_setup.py with no flag first")
@@ -159,10 +154,17 @@ def run_migrations(database_url: str) -> int:
             return 1
         for name in pending:
             sql_file_runner.run_sql_file(connection, name)
-        if sql_file_runner.TIMEFRAMES_MIGRATION_FILE in pending:
-            sql_file_runner.run_sql_file(connection, sql_file_runner.MARTS_FILE)
         connection.commit()
     logger.info("migrated: applied %s", ", ".join(pending))
+    if (
+        sql_file_runner.TIMEFRAMES_MIGRATION_FILE in pending
+        and dbt_project.build_marts(database_url) != 0
+    ):
+        logger.error(
+            "the migration is applied but dbt could not build the marts; fix the "
+            "cause and run scripts/run_setup.py --rebuild-marts"
+        )
+        return 1
     if sql_file_runner.FETCH_WINDOWS_MIGRATION_FILE in pending:
         logger.info(
             "runs loaded before raw.fetch_windows existed have no windows on record, so "
@@ -172,8 +174,8 @@ def run_migrations(database_url: str) -> int:
 
 
 def run_setup(*, reset: bool = False, marts_only: bool = False, migrate: bool = False) -> int:
-    """Create the database if needed, apply the schema and mart DDL, and return
-    a process exit code.
+    """Create the database if needed, apply the schema DDL, have dbt build the
+    marts, and return a process exit code.
 
     A schema that is already applied returns 1 unless reset is set, in which
     case the schemas are dropped and rebuilt. With marts_only, only the marts
@@ -197,8 +199,10 @@ def run_setup(*, reset: bool = False, marts_only: bool = False, migrate: bool = 
                     "marts from; run scripts/run_setup.py with no flag first"
                 )
                 return 1
-            rebuild_marts(connection)
-            connection.commit()
+            drop_marts(connection)
+        if dbt_project.build_marts(database_url) != 0:
+            logger.error("dbt could not build the marts; the schema marts is empty until it can")
+            return 1
         logger.info("marts rebuilt; raw and core were not touched")
         return 0
 
@@ -222,13 +226,17 @@ def run_setup(*, reset: bool = False, marts_only: bool = False, migrate: bool = 
                 return 1
             drop_schemas(connection)
 
-        # One transaction for the drop and both files: a database with the
-        # fact tables but no matviews is a worse state to land in than no
-        # database at all, and a failed rebuild must not have dropped the old
-        # schemas.
+        # One transaction for the drop and the schema file, so a failed
+        # rebuild cannot have dropped the old schemas. dbt builds the marts
+        # after the commit, in its own connection.
         sql_file_runner.run_sql_file(connection, sql_file_runner.SCHEMA_FILE)
-        sql_file_runner.run_sql_file(connection, sql_file_runner.MARTS_FILE)
         connection.commit()
 
+    if dbt_project.build_marts(database_url) != 0:
+        logger.error(
+            "the schema is applied but dbt could not build the marts; fix the cause and "
+            "run scripts/run_setup.py --rebuild-marts"
+        )
+        return 1
     logger.info("setup complete; run scripts/run_ingest.py next")
     return 0

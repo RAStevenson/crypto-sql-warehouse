@@ -1,0 +1,25 @@
+# The connection dbt uses, read from the environment at run time.
+#
+# Nothing here holds a host or a password. The warehouse's scripts fill the
+# five variables from DATABASE_URL in .env before they invoke dbt
+# (src/crypto_warehouse/dbt_project.py), so one connection string serves
+# both psycopg2 and dbt. To run dbt by hand, go through
+# scripts/run_dbt.py, which sets them the same way:
+#
+#   python scripts/run_dbt.py run
+#   python scripts/run_dbt.py test
+#
+# The target schema is marts, so a model with no schema of its own lands
+# there, under the name of its file.
+crypto_warehouse:
+  target: warehouse
+  outputs:
+    warehouse:
+      type: postgres
+      host: "{{ env_var('CRYPTO_WAREHOUSE_PGHOST') }}"
+      port: "{{ env_var('CRYPTO_WAREHOUSE_PGPORT', '5432') | as_number }}"
+      user: "{{ env_var('CRYPTO_WAREHOUSE_PGUSER') }}"
+      password: "{{ env_var('CRYPTO_WAREHOUSE_PGPASSWORD', '') }}"
+      dbname: "{{ env_var('CRYPTO_WAREHOUSE_PGDATABASE') }}"
+      schema: marts
+      threads: 1

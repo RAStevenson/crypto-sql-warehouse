@@ -14,10 +14,10 @@
 --           (asset, timeframe, bucket). This is the layer analytical queries
 --           trust.
 --   marts : derived, presentation-shaped objects (daily rollups, rolling
---           metrics, correlations). Defined in 02_marts.sql.
---
--- This mirrors dbt's staging/intermediate/marts convention closely enough
--- that the project translates directly if I later port it to dbt.
+--           metrics, correlations). These are dbt models, defined under
+--           dbt/models/marts/ and built and refreshed by dbt. raw and core
+--           are the dbt project's sources, and all but one of the checks on
+--           the three layers are dbt tests (05_verify.sql holds the other).
 -- =============================================================================
 
 -- Timezone. date_trunc() on a timestamptz buckets by the SESSION timezone,
@@ -71,7 +71,7 @@ CREATE TABLE core.assets (
 -- granularity_seconds is the value the Coinbase candles endpoint takes and
 -- the key the fact table carries. The CHECK lists the four the warehouse
 -- supports. Coinbase also serves 6-hour and 1-day candles; daily bars are
--- built from hourly ones in the marts instead (see 02_marts.sql), and
+-- built from hourly ones in the marts instead (see dbt/models/marts/), and
 -- nothing here uses 6 hours.
 --
 -- Only 1h is active in the seed, so a fresh clone's first load stays
