@@ -2,16 +2,17 @@
 
 This is a PostgreSQL warehouse for crypto market data. It pulls candles from
 the public Coinbase Exchange API. A candle is the open, high, low, close, and
-volume for one interval of time. That interval is the candle's timeframe,
-and the warehouse can keep four timeframes per asset, which are 1 minute, 5
+volume for one interval of time. That interval is the candle's timeframe, and
+the warehouse can keep four timeframes per asset, which are 1 minute, 5
 minutes, 15 minutes, and 1 hour. It stores the candles in three schemas named
-raw, core, and marts, laid out under Architecture. The marts hold daily
-rollups, returns, rolling volatility, drawdowns, and pairwise correlations.
-They are built and tested with dbt, an open-source tool that runs SQL files
-against a database in dependency order, described under Architecture.
-Annotated analytical queries run against the warehouse in
-`sql/04_queries.sql`. `scripts/run_export.py` writes
-stored candles or the daily metrics to a CSV file.
+raw, core, and marts, laid out under Architecture. The marts are the tables
+built for analysis. They hold each asset's daily rollup of the candles,
+returns, rolling volatility, drawdown from its earlier peak, and pairwise
+correlations. They are built and tested with dbt, an open-source tool that
+runs SQL files against a database in dependency order, described under
+Architecture. Annotated analytical queries run against the warehouse in
+`sql/04_queries.sql`. `scripts/run_export.py` writes stored candles or the
+daily metrics to a CSV file.
 
 I built it to learn how a warehouse is designed and kept correct, using market
 data I already knew from my own trading research. I later extended it to more
@@ -20,15 +21,16 @@ into dbt. The CSV export is for quick
 calculations on stored data, without a fresh download from the exchange.
 
 I used the warehouse to measure how much volatility an equal-weight holding
-of its six assets actually removes. Over 1,933 complete trading days from
-2021-06-19 to 2026-10-09, spreading capital equally across all six removes
-only 12.6 percent of the volatility of holding the average one. If the six
-were uncorrelated it would remove 58.5 percent. Every pair of the six
-correlates between 0.63 and 0.84, averaging 0.72. Holding six of these is
-close to holding one. [What the data shows](#what-the-data-shows) gives the
-method and what the result does and does not justify. Loading newer days and
-rerunning the analysis moves these figures. A test then fails until the
-README matches the new `results/metrics.json`.
+of its six assets (Bitcoin, Ethereum, Solana, Cardano, Chainlink, and
+Dogecoin) actually removes. Over 1,933 complete trading days from 2021-06-19
+to 2026-10-09, spreading capital equally across all six removes only 12.6
+percent of the volatility of holding the average one. If the six were
+uncorrelated it would remove 58.5 percent. Every pair of the six correlates
+between 0.63 and 0.84, averaging 0.72. Holding six of these is close to
+holding one. [What the data shows](#what-the-data-shows) gives the method and
+what the result does and does not justify. Loading newer days and rerunning
+the analysis moves these figures. A test then fails until the README matches
+the new `results/metrics.json`.
 
 The chart below shows that result. Its three bars are the annualized
 volatility of the average single asset, of the equal-weight portfolio, and of
@@ -38,11 +40,14 @@ that portfolio if the six assets were uncorrelated.
 
 ## Quick start
 
-Requires git, Python 3.11 or 3.12, and a PostgreSQL server you can connect to.
-Verified on PostgreSQL 17.10 and Python 3.11. Nothing in the SQL needs a
-feature newer than PostgreSQL 10. dbt installs with the other dependencies in
-step 4 and needs no setup of its own, because the scripts hand it the
-connection from `.env`.
+Requires git, Python 3.11 or 3.12, and a PostgreSQL server you can connect
+to, such as one from the postgresql.org installer or a Docker container.
+`run_setup.py` creates the database if it is missing, so the user you connect
+as needs permission to create one, or you create the database first. Verified
+on PostgreSQL 17.10 and Python 3.11. Nothing in the SQL needs a feature newer
+than PostgreSQL 10. dbt installs with the other dependencies in step 4 and
+needs no setup of its own, because the scripts hand it the connection from
+`.env`.
 
 In a terminal, run the following.
 
@@ -80,8 +85,8 @@ In a terminal, run the following.
    copy .env.example .env
    ```
 
-6. Create the schema, have dbt build the marts, load a year of history, and
-   refresh the marts:
+6. Create the database and its three schemas, have dbt build the marts, load
+   a year of history, and refresh the marts:
 
    ```
    python scripts/run_setup.py
@@ -95,17 +100,17 @@ In a terminal, run the following.
    ```
 
 The first run of `run_ingest.py` fetches every active product at every active
-timeframe. A product is a Coinbase trading pair such as BTC-USD. The six seeded
-products start out active. Of the timeframes, only 1 hour starts out active.
-A year is
-8,760 hours per product and the API caps a request at 300 candles, so the
-default backfill is about 30 requests per product. Later runs resume from the
-last loaded candle of each product and timeframe, called the watermark. Each
-run also re-fetches the three hours before it, for the reason given under
-Design decisions. At a daily cadence, a later run needs one request per
-product at 1 hour or 15 minutes, two at 5 minutes, and six at 1 minute. The
-loader refreshes the marts when it finishes, and `--no-refresh-marts` skips
-that.
+timeframe. A product is a Coinbase trading pair such as BTC-USD. The six
+seeded products start out active. Of the timeframes, only 1 hour starts out
+active. A year is 8,760 hours per product and the API caps a request at 300
+candles, so the default backfill is about 30 requests per product. For all
+six, the first run took about 70 seconds on my machine on 2026-10-09,
+including the mart refresh. Later runs resume from the last loaded candle of
+each product and timeframe, called the watermark. Each run also re-fetches
+the three hours before it, for the reason given under Design decisions. At a
+daily cadence, a later run needs one request per product at 1 hour or 15
+minutes, two at 5 minutes, and six at 1 minute. The loader refreshes the
+marts when it finishes, and `--no-refresh-marts` skips that.
 
 To keep finer candles too, turn their timeframe on with one statement, and the
 next run backfills it:
@@ -128,6 +133,10 @@ latest complete day loaded:
 ```
 python scripts/run_ingest.py --timeframes 1h --backfill-days 2500
 ```
+
+Step 7 on your own load rewrites `results/metrics.json`, so
+`tests/test_readme_numbers.py` then fails, because it holds this README to
+the published numbers.
 
 Other entry points:
 
@@ -191,8 +200,9 @@ Every argument of every script, mirroring `--help`:
 - `run_add_asset.py --no-backfill` registers the asset only, and the next
   ingest run loads it. It cannot be combined with `--backfill-days`.
 - `run_export.py prices` writes the stored candles for the chosen assets at
-  one timeframe, with the symbol, product code, timeframe, time in UTC, open,
-  high, low, close, and volume on each row.
+  one timeframe, with the symbol, product code, timeframe, the candle's start
+  time in UTC, open, high, low, close, and volume in units of the coin on
+  each row.
 - `run_export.py prices --timeframe TIMEFRAME` picks that timeframe from 1m,
   5m, 15m, and 1h (default 1h).
 - `run_export.py daily` writes the rows of `marts.tableau_daily_extract`, one
@@ -218,11 +228,14 @@ Every argument of every script, mirroring `--help`:
 - Every Python script accepts `--verbose` for debug-level logging, and
   `run_verify.py` takes no other arguments.
 
-Rerunning the loader is safe by construction, and `run_verify.py` asserts it.
-One of its dbt tests looks at the rows updated by the latest run for each
-product and timeframe. If any of them holds the same values as the copy an
-earlier run had already loaded, the run rewrote a row it should have left
-alone, and the test fails by returning that row.
+Rerunning the loader is safe by construction, because every candle has
+exactly one row in core, keyed by asset, timeframe, and time. What a bug
+could still break is a rerun rewriting a row it should leave alone, and one
+of the dbt tests that `run_verify.py` runs checks for that. It looks at the
+rows updated by the latest run for each product and timeframe. If any of them
+holds the same values as the copy an earlier run had already loaded, the run
+rewrote a row it should have left alone, and the test fails by returning that
+row.
 
 The six seeded assets are a starting set, not a limit. `run_add_asset.py`
 registers any Coinbase product after proving it answers with at least one
@@ -309,11 +322,10 @@ queries trust. Marts are presentation-shaped and rebuilt from core's 1-hour
 series. The finer timeframes feed the export and a few of the queries, never
 the marts.
 
-The marts are a dbt project, in `dbt/`. dbt (data build tool) is an
-open-source tool that runs the SQL turning loaded tables into tables for
-analysis, in the right order, and then tests what it built. Each mart is one
-SELECT statement in its own file under `dbt/models/marts/`, which dbt calls a
-model. A model names the tables it reads, with `ref()` for another mart and
+The marts are a dbt project, in `dbt/`. dbt runs the SQL that builds them, in
+dependency order, and then tests what it built. Each mart is one SELECT
+statement in its own file under `dbt/models/marts/`, which dbt calls a model.
+A model names the tables it reads, with `ref()` for another mart and
 `source()` for a loaded table, and that is how dbt knows to build
 `daily_ohlcv` before `daily_metrics`. `dbt/models/sources.yml` declares the
 raw and core tables the loader fills. All but one of the warehouse checks are
@@ -325,9 +337,8 @@ knowing. `docs generate` writes a map of how every table depends on every
 other, with a description of every column, under `dbt/target/`. `source
 freshness` checks how old the newest candle is.
 
-The warehouse is also built and tested on every push to main, by a job that
-GitHub runs on a server of its own (GitHub Actions). The job starts a
-PostgreSQL server, runs `run_setup.py`, loads
+The warehouse is also built and tested on every push to main, by a GitHub
+Actions job. The job starts a PostgreSQL server, runs `run_setup.py`, loads
 `tests/fixtures/warehouse_sample.sql` in place of a call to Coinbase,
 refreshes the marts, and runs `run_verify.py` and both exports. The fixture
 holds two products, with 45 days of hourly candles and two days of 15-minute
@@ -350,12 +361,14 @@ they are skipped, so a plain `pytest` still needs no database and no network.
 
 ## Design decisions
 
-The database enforces idempotency. The loader writes with an upsert, an
-insert that becomes an update when the row already exists. The upsert targets the
-natural primary key `(asset_id, granularity_seconds, ts_utc)`, so replaying any window changes
-nothing in core unless the source data changed. The `DO UPDATE` has an `IS DISTINCT FROM`
-guard, so unchanged rows are skipped entirely. That leaves no dead tuples, and
-`updated_at` only moves when the data moved.
+The database enforces idempotency, meaning a load run twice leaves the
+warehouse exactly as one run would. The loader writes with an upsert, an
+insert that becomes an update when the row already exists. The upsert targets
+the natural primary key `(asset_id, granularity_seconds, ts_utc)`, so
+replaying any window changes nothing in core unless the source data changed.
+The `DO UPDATE` has an `IS DISTINCT FROM` guard, so unchanged rows are
+skipped entirely. That leaves PostgreSQL no obsolete row versions to clean
+up, and `updated_at` only moves when the data moved.
 
 The pipeline re-fetches a three-hour overlap on every run to pick up late
 candle revisions. For candles that were not revised, the upsert leaves core
@@ -394,29 +407,32 @@ by its own requests, the test holds for any asset added later, and it covers
 every timeframe instead of only the 1-hour series.
 
 Prices are stored as `numeric(20,8)` and volumes as `numeric(30,8)`. The API
-returns JSON numbers,
-which Python would ordinarily parse as float64, a type that cannot hold most
-decimal prices exactly. The client parses them straight to `Decimal` instead,
-and psycopg2 adapts that to `numeric`. Exactness
-holds end to end rather than starting at the database boundary.
+returns JSON numbers. Python would ordinarily parse them as binary
+floating-point numbers (float64), which cannot hold most decimal prices
+exactly. The client parses them straight to Python's exact `Decimal` type
+instead, and the database driver (psycopg2) passes that on as PostgreSQL's
+exact `numeric` type. Exactness holds end to end rather than starting at the
+database boundary.
 
 Queries are written to be independent of the session timezone, and the reason
-is a bug. `date_trunc()` on a `timestamptz` buckets by the session
-timezone, so on a server defaulting to America/Chicago the monthly aggregate query
-(Q02 in `sql/04_queries.sql`) split its months at 05:00 UTC. I found it running the query set against a
-live instance, and the `-05` display offsets were the visible symptom. My first
-fix was `ALTER DATABASE ... SET timezone = 'UTC'`, which turned out to be
-insufficient, because it only sets a default for sessions opened afterward
-and any client can override it. `PGOPTIONS='-c timezone=...'` goes straight
-through it, and any client that sets its own session timezone at connect
-time, as JDBC drivers commonly do, gets through it the same way. The queries now use
-`ts_utc AT TIME ZONE 'UTC'`, which returns a plain timestamp and cannot move.
-The database pin stays as a second layer, and `run_verify.py` has a
-regression check. It re-runs the daily rollup's own defining query, read live
-from the catalog, once under America/Chicago and once under UTC, and fails if
-any row differs. That is the one check that is not a dbt test. A dbt test is
-a single SELECT, and this check has to change the session timezone partway
-through, so it stays a DO block in `sql/05_verify.sql`.
+is a bug. `date_trunc()` on a `timestamptz` buckets by the session timezone,
+so on a server defaulting to America/Chicago the monthly aggregate query (Q02
+in `sql/04_queries.sql`) split its months at 05:00 UTC. I found it running
+the query set against a live instance, and the `-05` display offsets were the
+visible symptom. My first fix was `ALTER DATABASE ... SET timezone = 'UTC'`,
+which turned out to be insufficient, because it only sets a default for
+sessions opened afterward and any client can override it. `PGOPTIONS='-c
+timezone=...'` goes straight through it, and any client that sets its own
+session timezone at connect time, as Java database drivers (JDBC) commonly
+do, gets through it the same way. The queries now use `ts_utc AT TIME ZONE
+'UTC'`, which returns a plain timestamp and cannot move. The database pin
+stays as a second layer, and `run_verify.py` has a regression check. It
+re-runs the daily rollup's own defining query, read live from the catalog,
+once under America/Chicago and once under UTC, and fails if any row differs.
+That is the one check that is not a dbt test. A dbt test is a single SELECT,
+and this check has to change the session timezone partway through, so it
+stays a DO block, code that PostgreSQL runs once without storing it, in
+`sql/05_verify.sql`.
 
 Daily bars are derived from hourly ones in SQL rather than fetched at daily
 granularity. Both granularities then come from one source, so a disagreement
@@ -437,26 +453,27 @@ hours and sets it against the 1-hour bars, and I ran it over the data loaded
 back to 2020. The 5-minute series disagrees with the hourly bar on price in
 about one hour in five from April to December 2023. Both finer series also
 disagree in stretches of 2024 and 2025. Most of the disagreement is in the
-smaller coins. The differences are small, a median of 0.015 percent on the
-open and at most 1.8 percent on any price. Fetching sample hours again
-returned exactly the stored values, so the disagreement is in Coinbase's data
-and not in the loader. I first wrote the comparison as a verify check that
-failed on any difference. I turned it into a query once the full load showed
-it would fail on every warehouse that loads the finer timeframes over those
-years. The marts and the diversification analysis use only the 1-hour
-series.
+smaller coins. Q21 counts the hours that differ. A one-off comparison I ran
+on 2026-10-09 put the size of the differences at a median of 0.015 percent on
+the open and at most 1.8 percent on any price. Fetching sample hours again
+that day returned exactly the stored values, so the disagreement is in
+Coinbase's data and not in the loader. I first wrote the comparison as a
+verify check that failed on any difference. I turned it into a query once the
+full load showed it would fail on every warehouse that loads the finer
+timeframes over those years. The marts and the diversification analysis use
+only the 1-hour series.
 
-Incomplete days are kept as rows and excluded from every derived figure. A day
-with fewer than 24 hourly candles still appears in `marts.daily_ohlcv` with its
-open, high, low, close, volume, and an `is_complete` flag. Its return, moving
-averages, volatility, and drawdown are NULL, and it does not enter the
-correlation matrix. An earlier
-version filtered incomplete days out at the presentation layer instead, which
-hid the rows from the dashboard while leaving their effect baked into every
-rolling metric computed around them. A trailing partial day has only a fraction
-of a full day's volume, which quietly depressed the trailing baseline that the
-volume-anomaly query compares against. Filtering at the end does not undo
-contamination that already happened upstream.
+Incomplete days are kept as rows and excluded from every derived figure. A
+day with fewer than 24 hourly candles still appears in `marts.daily_ohlcv`
+with its open, high, low, close, volume, and an `is_complete` flag. Its
+return, moving averages, volatility, and drawdown are NULL, and it does not
+enter the correlation matrix. An earlier version filtered incomplete days out
+at the presentation layer instead, which hid the rows from the Tableau
+extract while leaving their effect baked into every rolling metric computed
+around them. A trailing partial day has only a fraction of a full day's
+volume, which quietly depressed the trailing baseline that the volume-anomaly
+query compares against. Filtering at the end does not undo contamination that
+already happened upstream.
 
 Rolling metrics are NULL until their window is full. A 30-day annualized
 volatility computed from four observations is not a 30-day volatility, so
@@ -465,30 +482,32 @@ volatility computed from four observations is not a 30-day volatility, so
 values were warm-up values, and the first one for BTC was 0.2076 against 0.4043
 for its first genuine 30-observation window.
 
-The fact table is not partitioned. Six assets at 5 minutes, 15 minutes, and
-1 hour from 2020 came to about 5.4 million rows, measured 2026-10-09.
+The fact table is not partitioned. Six assets at 5 minutes, 15 minutes, and 1
+hour from 2020 came to about 5.4 million rows, measured 2026-10-09.
 Partitioning usually earns its cost only past tens of millions of rows, and
-until then it complicates the upsert and the vacuum story for nothing. Loading 1-minute
-candles as well would add about 19 million rows and bring the question back.
-The DDL comments say where the crossover is.
+until then it complicates the upsert and PostgreSQL's routine cleanup
+(vacuuming) for nothing. Loading 1-minute candles as well would add about 19
+million rows and bring the question back. The DDL comments say where the
+crossover is.
 
-The three mart materialized views (matviews) have unique indexes so refreshes
-run `CONCURRENTLY` and a live Tableau session never blocks. dbt's PostgreSQL
-adapter refreshes without `CONCURRENTLY`, so the project replaces that one
-refresh statement with its own in `dbt/macros/`. A macro is a named piece of
-SQL template that dbt fills in. dbt refreshes the three views in dependency order,
-each in its own transaction, so for a moment a connected session can see a
-refreshed `daily_ohlcv` beside a `daily_metrics` from the refresh before.
-`tableau_daily_extract` is a plain view over `daily_metrics`, so it shows
-whatever that matview last committed.
+Three of the marts are materialized views, queries whose results PostgreSQL
+stores as tables and recomputes when refreshed. They have unique indexes so
+refreshes run `CONCURRENTLY` and a live Tableau session never blocks. dbt's
+PostgreSQL adapter refreshes without `CONCURRENTLY`, so the project replaces
+that one refresh statement with its own in `dbt/macros/`. A macro is a named
+piece of SQL template that dbt fills in. dbt refreshes the three views in
+dependency order, each in its own transaction, so for a moment a connected
+session can see a refreshed `daily_ohlcv` beside a `daily_metrics` from the
+refresh before. `tableau_daily_extract` is a plain view over `daily_metrics`,
+so it shows whatever that view last committed.
 
 ## Tableau
 
 Connect Tableau to Postgres and point it at `marts.tableau_daily_extract`. It
-holds one row per asset per day in long format, which is what Tableau's shelf
-model wants.
-The columns are `symbol`, `asset_name`, `trade_date`, `open`, `high`, `low`,
-`close`, `volume_base_units`, `dollar_volume_approx`, `simple_return`, `ma_7d`,
+holds one row per asset per day in long format, which is the shape Tableau
+expects when a column is dragged onto a chart. The columns are `symbol`,
+`asset_name`, `trade_date`, `open`, `high`, `low`, `close`,
+`volume_base_units`, `dollar_volume_approx`, `simple_return`, `ma_7d`,
 `ma_30d`, `volatility_30d_ann`, `drawdown_from_peak`, `hours_present`, and
 `is_complete`.
 
@@ -526,10 +545,12 @@ sample standard deviation, annualized so it reads on the one-year scale
 volatility is usually quoted on. Annualizing multiplies it by the square root
 of 365, because crypto trades every day of the year. Annualizing on the 252
 trading days of a stock year would report every volatility here about 17
-percent too low. The portfolio's volatility is the square root of w'Cw, where
-w gives each asset one sixth and C is the annualized covariance matrix. The
-uncorrelated case keeps each asset's own variance and sets every covariance
-to zero.
+percent too low. The portfolio's variance is w'Cw, where w gives each asset
+one sixth and C is the annualized covariance matrix. In words, it adds up
+every entry of C, each asset's variance and each pair's covariance, each
+multiplied by the shares of the assets involved. The portfolio's volatility
+is its square root. The uncorrelated case keeps each asset's own variance and
+sets every covariance to zero.
 
 The equal-weight portfolio's annualized volatility is 0.714, against 0.817
 for the average single asset. With zero correlation it would be 0.339. So the
