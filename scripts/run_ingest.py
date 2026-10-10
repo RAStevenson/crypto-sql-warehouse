@@ -95,10 +95,6 @@ def main() -> None:
         action="store_true",
         help="Skip the mart refresh that otherwise runs after loading",
     )
-    # --refresh-marts is accepted and does nothing, because refreshing is the
-    # default. Report copies rendered before 2026-08-24 name the flag in their
-    # reproduce section, and it can be removed once no published report does.
-    parser.add_argument("--refresh-marts", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--verbose", action="store_true", help="Debug-level logging")
     args = parser.parse_args()
 

@@ -9,7 +9,7 @@ has to answer with at least one candle in the trailing probe window. The
 default run then backfills the standard year of history at every active
 timeframe and refreshes the marts, so the new asset appears in
 marts.tableau_daily_extract in the same
-run. The committed report's numbers do not move until
+run. The diversification numbers in results/metrics.json do not move until
 run_diversification_analysis.py is rerun.
 
 Deactivating an asset is one statement and needs no script:

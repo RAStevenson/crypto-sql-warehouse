@@ -1,5 +1,5 @@
-"""Measure cross-asset diversification, write reports/metrics.json, and
-render the report.
+"""Measure cross-asset diversification and write results/metrics.json and
+the chart the README shows.
 
     python scripts/run_ingest.py
     python scripts/run_diversification_analysis.py
@@ -8,12 +8,9 @@ Reads marts.daily_metrics, keeps the dates where every active asset has a
 non-null log return, and writes the panel description, per-asset volatility,
 drawdown and total return from the complete-day closes, the correlation
 matrix, the equal-weight diversification result, and row counts for
-provenance to reports/metrics.json, plus four figures under reports/figures/. It then calls
-the report builder in crypto_warehouse.report_generator, which reads that file
-at render time; nothing is transcribed by hand between the two. --no-report
-skips the render, and so does a --metrics or --figures path other than the
-default. scripts/run_build_report.py runs the builder alone, for iterating on
-the report's prose without touching the database.
+provenance to results/metrics.json, and draws the diversification chart to
+results/figures/diversification.png. The README quotes its numbers from that
+file, and tests/test_readme_numbers.py fails when the two disagree.
 """
 
 import sys
@@ -34,28 +31,22 @@ from crypto_warehouse.diversification_metrics import (
     PanelDataError,
     run_diversification_analysis,
 )
-from crypto_warehouse.report_generator import build_report
 
 
 def main() -> None:
-    """Run the analysis, log the main results, render the report when both
-    output paths are the defaults, and exit with a process exit code."""
+    """Run the analysis, log the main results, and exit with a process exit code."""
     logger = logging.getLogger("run_diversification_analysis")
     parser = argparse.ArgumentParser(
         prog="run_diversification_analysis.py",
         description=(
-            "Compute the diversification metrics and figures from marts.daily_metrics, "
-            "then render the report."
+            "Compute the diversification metrics and chart from marts.daily_metrics."
         ),
     )
     parser.add_argument(
         "--metrics", default=str(METRICS_PATH), help="output path for metrics.json"
     )
     parser.add_argument(
-        "--figures", default=str(FIGURES_DIR), help="output directory for the PNG figures"
-    )
-    parser.add_argument(
-        "--no-report", action="store_true", help="skip rendering the HTML/PDF report"
+        "--figures", default=str(FIGURES_DIR), help="output directory for the PNG chart"
     )
     parser.add_argument("--verbose", action="store_true", help="Debug-level logging")
     args = parser.parse_args()
@@ -95,38 +86,6 @@ def main() -> None:
         100 * diversification["risk_removed_if_uncorrelated"],
         100 * diversification["diversification_captured"],
     )
-
-    if args.no_report:
-        logger.info("report skipped; render it with: python scripts/run_build_report.py")
-    elif (
-        Path(args.metrics).resolve() != METRICS_PATH.resolve()
-        or Path(args.figures).resolve() != FIGURES_DIR.resolve()
-    ):
-        # The report builder reads the default metrics file and the default
-        # figures directory. Rendering after writing either one elsewhere
-        # would pair new numbers with old figures, or the reverse.
-        logger.info(
-            "report not built: the report builder reads %s and %s, and this run wrote "
-            "%s and %s",
-            METRICS_PATH,
-            FIGURES_DIR,
-            args.metrics,
-            args.figures,
-        )
-    else:
-        # A report-build failure should not read as an analysis failure, so
-        # it is caught here and logged as its own error. SystemExit is caught
-        # too, because the builder exits with a message when a figure or table
-        # is not cited.
-        try:
-            build_report()
-        except (Exception, SystemExit):
-            logger.error("the report build failed", exc_info=True)
-            logger.error(
-                "the metrics and figures were written, but the report was not; fix the "
-                "cause above and rerun python scripts/run_build_report.py"
-            )
-            sys.exit(1)
 
 
 if __name__ == "__main__":

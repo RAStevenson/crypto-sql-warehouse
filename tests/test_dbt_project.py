@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from crypto_warehouse import dbt_project, report_generator
+from crypto_warehouse import dbt_project
 from crypto_warehouse.database_connection import OperatorError
 from crypto_warehouse.dbt_project import ENVIRONMENT_PREFIX, connection_environment
 
@@ -182,38 +182,6 @@ def test_every_singular_test_explains_itself_and_names_a_reason_column():
         assert not source.rstrip().endswith(";"), path.name
 
 
-def test_count_dbt_tests_counts_the_files_and_the_declared_tests():
-    singular = len(list(SINGULAR_TESTS_DIR.glob("*.sql")))
-    declared = 0
-    for yml_path in DBT_DIR.glob("models/**/*.yml"):
-        declared += yml_path.read_text(encoding="utf-8").count("data_tests:")
-    # Every data_tests list in the project holds at least one item, and the
-    # lists are small enough to add by hand: this recount is independent of
-    # the generator's walk of the parsed yml.
-    expected = singular + sum(
-        len(value)
-        for yml_path in DBT_DIR.glob("models/**/*.yml")
-        for value in _data_test_lists(yaml.safe_load(yml_path.read_text(encoding="utf-8")))
-    )
-    assert declared > 0
-    assert report_generator.count_dbt_tests() == expected
-
-
-def _data_test_lists(node):
-    if isinstance(node, dict):
-        for key, value in node.items():
-            if key == "data_tests":
-                yield value
-            else:
-                yield from _data_test_lists(value)
-    elif isinstance(node, list):
-        for item in node:
-            yield from _data_test_lists(item)
-
-
-# --------------------------------------------------------------------------
-# dbt itself can read the project
-# --------------------------------------------------------------------------
 def test_dbt_parses_the_project_with_no_database(monkeypatch, tmp_path):
     """`dbt parse` compiles every model and test and builds the lineage graph
     without connecting, so a broken ref(), source(), or yml fails here."""

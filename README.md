@@ -19,24 +19,22 @@ timeframes, loaded history back to 2020, and moved the marts and the checks
 into dbt. The CSV export is for quick
 calculations on stored data, without a fresh download from the exchange.
 
-The [report](reports/crypto_warehouse_report.pdf) asks how much volatility an
-equal-weight holding of the six assets the warehouse loads actually removes.
-It covers the method, the result, and the limitations. GitHub renders the PDF
-inline.
-
-Its main finding, over 1,932 complete trading days from 2021-06-19 to
-2026-10-08, is that spreading capital equally across all six assets removes
+I used the warehouse to measure how much volatility an equal-weight holding
+of its six assets actually removes. Over 1,932 complete trading days from
+2021-06-19 to 2026-10-08, spreading capital equally across all six removes
 only 12.6 percent of the volatility of holding the average one. If the six
 were uncorrelated it would remove 58.5 percent. Every pair of the six
-correlates between 0.63 and 0.84, averaging 0.72. A reload moves these figures, and the generated report is
-their live copy. Holding six of these is close to holding one, and the report
-explains what that does and does not justify.
+correlates between 0.63 and 0.84, averaging 0.72. Holding six of these is
+close to holding one. [What the data shows](#what-the-data-shows) gives the
+method and what the result does and does not justify. Loading newer days and
+rerunning the analysis moves these figures. A test then fails until the
+README matches the new `results/metrics.json`.
 
-The chart below is the report's Figure 4. Its three bars are the annualized
+The chart below shows that result. Its three bars are the annualized
 volatility of the average single asset, of the equal-weight portfolio, and of
 that portfolio if the six assets were uncorrelated.
 
-![Bar chart of annualized volatility for the average single asset, the equal-weight portfolio, and that portfolio with zero correlation between the assets](reports/figures/diversification.png)
+![Bar chart of annualized volatility for the average single asset, the equal-weight portfolio, and that portfolio with zero correlation between the assets](results/figures/diversification.png)
 
 ## Quick start
 
@@ -90,8 +88,7 @@ In a terminal, run the following.
    python scripts/run_ingest.py
    ```
 
-7. Compute the metrics and figures from the loaded data, and render the
-   report:
+7. Compute the diversification result and its chart from the loaded data:
 
    ```
    python scripts/run_diversification_analysis.py
@@ -120,12 +117,13 @@ UPDATE core.timeframes SET is_active = true WHERE timeframe_code = '15m';
 A finer timeframe costs requests in proportion to its candles. A year at 15
 minutes is about 120 requests per product, and a year at 5 minutes about 350.
 
-The default first load is one year, so it gives the report a shorter panel than
-the published one, which starts 2021-06-19. To load enough history for that
-panel, pass a `--backfill-days` value that reaches back past 2021-06-18, such
-as 2500, which does for any load before April 2028. The report reads only the
-1-hour series, so the 1-hour timeframe alone is enough, and step 7 then
-rebuilds the report:
+The default first load is one year, so it gives the analysis a shorter window
+than the published one, which starts 2021-06-19. To load enough history for
+that window, pass a `--backfill-days` value that reaches back past
+2021-06-18, such as 2500, which does for any load before April 2028. The
+analysis reads only the 1-hour series, so the 1-hour timeframe alone is
+enough, and step 7 then recomputes the result from 2021-06-19 through the
+latest complete day loaded:
 
 ```
 python scripts/run_ingest.py --timeframes 1h --backfill-days 2500
@@ -137,7 +135,6 @@ Other entry points:
 python scripts/run_verify.py                    # the dbt tests and the timezone check, nonzero exit on failure
 python scripts/run_dbt.py run                   # refresh the marts only
 python scripts/run_dbt.py docs generate         # dbt's dependency map and column docs, under dbt/target/
-python scripts/run_build_report.py              # rebuild the report alone, without recomputing
 python scripts/run_ingest.py --backfill-days 30 --products BTC-USD
 python scripts/run_ingest.py --timeframes 15m --backfill-days 90
 python scripts/run_add_asset.py XRP-USD --name Ripple   # register and backfill a new asset
@@ -210,22 +207,16 @@ Every argument of every script, mirroring `--help`:
   (default: a name built from what the export holds, under `exports/`, which
   git ignores).
 - `run_diversification_analysis.py --metrics PATH` sets the output path for
-  the metrics file (default `reports/metrics.json`). Any other path skips the
-  report, because the report builder reads only the default.
+  the metrics file (default `results/metrics.json`).
 - `run_diversification_analysis.py --figures DIR` sets the output directory
-  for the PNG figures (default `reports/figures`). Any other directory skips
-  the report too, because the report builder embeds only the figures in the
-  default directory.
-- `run_diversification_analysis.py --no-report` skips rendering the HTML and
-  PDF report after the metrics and figures.
+  for the chart (default `results/figures`).
 - `run_dbt.py DBT_COMMAND` passes everything after the script's own options
   to dbt as given, with the connection set from `DATABASE_URL`, so
   `run_dbt.py test`, `run_dbt.py run --select daily_ohlcv`, and
   `run_dbt.py docs generate` all work. It is for the dbt commands the other
   scripts do not run for you.
-- Every script except `run_build_report.py` accepts `--verbose` for
-  debug-level logging. `run_verify.py` takes no other arguments, and
-  `run_build_report.py` takes none at all.
+- Every Python script accepts `--verbose` for debug-level logging, and
+  `run_verify.py` takes no other arguments.
 
 Rerunning the loader is safe by construction, and `run_verify.py` asserts it.
 One of its dbt tests looks at the rows updated by the latest run for each
@@ -345,8 +336,17 @@ the shape real loads produce. With 45 days of hourly candles the daily marts
 fill in returns and 30-day averages, so the tests on those columns have
 values to check. A mart that breaks a rule those tests check, such as a
 30-day average taken over 29 days, fails in that job before it reaches the
-warehouse on my machine. The job does not test the loader, because psql,
-PostgreSQL's command-line client, loads the fixture's rows directly.
+warehouse on my machine.
+
+The fixture goes in through psql, PostgreSQL's command-line client, so none
+of those steps runs the loader. The same job tests the loader by running
+`tests/test_against_postgres.py` in a database of its own. Those tests load
+candles through the loader's own functions from a stand-in for the Coinbase
+API, then check what landed in raw, core, and `raw.fetch_windows`. They also
+check that a second load rewrites nothing, that the migrations upgrade an
+older warehouse without losing a candle, and that every dbt test passes on
+what the loader wrote. When `CRYPTO_WAREHOUSE_TEST_DATABASE_URL` is not set
+they are skipped, so a plain `pytest` still needs no database and no network.
 
 ## Design decisions
 
@@ -443,7 +443,8 @@ returned exactly the stored values, so the disagreement is in Coinbase's data
 and not in the loader. I first wrote the comparison as a verify check that
 failed on any difference. I turned it into a query once the full load showed
 it would fail on every warehouse that loads the finer timeframes over those
-years. The marts and the report use only the 1-hour series.
+years. The marts and the diversification analysis use only the 1-hour
+series.
 
 Incomplete days are kept as rows and excluded from every derived figure. A day
 with fewer than 24 hourly candles still appears in `marts.daily_ohlcv` with its
@@ -502,6 +503,61 @@ psql can do it directly:
 psql -d crypto_warehouse -c "\copy (SELECT * FROM marts.tableau_daily_extract ORDER BY symbol, trade_date) TO 'tableau_extract.csv' CSV HEADER"
 ```
 
+## What the data shows
+
+The question is how much volatility an equal-weight holding of the six assets
+removes. The reduction is measured against two references. One is the average
+volatility of holding a single asset. The other is the volatility the same
+six would give if they were uncorrelated.
+
+`scripts/run_diversification_analysis.py` reads `marts.daily_metrics`. A
+portfolio's volatility is computed from a covariance matrix, which holds each
+asset's variance and how each pair of assets moves together. That matrix has
+to cover one set of dates, because a matrix built pair by pair over different
+dates describes no single portfolio. So the script keeps only the dates on
+which all six assets have a daily return, which leaves 1,932 days from
+2021-06-19 to 2026-10-08. The mart gives no return for an incomplete day or
+for the day after one, so such a date drops out for every asset at once. The
+correlations here cover that whole window, so they differ from
+`marts.pairwise_correlations_90d`, which covers only the latest 90 days.
+
+Returns are daily log returns, which add across days. Volatility is their
+sample standard deviation, annualized so it reads on the one-year scale
+volatility is usually quoted on. Annualizing multiplies it by the square root
+of 365, because crypto trades every day of the year. Annualizing on the 252
+trading days of a stock year would report every volatility here about 17
+percent too low. The portfolio's volatility is the square root of w'Cw, where
+w gives each asset one sixth and C is the annualized covariance matrix. The
+uncorrelated case keeps each asset's own variance and sets every covariance
+to zero.
+
+The equal-weight portfolio's annualized volatility is 0.714, against 0.817
+for the average single asset. With zero correlation it would be 0.339. So the
+real correlations deliver 21.6 percent of the reduction that zero correlation
+would give, which is the 12.61 percent the six actually remove divided by the
+58.46 percent they would remove if uncorrelated. Bitcoin alone, at 0.529, was
+less volatile than the six together, so over this window spreading into the
+other five raised risk rather than lowering it. On this evidence the number
+of coins held does little to control risk.
+
+The data limits the result in three ways. All six come from one exchange, so
+a stale or wrong price there enters the correlations as if it were market
+behavior. All six are also quoted in US dollars, so the dollar's own moves
+sit inside every correlation. Every asset at some point closed at least 76.7
+percent below its highest close since 2021-06-18, and the analysis does not
+separate those declines from the rest. If correlations rise in selloffs, the
+12.6 percent is more likely too high than too low as a guide to the next
+selloff.
+
+Equal weight is the simplest allocation to state, not an optimized one.
+Keeping the weights at one sixth every day assumes daily rebalancing, and no
+trading costs are modeled. A single correlation near the 0.72 average has a
+95 percent confidence interval from 0.70 to 0.74 over this many days. Two
+pairs whose correlations differ by less than about 0.04 have overlapping
+intervals, so the order between them may be sampling noise. Finally, six
+large coins on one exchange are not the crypto market, and the result is
+about these six over these days.
+
 ## Limitations
 
 One exchange and one quote currency, so there is no cross-venue check on a
@@ -510,9 +566,10 @@ latest day that has a return, not a rolling series. `dollar_volume_approx` multi
 daily volume by the daily close rather than a traded average price. Measured
 against volume times `(H+L+C)/3` over the data loaded as of 2026-08-04, the
 error is -0.04 percent on average and ranges from -4.16 to +3.14 percent. The
-column comment in `dbt/models/marts/daily_metrics.sql` is the source. The analytical caveats, including how the
-report's correlation window differs from the mart's and how drawdown is
-measured, are in the report.
+column comment in `dbt/models/marts/daily_metrics.sql` is the source.
+
+The limits of the diversification result are in the last two paragraphs of
+[What the data shows](#what-the-data-shows).
 
 ## What I would build next
 
@@ -533,8 +590,7 @@ scripts/scheduled_ingest.cmd  the Task Scheduler entry point, logs to logs/
 scripts/run_verify.py         the dbt tests, then the timezone check; nonzero exit on failure
 scripts/run_dbt.py            any dbt command, with the connection set from .env
 scripts/run_diversification_analysis.py
-                              compute reports/metrics.json, figures, and the report
-scripts/run_build_report.py   render the report from metrics.json
+                              compute results/metrics.json and the chart above
 src/crypto_warehouse/         the package the scripts import
 dbt/dbt_project.yml           the dbt project; profiles.yml beside it reads the connection from .env
 dbt/models/marts/             the marts, one dbt model each, with the design rationale in comments
@@ -546,9 +602,9 @@ sql/01_schema.sql             schema DDL with design rationale in comments
 sql/04_queries.sql            annotated analytical queries, each standalone
 sql/05_verify.sql             the timezone check, the one assertion that is not a dbt test
 sql/migrations/               in-place upgrades for a warehouse built earlier
-tests/                        the test suite, no database or network needed
-tests/fixtures/               a dump of a small loaded warehouse, for the GitHub Actions job
+tests/                        the test suite; all but test_against_postgres.py need no database
+tests/fixtures/               a small loaded warehouse for the GitHub Actions job, and an older schema for the migration test
 .github/workflows/tests.yml   the GitHub Actions jobs: the test suite, and the warehouse against PostgreSQL
-reports/                      the generated report, its metrics and figures
+results/                      the diversification metrics and their chart
 requirements.txt              exact pins the reported numbers were produced with
 ```

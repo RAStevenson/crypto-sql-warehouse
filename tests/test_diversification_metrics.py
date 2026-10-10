@@ -98,8 +98,8 @@ def equicorrelated_covariance(
 def test_equicorrelation_limit_matches_the_closed_form():
     # With equal volatilities and a shared correlation, an equal-weight basket
     # tends to volatility * sqrt(correlation) as the asset count grows. The
-    # report quotes this to say what another name of the same kind would add,
-    # so pin it to the algebra.
+    # limit says how far more assets of the same kind could bring the
+    # volatility down, so pin it to the algebra.
     volatility, correlation = 0.5, 0.64
     diversification_result = diversification_metrics.equal_weight_diversification(
         equicorrelated_covariance(6, volatility, correlation)
@@ -289,20 +289,6 @@ def test_max_drawdown_counts_a_fall_from_the_very_first_day():
     falls records the whole fall rather than zero."""
     returns = np.array([[np.log(0.5)], [np.log(0.5)]])
     assert diversification_metrics.max_drawdown(returns)[0] == pytest.approx(-0.75)
-
-
-def test_drawdown_paths_start_at_zero_and_agree_with_max_drawdown():
-    returns = orthogonal_panel()
-    drawdowns = diversification_metrics.drawdown_paths(returns)
-    assert drawdowns.shape == (returns.shape[0] + 1, returns.shape[1])
-    assert np.allclose(drawdowns[0], 0.0)
-    assert np.allclose(drawdowns.min(axis=0), diversification_metrics.max_drawdown(returns))
-    assert (drawdowns <= 1e-15).all()
-
-
-# --------------------------------------------------------------------------
-# panel construction
-# --------------------------------------------------------------------------
 
 
 def test_build_return_panel_keeps_only_dates_where_every_symbol_reports():
@@ -544,8 +530,8 @@ def test_panel_metrics_reports_the_panel_it_was_given():
 
 
 def test_panel_metrics_output_is_json_serializable():
-    """metrics.json is the contract with the report builder, so nothing in it
-    may be a numpy scalar that json refuses to write."""
+    """metrics.json is the record the README's numbers are checked against, so
+    nothing in it may be a numpy scalar that json refuses to write."""
     import json
 
     day_list = consecutive_dates(8)
@@ -559,7 +545,7 @@ def test_panel_metrics_output_is_json_serializable():
 
 
 # --------------------------------------------------------------------------
-# fisher_interval and round_range_outward
+# fisher_interval
 # --------------------------------------------------------------------------
 
 
@@ -584,20 +570,6 @@ def test_fisher_interval_stays_inside_the_correlation_range():
 def test_fisher_interval_needs_more_than_three_observations():
     with pytest.raises(ValueError, match="more than 3"):
         diversification_metrics.fisher_interval(0.8, 3)
-
-
-@pytest.mark.parametrize(
-    ("values", "expected"),
-    [
-        ([0.7258, 0.8953], (0.70, 0.90)),
-        ([0.75, 0.75], (0.75, 0.75)),
-        ([0.31, 0.66], (0.30, 0.70)),
-    ],
-)
-def test_round_range_outward_rounds_to_the_step(values, expected):
-    low, high = diversification_metrics.round_range_outward(np.array(values))
-    assert low == pytest.approx(expected[0])
-    assert high == pytest.approx(expected[1])
 
 
 def test_build_return_panel_raises_a_panel_data_error_that_is_still_a_value_error():

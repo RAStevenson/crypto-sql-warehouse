@@ -19,9 +19,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      # The suite needs no database and no network, so this job needs no
-      # PostgreSQL service. The one test that runs dbt only parses the
-      # project.
+      # This job has no PostgreSQL service. tests/test_against_postgres.py
+      # skips itself here because CRYPTO_WAREHOUSE_TEST_DATABASE_URL is unset,
+      # and the rest of the suite needs no database and no network. Of the
+      # tests that run here, the one that runs dbt only parses the project.
       - run: ruff check src scripts tests
       - run: pyright
       - run: python -m pytest tests -q
@@ -32,8 +33,9 @@ jobs:
   # dbt test and the timezone check, and writes both exports. The fixture's
   # 45 days of hourly candles give the marts returns and 30-day columns to
   # fill in, so a mart that breaks a rule on those columns fails here before
-  # it reaches a warehouse holding real history. The job does not test the
-  # loader, because psql loads the fixture's rows directly.
+  # it reaches a warehouse holding real history. psql loads the fixture's
+  # rows directly, so the loader is tested by the last step instead, which
+  # runs tests/test_against_postgres.py in a database of its own.
   warehouse:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -79,3 +81,7 @@ jobs:
           python scripts/run_export.py daily --output exports/daily.csv
           test "$(wc -l < exports/prices.csv)" -gt 1
           test "$(wc -l < exports/daily.csv)" -gt 1
+      - name: Run the loader's SQL and the migrations against PostgreSQL
+        env:
+          CRYPTO_WAREHOUSE_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/crypto_warehouse_test
+        run: python -m pytest tests/test_against_postgres.py

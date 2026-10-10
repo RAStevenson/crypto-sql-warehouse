@@ -139,7 +139,8 @@ def run_migrations(database_url: str) -> int:
     The pending files run in order in one transaction, so a failure leaves
     the old warehouse as it was. Migration 001 drops the marts, so when it
     runs, dbt builds them again once the transaction has committed. A
-    warehouse with nothing pending, or with no schema, returns 1.
+    warehouse with no schema returns 1, and one with nothing pending returns 0
+    without running anything.
     """
     if not database_exists(database_url):
         logger.error("the database does not exist; run scripts/run_setup.py with no flag first")

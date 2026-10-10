@@ -19,10 +19,9 @@ requests==2.34.2
 python-dotenv==1.2.2
 
 # The analysis layer. numpy does the covariance arithmetic behind
-# reports/metrics.json and matplotlib renders the four figures the report
-# embeds. The ingestion pipeline does not touch either, so a load-only install
-# can drop these two lines. scripts/run_diversification_analysis.py needs both,
-# and scripts/run_build_report.py needs numpy.
+# results/metrics.json and matplotlib draws the chart the README shows. The
+# ingestion pipeline does not touch either, so a load-only install can drop
+# these two lines. scripts/run_diversification_analysis.py needs both.
 numpy==1.26.3
 matplotlib==3.11.1
 
@@ -34,16 +33,14 @@ matplotlib==3.11.1
 dbt-core==1.12.5
 dbt-postgres==1.11.0
 
-# src/crypto_warehouse/report_generator.py reads the dbt project's yml to
-# count its tests. dbt installs PyYAML too, but the report imports it
-# directly, so it is pinned here in its own right (added 2026-10-09).
-PyYAML==6.0.3
-
-# Development only: the test runner, the linter, and the type checker (added
-# 2026-10-04). Pinned so the checks on a reader's machine and on the GitHub Actions runner match the ones
+# Development only: the test runner, the linter, the type checker, and PyYAML
+# for the tests (added 2026-10-04). Pinned so the checks on a reader's machine and on the GitHub Actions runner match the ones
 # here. The tests stub the HTTP session rather than pulling in requests-mock
 # or responses; a fake with three methods is less to install and less to
 # explain than another dependency.
 pytest==9.1.1
+# tests/test_dbt_project.py reads the dbt project's yml. dbt installs PyYAML
+# too, but the tests import it directly, so it is pinned in its own right.
+PyYAML==6.0.3
 pyright==1.1.414
 ruff==0.15.21
