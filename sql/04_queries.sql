@@ -666,9 +666,10 @@ WHERE (core.ohlcv.open, core.ohlcv.high, core.ohlcv.low,
 -- hourly bar in about one hour in five from April to December 2023, and both
 -- the 5-minute and 15-minute series disagree in stretches of August and
 -- September 2024 and of January to May 2025. The smaller coins carry most of
--- it (June 2023 at 5 minutes: LINK 425 of 720 hours, BTC 2). The differences
--- are small, a median of 0.015 percent on the open and at most 1.8 percent
--- on any price. Fetching sample hours again returned exactly the stored
+-- it (June 2023 at 5 minutes: LINK 425 of 720 hours, BTC 2). This query
+-- counts the hours. A one-off comparison the same day put the size of the
+-- differences at a median of 0.015 percent on the open and at most 1.8
+-- percent on any price. Fetching sample hours again returned exactly the stored
 -- values at every timeframe, so the stored data matches what Coinbase
 -- serves and the disagreement is Coinbase's. A check that failed on it would
 -- fail on every warehouse and could never be fixed by the operator.
