@@ -20,8 +20,8 @@ into dbt. The CSV export is for quick
 calculations on stored data, without a fresh download from the exchange.
 
 I used the warehouse to measure how much volatility an equal-weight holding
-of its six assets actually removes. Over 1,932 complete trading days from
-2021-06-19 to 2026-10-08, spreading capital equally across all six removes
+of its six assets actually removes. Over 1,933 complete trading days from
+2021-06-19 to 2026-10-09, spreading capital equally across all six removes
 only 12.6 percent of the volatility of holding the average one. If the six
 were uncorrelated it would remove 58.5 percent. Every pair of the six
 correlates between 0.63 and 0.84, averaging 0.72. Holding six of these is
@@ -515,8 +515,8 @@ portfolio's volatility is computed from a covariance matrix, which holds each
 asset's variance and how each pair of assets moves together. That matrix has
 to cover one set of dates, because a matrix built pair by pair over different
 dates describes no single portfolio. So the script keeps only the dates on
-which all six assets have a daily return, which leaves 1,932 days from
-2021-06-19 to 2026-10-08. The mart gives no return for an incomplete day or
+which all six assets have a daily return, which leaves 1,933 days from
+2021-06-19 to 2026-10-09. The mart gives no return for an incomplete day or
 for the day after one, so such a date drops out for every asset at once. The
 correlations here cover that whole window, so they differ from
 `marts.pairwise_correlations_90d`, which covers only the latest 90 days.
