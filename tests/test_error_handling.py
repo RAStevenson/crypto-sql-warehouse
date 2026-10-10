@@ -132,50 +132,6 @@ def test_analysis_script_lets_an_unexpected_error_through(analysis_script, monke
         analysis_script.main()
 
 
-def test_a_failed_report_build_prints_the_traceback_then_what_was_written(
-    analysis_script, monkeypatch, caplog
-):
-    def broken_build():
-        raise KeyError("provenance")
-
-    monkeypatch.setattr(
-        analysis_script, "run_diversification_analysis", lambda *args: fake_metrics()
-    )
-    monkeypatch.setattr(analysis_script, "build_report", broken_build)
-
-    with caplog.at_level(logging.ERROR):
-        with pytest.raises(SystemExit) as stopped:
-            analysis_script.main()
-        assert stopped.value.code == 1
-
-    errors = error_records(caplog)
-    assert errors[0].exc_info is not None
-    assert "KeyError" in caplog.text
-    last_message = errors[-1].getMessage()
-    assert "the metrics and figures were written" in last_message
-    assert "run_build_report.py" in last_message
-
-
-def test_a_report_build_that_exits_with_a_message_is_reported_the_same_way(
-    analysis_script, monkeypatch, caplog
-):
-    def uncited():
-        raise SystemExit("not cited from body prose: Table 3")
-
-    monkeypatch.setattr(
-        analysis_script, "run_diversification_analysis", lambda *args: fake_metrics()
-    )
-    monkeypatch.setattr(analysis_script, "build_report", uncited)
-
-    with caplog.at_level(logging.ERROR):
-        with pytest.raises(SystemExit) as stopped:
-            analysis_script.main()
-        assert stopped.value.code == 1
-
-    assert "not cited from body prose: Table 3" in caplog.text
-    assert "the metrics and figures were written" in error_records(caplog)[-1].getMessage()
-
-
 # --------------------------------------------------------------------------
 # scripts/run_add_asset.py
 # --------------------------------------------------------------------------

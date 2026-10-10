@@ -38,9 +38,9 @@ from .database_connection import REPO_ROOT, connect
 
 logger = logging.getLogger(__name__)
 
-REPORTS_DIR = REPO_ROOT / "reports"
-FIGURES_DIR = REPORTS_DIR / "figures"
-METRICS_PATH = REPORTS_DIR / "metrics.json"
+RESULTS_DIR = REPO_ROOT / "results"
+FIGURES_DIR = RESULTS_DIR / "figures"
+METRICS_PATH = RESULTS_DIR / "metrics.json"
 
 # Crypto trades every calendar day, so a year is 365 observations rather than
 # the 252 exchange sessions an equity volatility is annualized with.
@@ -94,14 +94,6 @@ GROUP BY d.trade_date
 ORDER BY d.trade_date
 """
 
-# The mart's own correlation figures, kept for one comparison sentence in the
-# report. It is a trailing 90-day window, which is not the panel this analysis
-# uses, and quoting it without saying so would mix two bases.
-MART_CORRELATION_QUERY = """
-SELECT min(return_correlation), max(return_correlation), avg(return_correlation),
-       count(*), min(n_days), max(n_days)
-FROM marts.pairwise_correlations_90d
-"""
 
 
 @dataclass(frozen=True)
@@ -283,16 +275,6 @@ def off_diagonal_entries(matrix: np.ndarray) -> np.ndarray:
     return matrix[mask]
 
 
-# Defined here rather than in report_figures.py because the report's caption quotes the
-# heatmap's color range. The bounds are computed once and stored in the
-# metrics, so the caption and the image cannot state different ranges.
-def round_range_outward(values: np.ndarray, step: float = 0.05) -> tuple[float, float]:
-    """Return the (low, high) range of the values, rounded outward to multiples of step."""
-    low = float(np.floor(values.min() / step) * step)
-    high = float(np.ceil(values.max() / step) * step)
-    return low, high
-
-
 def fisher_interval(
     correlation: float, n_observations: int, z_score: float = 1.959963984540054
 ) -> tuple[float, float]:
@@ -319,18 +301,6 @@ def max_drawdown(returns: np.ndarray) -> np.ndarray:
         np.vstack([np.zeros(returns.shape[1]), np.cumsum(returns, axis=0)])
     )
     return (cumulative_path / np.maximum.accumulate(cumulative_path, axis=0) - 1.0).min(axis=0)
-
-
-def drawdown_paths(returns: np.ndarray) -> np.ndarray:
-    """The full drawdown series behind max_drawdown, one column per asset.
-
-    Length is one row longer than the return matrix, because the path includes
-    its own starting point at zero drawdown.
-    """
-    cumulative_path = np.exp(
-        np.vstack([np.zeros(returns.shape[1]), np.cumsum(returns, axis=0)])
-    )
-    return cumulative_path / np.maximum.accumulate(cumulative_path, axis=0) - 1.0
 
 
 def portfolio_volatility(covariance: np.ndarray, weights: np.ndarray) -> float:
@@ -364,8 +334,8 @@ def equal_weight_diversification(covariance: np.ndarray) -> dict[str, float]:
 
     # For equal volatilities sigma and a shared correlation rho, equal-weight
     # variance is sigma^2 * (1/n_assets + (1 - 1/n_assets) * rho), so volatility
-    # tends to sigma * sqrt(rho) as n_assets grows. The report quotes this limit
-    # to show what adding more names of the same kind could remove.
+    # tends to sigma * sqrt(rho) as n_assets grows. The limit shows how far
+    # adding more names of the same kind could bring the volatility down.
     correlations = covariance / np.outer(asset_vols, asset_vols)
     off_diagonal_values = correlations[np.triu_indices(n_assets, k=1)]
     mean_correlation = float(off_diagonal_values.mean())
@@ -385,7 +355,7 @@ def equal_weight_diversification(covariance: np.ndarray) -> dict[str, float]:
 
 def panel_metrics(panel: ReturnPanel, close_path: ClosePath) -> dict:
     """Compute the panel, close-path, per-asset, correlation, and diversification
-    figures the report reads and return them as a dict.
+    figures written to metrics.json and return them as a dict.
 
     Raises PanelDataError when the panel is too short for a correlation
     interval, or when an asset's returns do not vary over it.
@@ -430,7 +400,6 @@ def panel_metrics(panel: ReturnPanel, close_path: ClosePath) -> dict:
     mean_interval_low, mean_interval_high = fisher_interval(
         float(off_diagonal_values.mean()), panel.n_days
     )
-    scale_low, scale_high = round_range_outward(off_diagonal_values)
 
     return {
         "panel": {
@@ -462,8 +431,6 @@ def panel_metrics(panel: ReturnPanel, close_path: ClosePath) -> dict:
             "off_diagonal_mean": float(off_diagonal_values.mean()),
             "mean_ci95_low": mean_interval_low,
             "mean_ci95_high": mean_interval_high,
-            "heatmap_scale_low": scale_low,
-            "heatmap_scale_high": scale_high,
             "least_correlated_pair": pair_name(least_correlated_index),
             "most_correlated_pair": pair_name(most_correlated_index),
             "n_pairs": len(pair_correlations),
@@ -487,7 +454,7 @@ def fetch_closes(connection) -> list[tuple[datetime.date, str, float]]:
 
 
 def fetch_provenance(connection, panel: ReturnPanel) -> dict:
-    """Row counts, the excluded dates with their reasons, and the mart's own correlations."""
+    """Row counts and the excluded dates with their reasons."""
     with connection.cursor() as cursor:
         cursor.execute(PROVENANCE_QUERY)
         hourly_rows, daily_rows, incomplete_asset_days, assets_loaded, server_version = (
@@ -495,15 +462,6 @@ def fetch_provenance(connection, panel: ReturnPanel) -> dict:
         )
         cursor.execute(OBSERVED_DATES_QUERY)
         observed = [(row[0], int(row[1]), int(row[2])) for row in cursor.fetchall()]
-        cursor.execute(MART_CORRELATION_QUERY)
-        (
-            mart_min_correlation,
-            mart_max_correlation,
-            mart_mean_correlation,
-            mart_n_pairs,
-            mart_n_days_min,
-            mart_n_days_max,
-        ) = cursor.fetchone()
     reasons = classify_excluded_dates(observed, panel)
     excluded_dates = sorted(trade_date for dates in reasons.values() for trade_date in dates)
     return {
@@ -522,24 +480,15 @@ def fetch_provenance(connection, panel: ReturnPanel) -> dict:
         "excluded_dates": [trade_date.isoformat() for trade_date in excluded_dates],
         "assets_loaded": int(assets_loaded),
         "server_version": str(server_version),
-        "mart_correlations_90d": {
-            "note": "trailing 90-day window from marts.pairwise_correlations_90d, "
-            "not the complete-day panel this report is built on",
-            "min": float(mart_min_correlation),
-            "max": float(mart_max_correlation),
-            "mean": float(mart_mean_correlation),
-            "n_pairs": int(mart_n_pairs),
-            "n_days_min": int(mart_n_days_min),
-            "n_days_max": int(mart_n_days_max),
-        },
     }
 
 
 def run_diversification_analysis(
     metrics_path: Path = METRICS_PATH, figures_dir: Path = FIGURES_DIR
 ) -> dict:
-    """Query the warehouse, write metrics.json and the figures, return metrics."""
-    from . import report_figures
+    """Query the warehouse, write metrics.json and the diversification chart,
+    and return the metrics."""
+    from .diversification_figure import DIVERSIFICATION_FILENAME, diversification_bars
 
     with closing(connect()) as connection:
         panel = build_return_panel(fetch_returns(connection))
@@ -562,9 +511,10 @@ def run_diversification_analysis(
     )
 
     figures_dir.mkdir(parents=True, exist_ok=True)
-    figure_paths = report_figures.write_figures(panel, close_path, metrics, figures_dir)
-    for path in figure_paths:
-        logger.info("wrote %s", path)
+    figure_path = diversification_bars(
+        metrics["diversification"], figures_dir / DIVERSIFICATION_FILENAME
+    )
+    logger.info("wrote %s", figure_path)
 
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     metrics_path.write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
