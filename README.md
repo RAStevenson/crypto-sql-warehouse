@@ -26,11 +26,11 @@ Dogecoin) actually removes. Over 1,933 complete trading days from 2021-06-19
 to 2026-10-09, spreading capital equally across all six removes only 12.6
 percent of the volatility of holding the average one. If the six were
 uncorrelated it would remove 58.5 percent. Every pair of the six correlates
-between 0.63 and 0.84, averaging 0.72. Holding six of these is close to
-holding one. [What the data shows](#what-the-data-shows) gives the method and
-what the result does and does not justify. Loading newer days and rerunning
-the analysis moves these figures. A test then fails until the README matches
-the new `results/metrics.json`.
+between 0.63 and 0.84, averaging 0.72. Over this window, holding six of these
+was close to holding one. [What the data shows](#what-the-data-shows) gives
+the method and what the result does and does not justify. Loading newer days
+and rerunning the analysis moves these figures. A test then fails until the
+README matches the new `results/metrics.json`.
 
 The chart below shows that result. Its three bars are the annualized
 volatility of the average single asset, of the equal-weight portfolio, and of
@@ -150,83 +150,12 @@ python scripts/run_add_asset.py XRP-USD --name Ripple   # register and backfill 
 python scripts/run_export.py prices --products BTC-USD --timeframe 15m --start 2024-01-01
 python scripts/run_export.py daily --start 2025-01-01   # daily metrics, every active asset
 python scripts/run_setup.py --migrate           # bring an older warehouse up to date
-python scripts/run_ingest.py --recheck-gaps     # once after --migrate, see below
+python scripts/run_ingest.py --recheck-gaps     # once after --migrate, see Script arguments
 pytest                                          # the test suite
 ```
 
-Every argument of every script, mirroring `--help`:
-
-- `run_setup.py --reset` drops the raw, core, and marts schemas before
-  applying the DDL. It deletes all stored data.
-- `run_setup.py --rebuild-marts` drops the marts schema and has dbt build it
-  again from `dbt/models/marts/`. Use it to apply a changed mart definition to
-  a warehouse that already holds data. Raw and core keep their data. It cannot
-  be combined with `--reset`.
-- `run_setup.py --migrate` brings a warehouse built before the current schema
-  up to date in place, by applying whichever files in `sql/migrations/` it
-  still needs. Every stored candle and run record is kept. A warehouse whose
-  price table is still `core.ohlcv_hourly` gets its candles labeled 1h and its
-  marts rebuilt. It cannot be combined with `--reset` or `--rebuild-marts`.
-- `run_ingest.py --backfill-days N` sets how far back to reach, in days
-  (default 365). For a product and timeframe with no rows yet it is the depth
-  of the first load. Passing it explicitly also makes it a floor on an
-  existing resume point, so `--backfill-days 365` against a 90-day warehouse
-  extends it back to a year. Omitting it leaves the run purely incremental.
-- `run_ingest.py --products PRODUCT [PRODUCT ...]` names the product codes to
-  load (default: every asset with `is_active` in `core.assets`). Naming a
-  product explicitly loads it even when `is_active` is false, and the override
-  is logged.
-- `run_ingest.py --timeframes TIMEFRAME [TIMEFRAME ...]` names the timeframes
-  to load, from 1m, 5m, 15m, and 1h (default: every timeframe with
-  `is_active` in `core.timeframes`). Naming a timeframe explicitly loads it
-  even when `is_active` is false, and the override is logged.
-- `run_ingest.py --recheck-gaps` replaces the usual load, which runs forward
-  from the newest stored candle. It asks Coinbase again for every candle
-  missing from core that no recorded request covers, as described under
-  Design decisions, and loads any that come back. It records each window it
-  asks for as it goes. A warehouse loaded before `raw.fetch_windows` existed
-  needs it once after `--migrate`, because until then verify fails on every
-  gap the earlier runs left. It cannot be combined with `--backfill-days`.
-- `run_ingest.py --no-refresh-marts` skips the mart refresh (`dbt run`) that
-  otherwise runs after loading.
-- `run_add_asset.py PRODUCT` takes the Coinbase product code as its one
-  required argument, e.g. `XRP-USD`.
-- `run_add_asset.py --symbol SYMBOL` sets the ticker symbol to store
-  (default: the part of the product code before the dash).
-- `run_add_asset.py --name NAME` sets the human-readable asset name
-  (default: the symbol).
-- `run_add_asset.py --backfill-days N` sets the depth of the initial load in
-  days (default 365).
-- `run_add_asset.py --no-backfill` registers the asset only, and the next
-  ingest run loads it. It cannot be combined with `--backfill-days`.
-- `run_export.py prices` writes the stored candles for the chosen assets at
-  one timeframe, with the symbol, product code, timeframe, the candle's start
-  time in UTC, open, high, low, close, and volume in units of the coin on
-  each row.
-- `run_export.py prices --timeframe TIMEFRAME` picks that timeframe from 1m,
-  5m, 15m, and 1h (default 1h).
-- `run_export.py daily` writes the rows of `marts.tableau_daily_extract`, one
-  per asset per day, with daily prices, returns, moving averages, 30-day
-  volatility, and drawdown.
-- `run_export.py --products PRODUCT [PRODUCT ...]`, on either export, names
-  the products to export (default: every active asset).
-- `run_export.py --start DATE` and `--end DATE`, on either export, limit it to
-  UTC dates written as YYYY-MM-DD, both ends included (default: all stored
-  history).
-- `run_export.py --output PATH`, on either export, names the CSV file
-  (default: a name built from what the export holds, under `exports/`, which
-  git ignores).
-- `run_diversification_analysis.py --metrics PATH` sets the output path for
-  the metrics file (default `results/metrics.json`).
-- `run_diversification_analysis.py --figures DIR` sets the output directory
-  for the chart (default `results/figures`).
-- `run_dbt.py DBT_COMMAND` passes everything after the script's own options
-  to dbt as given, with the connection set from `DATABASE_URL`, so
-  `run_dbt.py test`, `run_dbt.py run --select daily_ohlcv`, and
-  `run_dbt.py docs generate` all work. It is for the dbt commands the other
-  scripts do not run for you.
-- Every Python script accepts `--verbose` for debug-level logging, and
-  `run_verify.py` takes no other arguments.
+Every argument of every script is listed under
+[Script arguments](#script-arguments) at the end.
 
 Rerunning the loader is safe by construction, because every candle has
 exactly one row in core, keyed by asset, timeframe, and time. What a bug
@@ -629,3 +558,79 @@ tests/fixtures/               a small loaded warehouse for the GitHub Actions jo
 results/                      the diversification metrics and their chart
 requirements.txt              exact pins the reported numbers were produced with
 ```
+
+## Script arguments
+
+Every argument of every script, mirroring `--help`:
+
+- `run_setup.py --reset` drops the raw, core, and marts schemas before
+  applying the DDL. It deletes all stored data.
+- `run_setup.py --rebuild-marts` drops the marts schema and has dbt build it
+  again from `dbt/models/marts/`. Use it to apply a changed mart definition to
+  a warehouse that already holds data. Raw and core keep their data. It cannot
+  be combined with `--reset`.
+- `run_setup.py --migrate` brings a warehouse built before the current schema
+  up to date in place, by applying whichever files in `sql/migrations/` it
+  still needs. Every stored candle and run record is kept. A warehouse whose
+  price table is still `core.ohlcv_hourly` gets its candles labeled 1h and its
+  marts rebuilt. It cannot be combined with `--reset` or `--rebuild-marts`.
+- `run_ingest.py --backfill-days N` sets how far back to reach, in days
+  (default 365). For a product and timeframe with no rows yet it is the depth
+  of the first load. Passing it explicitly also makes it a floor on an
+  existing resume point, so `--backfill-days 365` against a 90-day warehouse
+  extends it back to a year. Omitting it leaves the run purely incremental.
+- `run_ingest.py --products PRODUCT [PRODUCT ...]` names the product codes to
+  load (default: every asset with `is_active` in `core.assets`). Naming a
+  product explicitly loads it even when `is_active` is false, and the override
+  is logged.
+- `run_ingest.py --timeframes TIMEFRAME [TIMEFRAME ...]` names the timeframes
+  to load, from 1m, 5m, 15m, and 1h (default: every timeframe with
+  `is_active` in `core.timeframes`). Naming a timeframe explicitly loads it
+  even when `is_active` is false, and the override is logged.
+- `run_ingest.py --recheck-gaps` replaces the usual load, which runs forward
+  from the newest stored candle. It asks Coinbase again for every candle
+  missing from core that no recorded request covers, as described under
+  Design decisions, and loads any that come back. It records each window it
+  asks for as it goes. A warehouse loaded before `raw.fetch_windows` existed
+  needs it once after `--migrate`, because until then verify fails on every
+  gap the earlier runs left. It cannot be combined with `--backfill-days`.
+- `run_ingest.py --no-refresh-marts` skips the mart refresh (`dbt run`) that
+  otherwise runs after loading.
+- `run_add_asset.py PRODUCT` takes the Coinbase product code as its one
+  required argument, e.g. `XRP-USD`.
+- `run_add_asset.py --symbol SYMBOL` sets the ticker symbol to store
+  (default: the part of the product code before the dash).
+- `run_add_asset.py --name NAME` sets the human-readable asset name
+  (default: the symbol).
+- `run_add_asset.py --backfill-days N` sets the depth of the initial load in
+  days (default 365).
+- `run_add_asset.py --no-backfill` registers the asset only, and the next
+  ingest run loads it. It cannot be combined with `--backfill-days`.
+- `run_export.py prices` writes the stored candles for the chosen assets at
+  one timeframe, with the symbol, product code, timeframe, the candle's start
+  time in UTC, open, high, low, close, and volume in units of the coin on
+  each row.
+- `run_export.py prices --timeframe TIMEFRAME` picks that timeframe from 1m,
+  5m, 15m, and 1h (default 1h).
+- `run_export.py daily` writes the rows of `marts.tableau_daily_extract`, one
+  per asset per day, with daily prices, returns, moving averages, 30-day
+  volatility, and drawdown.
+- `run_export.py --products PRODUCT [PRODUCT ...]`, on either export, names
+  the products to export (default: every active asset).
+- `run_export.py --start DATE` and `--end DATE`, on either export, limit it to
+  UTC dates written as YYYY-MM-DD, both ends included (default: all stored
+  history).
+- `run_export.py --output PATH`, on either export, names the CSV file
+  (default: a name built from what the export holds, under `exports/`, which
+  git ignores).
+- `run_diversification_analysis.py --metrics PATH` sets the output path for
+  the metrics file (default `results/metrics.json`).
+- `run_diversification_analysis.py --figures DIR` sets the output directory
+  for the chart (default `results/figures`).
+- `run_dbt.py DBT_COMMAND` passes everything after the script's own options
+  to dbt as given, with the connection set from `DATABASE_URL`, so
+  `run_dbt.py test`, `run_dbt.py run --select daily_ohlcv`, and
+  `run_dbt.py docs generate` all work. It is for the dbt commands the other
+  scripts do not run for you.
+- Every Python script accepts `--verbose` for debug-level logging, and
+  `run_verify.py` takes no other arguments.
