@@ -303,9 +303,12 @@ The pipeline re-fetches a three-hour overlap on every run to pick up late
 candle revisions. For candles that were not revised, the upsert leaves core
 unchanged. The overlap is not free. The cost is at most one extra request per
 product and timeframe per run, plus duplicate rows in append-only
-`raw.candles`, three hours of them and one more from re-fetching the watermark
-candle itself. That is four rows per run at 1 hour and 37 at 5 minutes. Three
-hours is a guess at Coinbase's revision window, not a measured bound.
+`raw.candles`, three hours of them and one more from re-fetching the
+watermark candle itself. That is four rows per run at 1 hour and 37 at 5
+minutes. Three hours is a guess at how late Coinbase might correct a candle.
+I checked on 2026-10-10. In 457 successful runs since 2026-07-07, no later
+run had changed a candle in core, so the overlap has not yet caught a
+correction. It stays because it costs so little.
 
 A candle that would break one of core's constraints, such as a low of zero, is
 left in raw and logged, and the rest of the run loads. If it were not left
