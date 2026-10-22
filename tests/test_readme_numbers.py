@@ -1,15 +1,17 @@
-"""The README's diversification numbers match results/metrics.json.
+"""The README's diversification numbers match the committed results/metrics.json.
 
 In this repo the README is the only place those numbers are written in prose,
-and each was typed from the metrics file. A rerun of
-scripts/run_diversification_analysis.py rewrites that file, so these tests fail
-until the README is brought up to date with it, and none of the numbers checked
-here can change in one place without the other.
+and each was typed from the metrics file. These tests read the file as git
+last committed it, so a reader who reruns scripts/run_diversification_analysis.py
+on their own load does not fail the suite, while a commit that updates the
+metrics file without the README does. Outside a git checkout the working file
+is read instead.
 """
 
 from __future__ import annotations
 
 import json
+import subprocess
 
 import pytest
 
@@ -25,10 +27,28 @@ def _readme_text() -> str:
     return " ".join(README_PATH.read_text(encoding="utf-8").split())
 
 
+def _committed_metrics() -> dict:
+    """The metrics file as git last committed it, or the working file when
+    git cannot answer, such as outside a checkout."""
+    relative = METRICS_PATH.relative_to(REPO_ROOT).as_posix()
+    try:
+        committed = subprocess.run(
+            ["git", "show", f"HEAD:{relative}"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        committed = METRICS_PATH.read_text(encoding="utf-8")
+    return json.loads(committed)
+
+
 def _expected_phrases() -> list[str]:
     """Every README phrase that carries a number from metrics.json, built from
     the file in the form the README prints it."""
-    metrics = json.loads(METRICS_PATH.read_text(encoding="utf-8"))
+    metrics = _committed_metrics()
     panel = metrics["panel"]
     correlation = metrics["correlation"]
     diversification = metrics["diversification"]
