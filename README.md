@@ -245,11 +245,11 @@ Coinbase Exchange API (public, no key)
 ```
 
 `raw.candles` is append-only, so a transform bug downstream is recoverable
-without calling the API again. `raw.ingest_runs` is the exception that does get
-updated, because it holds run status and row counts. Core is the layer
-queries trust. Marts are presentation-shaped and rebuilt from core's 1-hour
-series. The finer timeframes feed the export and a few of the queries, never
-the marts.
+without calling the API again. `raw.ingest_runs` is the exception that does
+get updated, because it holds run status and row counts. Core holds the
+deduplicated, constrained candles that the queries read. Marts are
+presentation-shaped and rebuilt from core's 1-hour series. The finer
+timeframes feed the export and a few of the queries, never the marts.
 
 The marts are a dbt project, in `dbt/`. dbt runs the SQL that builds them, in
 dependency order, and then tests what it built. Each mart is one SELECT
@@ -261,10 +261,10 @@ raw and core tables the loader fills. All but one of the warehouse checks are
 dbt tests. A test is either a column rule in a yml file, such as `not_null`,
 or a SELECT under `dbt/tests/` that returns the rows breaking a rule. A test
 passes when it returns nothing. The scripts call dbt for you, and
-`scripts/run_dbt.py` passes any other dbt command through. Two are worth
-knowing. `docs generate` writes a map of how every table depends on every
-other, with a description of every column, under `dbt/target/`. `source
-freshness` checks how old the newest candle is.
+`scripts/run_dbt.py` passes any other dbt command through, such as `docs
+generate`, which writes a map of how every table depends on every other, with
+a description of every column, under `dbt/target/`. `source freshness` checks
+how old the newest candle is.
 
 The warehouse is also built and tested on every push to main, by a GitHub
 Actions job. The job starts a PostgreSQL server, runs `run_setup.py`, loads
@@ -301,14 +301,13 @@ up, and `updated_at` only moves when the data moved.
 
 The pipeline re-fetches a three-hour overlap on every run to pick up late
 candle revisions. For candles that were not revised, the upsert leaves core
-unchanged. The overlap is not free. The cost is at most one extra request per
-product and timeframe per run, plus duplicate rows in append-only
-`raw.candles`, three hours of them and one more from re-fetching the
-watermark candle itself. That is four rows per run at 1 hour and 37 at 5
-minutes. Three hours is a guess at how late Coinbase might correct a candle.
-I checked on 2026-10-10. In 457 successful runs since 2026-07-07, no later
-run had changed a candle in core, so the overlap has not yet caught a
-correction. It stays because it costs so little.
+unchanged. Its cost is at most one extra request per product and timeframe
+per run, plus duplicate rows in append-only `raw.candles`, three hours of
+them and one more from re-fetching the watermark candle itself. That is four
+rows per run at 1 hour and 37 at 5 minutes. Three hours is a guess at how
+late Coinbase might correct a candle. I checked on 2026-10-10. In 457
+successful runs since 2026-07-07, no later run had changed a candle in core,
+so the overlap has not yet caught a correction.
 
 A candle that would break one of core's constraints, such as a low of zero, is
 left in raw and logged, and the rest of the run loads. If it were not left
