@@ -39,26 +39,26 @@ jobs:
   warehouse:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # The image comes from Amazon's public mirror of Docker's official images
-    # rather than from Docker Hub, whose limit on anonymous downloads stopped
-    # this job before its first step on 2026-10-09. It is the same official
-    # postgres image.
-    services:
-      postgres:
-        image: public.ecr.aws/docker/library/postgres:17
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/crypto_warehouse
     steps:
       - uses: actions/checkout@v4
+      # PostgreSQL 17 is installed from PostgreSQL's own package repository
+      # rather than pulled as a container image. Docker Hub (2026-10-09) and
+      # then Amazon's public mirror of it (2026-10-21) both stopped this job
+      # before its first step, because every GitHub runner shares their
+      # limits on anonymous downloads. The runner image's own PostgreSQL 16
+      # cluster is removed first so version 17 takes the default port.
+      - name: Install and start PostgreSQL 17
+        run: |
+          sudo pg_dropcluster --stop 16 main || true
+          sudo apt-get install -y -q postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y -q postgresql-17
+          sudo pg_ctlcluster 17 main start || true
+          pg_lsclusters
+          sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'postgres'"
+          pg_isready -h localhost -p 5432
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
