@@ -1,15 +1,15 @@
 # crypto-sql-warehouse
 
 This is a PostgreSQL warehouse of crypto market data, loaded daily from the
-public Coinbase Exchange API. A set of checks fails when the data is not
-correct. A candle is the open, high, low, close, and volume for one interval
-of time. The warehouse keeps candles for six assets at up to four intervals,
-called timeframes, from 1 minute to 1 hour. The candles land in three schemas
-(named groups of tables), raw, core, and marts, described under How it works.
-The marts are the tables built for analysis. They are built and tested by
-dbt, a tool that runs SQL files against a database in dependency order. A CSV
-export writes stored candles, or the daily figures built from them, to a
-file.
+public Coinbase Exchange API. A set of checks fails when the loaded data
+breaks one of its rules. A candle is the open, high, low, close, and volume
+for one interval of time. The warehouse keeps candles for six assets at up to
+four intervals, called timeframes, from 1 minute to 1 hour. The candles land
+in three schemas (named groups of tables), raw, core, and marts, described
+under How it works. The marts are the tables built for analysis. They are
+built and tested by dbt, a tool that runs SQL files against a database in
+dependency order. A CSV export writes stored candles, or the daily figures
+built from them, to a file.
 
 It was built to learn how a warehouse is designed and kept correct, on market
 data already familiar from the author's own trading research. The CSV export
@@ -206,14 +206,14 @@ such as `docs generate`, which writes a dependency map with every column
 described under `dbt/target/`.
 
 `scripts/scheduled_ingest.cmd` runs daily under Windows Task Scheduler on the
-author's machine. It has fired at 12:10 UTC on 64 days from 2026-08-11 to
-2026-10-21, skipping a pause from 2026-10-06 to 2026-10-08 and five other
-days with no run. The script loads, then runs `run_verify.py`, then dbt's
-freshness check, which warns when the newest candle is more than two days old
-and fails past four. All three append to one log, and the script exits with
-the first failure, so the task history shows it. A day the machine was off is
-made up in full by the next run, because every run resumes from the
-watermark.
+author's machine. It has run at 12:10 UTC on 64 days from 2026-08-11 to
+2026-10-21. It was paused from 2026-10-06 to 2026-10-08, and five other days
+in that span had no run. The script loads, then runs `run_verify.py`, then
+dbt's freshness check, which warns when the newest candle is more than two
+days old and fails past four. All three append to one log, and the script
+exits with the first failure, so the task history shows it. A day the machine
+was off is made up in full by the next run, because every run resumes from
+the watermark.
 
 Every push to main runs two GitHub Actions jobs. One runs the linter, the
 type checker, and the test suite with no database. The other installs
@@ -245,13 +245,13 @@ latest run updated and fails if any of them holds the same values an earlier
 run had already loaded. Each run also re-fetches the three hours before its
 watermark, in case Coinbase corrects a recent candle. On a daily run at 1
 hour or 15 minutes the overlap adds no request, since the day's candles and
-the overlap fit in one. At 5 minutes they come to 325 candles, one more
-request than the 300 cap allows. The overlap adds four duplicate raw rows at
-1 hour (the three hours and the watermark candle itself) and 37 at 5 minutes.
-Three hours is a guess at how late a correction might come. As of 2026-10-10,
-in 457 successful runs since 2026-07-07, one per product and timeframe per
-load, no later run had changed a candle in core, so the overlap has not yet
-caught one.
+the overlap fit in one. At 5 minutes they come to 325 candles, past the
+300-candle cap, so the run makes a second request. The overlap adds four
+duplicate raw rows at 1 hour (the three hours and the watermark candle
+itself) and 37 at 5 minutes. Three hours is a guess at how late a correction
+might come. As of 2026-10-10, in 457 successful runs since 2026-07-07, one
+per product and timeframe per load, no later run had changed a candle in
+core, so the overlap has not yet caught one.
 
 **Gaps are judged against a record of what was asked for.** Coinbase leaves a
 candle out of its answer when nothing traded in that interval and when the
