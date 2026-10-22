@@ -1,10 +1,8 @@
-# Exact versions this project was last verified against. Python 3.11 or 3.12,
-# because numpy 1.26.3 publishes no wheels for 3.13 or later.
+# Exact versions this project was last verified against, on Python 3.11.
 #
 #   pip install -r requirements.txt
 #   python scripts/run_setup.py
 #   python scripts/run_ingest.py
-#   python scripts/run_diversification_analysis.py
 #
 # 2026-08-03: the runtime pins verified against PostgreSQL 17 on Windows, full
 # test suite green with no database and no network. The development pins at
@@ -17,13 +15,6 @@
 psycopg2-binary==2.9.12
 requests==2.34.2
 python-dotenv==1.2.2
-
-# The analysis layer. numpy does the covariance arithmetic behind
-# results/metrics.json and matplotlib draws the chart the README shows. The
-# ingestion pipeline does not touch either, so a load-only install can drop
-# these two lines. scripts/run_diversification_analysis.py needs both.
-numpy==1.26.3
-matplotlib==3.11.1
 
 # The marts and the warehouse checks are a dbt project (dbt/). dbt Core is
 # the open-source command-line tool, and dbt-postgres is its PostgreSQL

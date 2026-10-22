@@ -17,24 +17,6 @@ makes quick calculations on stored prices practical without a fresh download
 from the exchange. The warehouse is published for anyone who wants hourly or
 finer crypto candles in a database or a CSV without writing a loader.
 
-The warehouse was used to measure how much volatility an equal-weight holding
-of its six assets (Bitcoin, Ethereum, Solana, Cardano, Chainlink, and
-Dogecoin) actually removes. Over 1,933 complete trading days from 2021-06-19
-to 2026-10-09, spreading capital equally across all six removes only 12.6
-percent of the volatility of holding the average one. If the six were
-uncorrelated it would remove 58.5 percent. Every pair of the six correlates
-between 0.63 and 0.84, averaging 0.72. Over this window, holding six of these
-was close to holding one. [What the data shows](#what-the-data-shows) gives
-the method and the limits of the result. Loading newer days and rerunning the
-analysis moves these figures.
-
-The three bars of the chart below are the annualized volatility of the
-average single asset, of the equal-weight portfolio, and of that portfolio if
-the six assets were uncorrelated. Annualized volatility is daily volatility
-scaled to a year.
-
-![Bar chart of annualized volatility for the average single asset, the equal-weight portfolio, and that portfolio with zero correlation between the assets](results/figures/diversification.png)
-
 ## Quick start
 
 Requires git, Python 3.11 or 3.12, and a PostgreSQL server to connect to,
@@ -81,12 +63,6 @@ from `.env`.
    python scripts/run_ingest.py
    ```
 
-6. Compute the diversification result and its chart from the loaded data:
-
-   ```
-   python scripts/run_diversification_analysis.py
-   ```
-
 The first `run_ingest.py` run fetches every active product at every active
 timeframe. A product is a Coinbase trading pair such as BTC-USD. The six
 seeded products start out active, meaning a plain run loads them, and of the
@@ -110,21 +86,12 @@ minutes about 350. To load a timeframe once without switching it on, name it:
 minutes, and 1 hour for all six products from 2020 took about two hours on
 2026-10-09.
 
-The default first load is one year, so it gives the analysis a shorter window
-than the published one, which starts 2021-06-19. To load enough history for
-that window, pass a `--backfill-days` value that reaches back past
-2021-06-18, such as 2500, which does for any load before April 2028. The
-analysis reads only the 1-hour series, so the command loads only that. Step 6
-then recomputes the result from 2021-06-19 through the latest complete day
-loaded:
+The default first load is one year. To reach further back, pass the number
+of days with `--backfill-days`:
 
 ```
-python scripts/run_ingest.py --timeframes 1h --backfill-days 2500
+python scripts/run_ingest.py --backfill-days 2500
 ```
-
-`tests/test_readme_numbers.py` holds the numbers in this README to the
-committed `results/metrics.json`, so rerunning step 6 on your own load does
-not fail the suite.
 
 Other entry points, with every argument listed under [Script
 arguments](#script-arguments) at the end:
@@ -327,7 +294,7 @@ A trailing partial day's fraction of a day's volume lowered the baseline the
 volume-anomaly query (Q17 in `sql/04_queries.sql`) compares against. Rolling
 metrics are also NULL until their window is full, so `ma_7d`, `ma_30d`, and
 `volatility_30d_ann` wait for 7, 30, and 30 observations. Before that guard,
-roughly half the published 30-day volatility values were warm-up values. The
+roughly half the mart's 30-day volatility values were warm-up values. The
 first for BTC was 0.2076 against 0.4043 for its first full window.
 
 **Three marts are materialized views, refreshed without blocking a reader.**
@@ -347,55 +314,6 @@ routine cleanup for nothing. Loading 1-minute candles too would add about 19
 million rows, and a year of them is about 1,750 requests per product, so the
 1-minute timeframe is supported but off until someone needs it.
 
-## What the data shows
-
-The question is how much volatility an equal-weight holding of the six assets
-removes, measured against two references: the average volatility of holding a
-single asset, and the volatility the same six would give if they were
-uncorrelated.
-
-`scripts/run_diversification_analysis.py` reads `marts.daily_metrics`. A
-portfolio's volatility is computed from a covariance matrix, which holds each
-asset's variance and how each pair moves together. That matrix has to cover
-one set of dates, because one built pair by pair over different dates
-describes no single portfolio. So the script keeps only the dates on which
-all six assets have a daily return, which leaves 1,933 days from 2021-06-19
-to 2026-10-09. The mart gives no return for an incomplete day or the day
-after one, and one asset's missing return drops that date for all six.
-
-Returns are daily log returns, which add across days. Volatility is their
-sample standard deviation, annualized by the square root of 365 because
-crypto trades every day of the year. The portfolio's variance combines every
-variance and covariance in the matrix, each weighted by the shares of the
-assets involved, with each share one sixth, and its volatility is the square
-root. The uncorrelated case keeps each asset's variance and sets every
-covariance to zero.
-
-The equal-weight portfolio's annualized volatility is 0.714, against 0.817
-for the average single asset. With zero correlation it would be 0.339. So the
-real correlations deliver 21.6 percent of the reduction that zero correlation
-would give, which is the 12.61 percent the six actually remove divided by the
-58.46 percent they would remove if uncorrelated. Bitcoin alone, at 0.529, was
-less volatile than the six together, so over this window spreading into the
-other five raised risk rather than lowering it.
-
-The data limits the result in three ways. All six come from one exchange, so
-a stale or wrong price there enters the correlations as market behavior. All
-six are quoted in US dollars, so the dollar's own moves sit inside every
-correlation. And every asset at some point closed at least 76.7 percent below
-its highest close since 2021-06-18, which the analysis does not separate from
-the rest. If correlations rise in selloffs, the 12.6 percent is more likely
-too high than too low as a guide to the next one.
-
-Equal weight is the simplest allocation to state, not an optimized one.
-Keeping the weights at one sixth every day assumes daily rebalancing, and no
-trading costs are modeled. A single correlation near the 0.72 average has a
-95 percent confidence interval from 0.70 to 0.74 over this many days. Two
-pairs whose correlations differ by less than about 0.04 have overlapping
-intervals, so their order may be sampling noise. Six large coins on one
-exchange are not the crypto market, and the result is about these six over
-these days.
-
 ## Limitations and what comes next
 
 Every price comes from one exchange in one quote currency, so there is no
@@ -404,8 +322,7 @@ a fixed 90 days ending on the latest day that has a return, not a rolling
 series. The column `dollar_volume_approx` multiplies daily volume by the
 daily close rather than a traded average price. Measured against volume times
 `(H+L+C)/3` over the data loaded as of 2026-08-04, the error is -0.04 percent
-on average and ranges from -4.16 to +3.14 percent. The limits of the
-diversification result are stated with it above.
+on average and ranges from -4.16 to +3.14 percent.
 
 Next would be a data-quality report built from `raw.ingest_runs`,
 `raw.fetch_windows`, and the gap query, since the warehouse records every
@@ -422,8 +339,6 @@ scripts/run_export.py         write candles or daily metrics to a CSV file
 scripts/scheduled_ingest.cmd  the Task Scheduler entry point, logs to logs/
 scripts/run_verify.py         the dbt tests, then the timezone check; nonzero exit on failure
 scripts/run_dbt.py            any dbt command, with the connection set from .env
-scripts/run_diversification_analysis.py
-                              compute results/metrics.json and the chart above
 src/crypto_warehouse/         the package the scripts import
 dbt/dbt_project.yml           the dbt project; profiles.yml beside it reads the connection from .env
 dbt/models/marts/             the marts, one dbt model each, with the design rationale in comments
@@ -438,8 +353,7 @@ sql/migrations/               in-place upgrades for a warehouse built earlier
 tests/                        the test suite; all but test_against_postgres.py need no database
 tests/fixtures/               a small loaded warehouse for the GitHub Actions job, and an older schema for the migration test
 .github/workflows/tests.yml   the GitHub Actions jobs: the test suite, and the warehouse against PostgreSQL
-results/                      the diversification metrics and their chart
-requirements.txt              exact pins the reported numbers were produced with
+requirements.txt              exact pins the project was last verified against
 ```
 
 ## Script arguments
@@ -506,10 +420,6 @@ Every argument of every script, mirroring `--help`:
 - `run_export.py --output PATH`, on either export, names the CSV file
   (default: a name built from what the export holds, under `exports/`, which
   git ignores).
-- `run_diversification_analysis.py --metrics PATH` sets the output path for
-  the metrics file (default `results/metrics.json`).
-- `run_diversification_analysis.py --figures DIR` sets the output directory
-  for the chart (default `results/figures`).
 - `run_dbt.py DBT_COMMAND` passes everything after the script's own options
   to dbt as given, with the connection set from `DATABASE_URL`, so
   `run_dbt.py test`, `run_dbt.py run --select daily_ohlcv`, and
