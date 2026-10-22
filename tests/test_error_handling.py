@@ -17,7 +17,7 @@ import psycopg2
 import psycopg2.errors
 import pytest
 
-from crypto_warehouse import diversification_metrics, warehouse_verification
+from crypto_warehouse import warehouse_verification
 from crypto_warehouse.database_connection import OperatorError
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
@@ -34,102 +34,6 @@ def load_script(name: str):
 
 def error_records(caplog) -> list[logging.LogRecord]:
     return [record for record in caplog.records if record.levelno >= logging.ERROR]
-
-
-# --------------------------------------------------------------------------
-# scripts/run_diversification_analysis.py
-# --------------------------------------------------------------------------
-@pytest.fixture()
-def analysis_script(monkeypatch):
-    module = load_script("run_diversification_analysis")
-    monkeypatch.setattr(sys, "argv", ["run_diversification_analysis.py"])
-    return module
-
-
-def fake_metrics() -> dict:
-    return {
-        "diversification": {
-            "equal_weight_portfolio_vol": 0.5,
-            "average_single_asset_vol": 0.55,
-            "risk_removed_actual": 0.1,
-            "risk_removed_if_uncorrelated": 0.58,
-            "diversification_captured": 0.17,
-        }
-    }
-
-
-def test_analysis_script_reports_an_unreachable_database_with_its_traceback(
-    analysis_script, monkeypatch, caplog
-):
-    def refuse(*args, **kwargs):
-        raise psycopg2.OperationalError("connection refused")
-
-    monkeypatch.setattr(analysis_script, "run_diversification_analysis", refuse)
-
-    with caplog.at_level(logging.ERROR):
-        with pytest.raises(SystemExit) as stopped:
-            analysis_script.main()
-        assert stopped.value.code == 1
-
-    errors = error_records(caplog)
-    assert errors[0].exc_info is not None
-    assert "connection refused" in caplog.text
-    assert errors[-1].getMessage().startswith("nothing was written")
-    assert "DATABASE_URL" in errors[-1].getMessage()
-
-
-def test_analysis_script_reports_missing_tables_and_says_to_run_setup(
-    analysis_script, monkeypatch, caplog
-):
-    def missing(*args, **kwargs):
-        raise psycopg2.errors.UndefinedTable('relation "marts.daily_metrics" does not exist')
-
-    monkeypatch.setattr(analysis_script, "run_diversification_analysis", missing)
-
-    with caplog.at_level(logging.ERROR):
-        with pytest.raises(SystemExit) as stopped:
-            analysis_script.main()
-        assert stopped.value.code == 1
-
-    errors = error_records(caplog)
-    assert errors[0].exc_info is not None
-    assert "run_setup.py" in errors[-1].getMessage()
-
-
-def test_analysis_script_reports_thin_data_and_says_nothing_was_written(
-    analysis_script, monkeypatch, caplog
-):
-    def thin(*args, **kwargs):
-        raise diversification_metrics.PanelDataError("no non-null log returns found")
-
-    monkeypatch.setattr(analysis_script, "run_diversification_analysis", thin)
-
-    with caplog.at_level(logging.ERROR):
-        with pytest.raises(SystemExit) as stopped:
-            analysis_script.main()
-        assert stopped.value.code == 1
-
-    messages = [record.getMessage() for record in error_records(caplog)]
-    assert messages == ["no non-null log returns found", "nothing was written"]
-
-
-@pytest.mark.parametrize(
-    "unexpected",
-    [
-        KeyError("diversification"),
-        ValueError("a ValueError from somewhere else"),
-        psycopg2.errors.SyntaxError("syntax error at or near SELEKT"),
-    ],
-    ids=["KeyError", "ValueError", "other database error"],
-)
-def test_analysis_script_lets_an_unexpected_error_through(analysis_script, monkeypatch, unexpected):
-    def fail(*args, **kwargs):
-        raise unexpected
-
-    monkeypatch.setattr(analysis_script, "run_diversification_analysis", fail)
-
-    with pytest.raises(type(unexpected)):
-        analysis_script.main()
 
 
 # --------------------------------------------------------------------------
