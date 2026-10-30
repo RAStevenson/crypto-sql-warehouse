@@ -8,6 +8,7 @@ import re
 
 from crypto_warehouse import database_setup
 from crypto_warehouse.sql_file_runner import (
+    DAILY_TIMEFRAME_MIGRATION_FILE,
     FETCH_WINDOWS_MIGRATION_FILE,
     SCHEMA_FILE,
     TIMEFRAMES_MIGRATION_FILE,
@@ -200,14 +201,30 @@ def test_the_migration_creates_the_same_tables_and_index_as_the_schema():
     schema_sql = sql_path(SCHEMA_FILE).read_text(encoding="utf-8")
     migration_sql = sql_path(TIMEFRAMES_MIGRATION_FILE).read_text(encoding="utf-8")
 
+    # Migration 001 builds the schema as it stood before migration 003 added
+    # the 1-day timeframe, so the comparison takes that addition back out.
+    older_schema_sql = schema_sql.replace("3600, 86400)", "3600)").replace(
+        "3600, true),\n    ('1d', 86400, true);", "3600, true);"
+    )
     for table in ("core.timeframes", "core.ohlcv"):
-        assert create_statement(migration_sql, table) == create_statement(schema_sql, table)
+        assert create_statement(migration_sql, table) == create_statement(older_schema_sql, table)
     index = "CREATE INDEX ohlcv_granularity_ts_idx ON core.ohlcv (granularity_seconds, ts_utc);"
     assert index in schema_sql
     assert index in migration_sql
-    seed = schema_sql[schema_sql.index("INSERT INTO core.timeframes") :]
+    seed = older_schema_sql[older_schema_sql.index("INSERT INTO core.timeframes") :]
     seed = seed[: seed.index(";") + 1]
     assert seed in migration_sql
+
+
+def test_the_daily_timeframe_migration_ends_at_the_schema_check_and_seed():
+    schema_sql = sql_path(SCHEMA_FILE).read_text(encoding="utf-8")
+    migration_sql = sql_path(DAILY_TIMEFRAME_MIGRATION_FILE).read_text(encoding="utf-8")
+
+    check = "CHECK (granularity_seconds IN (60, 300, 900, 3600, 86400))"
+    assert check in schema_sql
+    assert check in migration_sql
+    assert "('1d', 86400, true)" in schema_sql
+    assert "('1d', 86400, true)" in migration_sql
 
 
 def test_the_migration_keeps_every_candle_and_labels_it_hourly():

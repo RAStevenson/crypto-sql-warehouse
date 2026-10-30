@@ -83,7 +83,7 @@ def main() -> None:
     prices_parser.add_argument(
         "--timeframe",
         default="1h",
-        help="Timeframe code: 1m, 5m, 15m, or 1h (default 1h)",
+        help="Timeframe code: 1m, 5m, 15m, 1h, or 1d (default 1h)",
     )
     add_common_arguments(prices_parser)
     daily_parser = exports.add_parser(

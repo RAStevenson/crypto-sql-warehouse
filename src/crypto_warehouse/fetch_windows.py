@@ -5,9 +5,10 @@ of the pipeline where an off-by-one silently drops or duplicates a bucket and
 the only cheap way to be sure is to test every start offset exhaustively.
 
 Every function takes the timeframe as granularity_seconds, the bucket width
-the Coinbase candles endpoint takes. The warehouse supports widths that
-divide an hour into whole minutes (60, 300, 900, 3600), so a bucket always
-starts on a whole minute and every hour boundary is also a bucket boundary.
+the Coinbase candles endpoint takes. The warehouse supports the widths in
+SUPPORTED_GRANULARITY_SECONDS. Each divides a day into whole minutes, so a
+bucket always starts on a whole minute and every UTC midnight is also a
+bucket boundary.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from collections.abc import Collection, Iterator
 from datetime import UTC, datetime, timedelta
 
 HOURLY_GRANULARITY_SECONDS = 3600
+SUPPORTED_GRANULARITY_SECONDS = (60, 300, 900, HOURLY_GRANULARITY_SECONDS, 86400)
 
 # The candles endpoint refuses a request whose start/end span more than this
 # many buckets. Both bounds are inclusive, so 300 buckets is a span of 299
@@ -24,15 +26,12 @@ MAX_CANDLES_PER_REQUEST = 300
 
 
 def bucket_width(granularity_seconds: int) -> timedelta:
-    """Return one bucket as a timedelta, raising ValueError for a width that
-    does not divide an hour into whole minutes."""
-    if (
-        granularity_seconds < 60
-        or granularity_seconds % 60
-        or HOURLY_GRANULARITY_SECONDS % granularity_seconds
-    ):
+    """Return one bucket as a timedelta, raising ValueError for a width the
+    warehouse does not support."""
+    if granularity_seconds not in SUPPORTED_GRANULARITY_SECONDS:
         raise ValueError(
-            f"granularity_seconds must divide an hour into whole minutes, got {granularity_seconds}"
+            f"granularity_seconds must be one of {SUPPORTED_GRANULARITY_SECONDS}, "
+            f"got {granularity_seconds}"
         )
     return timedelta(seconds=granularity_seconds)
 
@@ -42,14 +41,16 @@ def floor_to_bucket(moment: datetime, granularity_seconds: int) -> datetime:
 
     A naive datetime is truncated as given, with no conversion.
     """
-    bucket_minutes = bucket_width(granularity_seconds) // timedelta(minutes=1)
+    bucket_width(granularity_seconds)
     # Converted before truncating because psycopg2 returns timestamps in the
     # session's zone, and flooring 10:45+05:30 to the hour in place gives
     # 10:00+05:30, which is 04:30 UTC and not a bucket.
     if moment.tzinfo is not None:
         moment = moment.astimezone(UTC)
+    seconds_into_day = moment.hour * 3600 + moment.minute * 60 + moment.second
+    bucket_start = seconds_into_day - seconds_into_day % granularity_seconds
     return moment.replace(
-        minute=moment.minute - moment.minute % bucket_minutes, second=0, microsecond=0
+        hour=bucket_start // 3600, minute=bucket_start % 3600 // 60, second=0, microsecond=0
     )
 
 

@@ -97,7 +97,7 @@ def parse_candles(payload: object, product_code: str) -> list[Candle]:
 
     Anything other than a list of rows with at least 6 readable elements
     raises CandlePayloadError naming the product, and an empty list is valid
-    because an hour with no trades is absent from the response.
+    because a bucket with no trades is absent from the response.
     """
     if isinstance(payload, dict):
         message = payload.get("message", payload)

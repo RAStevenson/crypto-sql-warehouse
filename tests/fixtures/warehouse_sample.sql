@@ -3,8 +3,9 @@
 --
 -- It holds two products (BTC-USD, ETH-USD), with 45 days of 1-hour candles
 -- and two days of 15-minute candles, loaded by scripts/run_ingest.py on
--- 2026-10-09. Each timeframe had its own first load, and then an ordinary
--- load ran both. The 45 days are there so the daily marts hold returns,
+-- 2026-10-09, and a 1-day series the last block of this file builds from the
+-- hourly rows. Each of the loaded timeframes had its own first load, and then
+-- an ordinary load ran both. The 45 days are there so the daily marts hold returns,
 -- 30-day averages, and 30-day volatility, which the dbt tests on those
 -- columns check. The two days this file held at first left every one of them
 -- NULL, and those tests passed with nothing to check. Raw holds the
@@ -16,8 +17,8 @@
 -- core.assets and core.timeframes are not repeated here; the two UPDATEs
 -- below set the work list the data was loaded under. The identity columns
 -- keep their original values, so the sequences are moved past them at the
--- end. Generated with pg_dump --data-only --inserts --rows-per-insert=50;
--- the SET lines and comments pg_dump adds were removed.
+-- end. All but the last block was generated with pg_dump --data-only --inserts
+-- --rows-per-insert=50; the SET lines and comments pg_dump adds were removed.
 --
 --   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/fixtures/warehouse_sample.sql
 
@@ -5294,3 +5295,49 @@ SELECT pg_catalog.setval('raw.candles_raw_id_seq', 2584, true);
 SELECT pg_catalog.setval('raw.fetch_windows_fetch_id_seq', 14, true);
 
 SELECT pg_catalog.setval('raw.ingest_runs_run_id_seq', 8, true);
+
+-- The 1-day series, which every warehouse has active. The dump predates it, so
+-- these rows are built here, as one first load per product, from the hourly
+-- rows of the complete days 2026-08-26 to 2026-10-08. Each 1-day candle
+-- therefore equals its rollup, and Q21 finds no difference at that pair. The
+-- identity columns come from the sequences set above.
+INSERT INTO raw.ingest_runs
+    (product_code, granularity_seconds, window_start, window_end,
+     rows_fetched, rows_upserted, status, started_at, finished_at)
+VALUES
+    ('BTC-USD', 86400, '2026-08-26 00:00:00+00', '2026-10-09 00:00:00+00', 44, 44, 'succeeded',
+     '2026-10-09 21:52:50+00', '2026-10-09 21:52:51+00'),
+    ('ETH-USD', 86400, '2026-08-26 00:00:00+00', '2026-10-09 00:00:00+00', 44, 44, 'succeeded',
+     '2026-10-09 21:52:51+00', '2026-10-09 21:52:52+00');
+
+INSERT INTO raw.fetch_windows (run_id, window_start, window_end, candles_received)
+SELECT run_id, '2026-08-26 00:00:00+00', '2026-10-08 00:00:00+00', 44
+FROM raw.ingest_runs
+WHERE granularity_seconds = 86400;
+
+INSERT INTO raw.candles
+    (run_id, product_code, bucket_start, open, high, low, close, volume)
+SELECT
+    r.run_id,
+    r.product_code,
+    date_bin('1 day', o.ts_utc, TIMESTAMPTZ '2000-01-01 00:00:00+00'),
+    (array_agg(o.open  ORDER BY o.ts_utc ASC ))[1],
+    max(o.high),
+    min(o.low),
+    (array_agg(o.close ORDER BY o.ts_utc DESC))[1],
+    sum(o.volume)
+FROM raw.ingest_runs r
+JOIN core.assets a ON a.product_code = r.product_code
+JOIN core.ohlcv o ON o.asset_id = a.asset_id AND o.granularity_seconds = 3600
+WHERE r.granularity_seconds = 86400
+  AND o.ts_utc >= '2026-08-26 00:00:00+00'
+  AND o.ts_utc <  '2026-10-09 00:00:00+00'
+GROUP BY r.run_id, r.product_code, 3;
+
+INSERT INTO core.ohlcv
+    (asset_id, granularity_seconds, ts_utc, open, high, low, close, volume, source_run_id)
+SELECT a.asset_id, 86400, c.bucket_start, c.open, c.high, c.low, c.close, c.volume, c.run_id
+FROM raw.candles c
+JOIN raw.ingest_runs r ON r.run_id = c.run_id
+JOIN core.assets a ON a.product_code = c.product_code
+WHERE r.granularity_seconds = 86400;

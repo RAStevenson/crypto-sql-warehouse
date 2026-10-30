@@ -1,12 +1,13 @@
 -- No active series has stopped loading.
 --
 -- An active series (active asset at an active timeframe) whose newest
--- candle trails the newest candle of any active series by more than two
--- days has stopped loading. Two days, because a daily schedule plus a load
+-- candle closed more than two days before the newest close of any active
+-- series has stopped loading. Two days, because a daily schedule plus a load
 -- of a single product can legitimately leave the others a day behind. The
--- series end within an hour of each other, since each load stops at the
--- last closed bucket of its timeframe. The gap test cannot see this case,
--- because each series' expected buckets run only to its own last candle.
+-- comparison uses each candle's close, not its start, because each load stops
+-- at the last closed bucket of its timeframe, so a healthy 1-day candle starts
+-- nearly two days before the newest hourly one. The gap test cannot see this
+-- case, because each series' expected buckets run only to its own last candle.
 --
 -- An active series that holds no candle at all is reported as well, such as
 -- an asset registered with run_add_asset.py --no-backfill and not yet
@@ -20,12 +21,16 @@ WITH active_series AS (
     WHERE a.is_active AND t.is_active
 ),
 newest AS (
-    SELECT s.product_code, s.timeframe_code, max(o.ts_utc) AS last_ts
+    SELECT
+        s.product_code,
+        s.timeframe_code,
+        max(o.ts_utc) AS last_ts,
+        max(o.ts_utc) + make_interval(secs => s.granularity_seconds) AS last_close
     FROM active_series s
     LEFT JOIN {{ source('core', 'ohlcv') }} o
       ON o.asset_id = s.asset_id
      AND o.granularity_seconds = s.granularity_seconds
-    GROUP BY s.product_code, s.timeframe_code
+    GROUP BY s.product_code, s.timeframe_code, s.granularity_seconds
 )
 SELECT
     product_code,
@@ -33,7 +38,7 @@ SELECT
     last_ts AS newest_candle,
     'more than 48 hours behind the newest active series' AS reason
 FROM newest
-WHERE last_ts < (SELECT max(last_ts) FROM newest) - interval '48 hours'
+WHERE last_close < (SELECT max(last_close) FROM newest) - interval '48 hours'
 UNION ALL
 SELECT
     product_code,

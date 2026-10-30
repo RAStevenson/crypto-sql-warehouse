@@ -9,8 +9,8 @@ A load ends with a mart refresh through dbt (`dbt run`) unless
 --no-refresh-marts says otherwise, so the default run leaves nothing stale.
 
 Each (product, timeframe) series resumes from its MAX(ts_utc) in core.ohlcv
-minus a few hours of deliberate overlap, so running it twice in a row is a
-no-op in core. One series failing does not stop the others; the exit code is
+minus a deliberate overlap of a few hours, one whole candle at 1 day, so running
+it twice in a row is a no-op in core. One series failing does not stop the others; the exit code is
 nonzero if anything failed.
 """
 
@@ -74,7 +74,7 @@ def main() -> None:
         default=None,
         metavar="TIMEFRAME",
         help=(
-            "Timeframe codes to load, from 1m, 5m, 15m and 1h (default: every "
+            "Timeframe codes to load, from 1m, 5m, 15m, 1h and 1d (default: every "
             "timeframe with is_active in core.timeframes). Naming a timeframe "
             "explicitly loads it even if is_active is false; the override is logged."
         ),

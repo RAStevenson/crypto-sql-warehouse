@@ -4,12 +4,12 @@ This is a PostgreSQL warehouse of crypto market data, loaded daily from the
 public Coinbase Exchange API. A set of checks fails when the loaded data
 breaks one of its rules. A candle is the open, high, low, close, and volume
 for one interval of time. The warehouse keeps candles for six assets at up to
-four intervals, called timeframes, from 1 minute to 1 hour. The candles land
-in three schemas (named groups of tables), raw, core, and marts, described
-under the section "How it works". The marts are the tables built for
-analysis. They are built and tested by dbt, a tool that runs SQL files against
-a database in dependency order. A CSV export writes stored candles, or the
-daily figures built from them, to a file.
+five intervals, called timeframes, from 1 minute to 1 day. The candles land in
+three schemas (named groups of tables), raw, core, and marts, described under
+the section "How it works". The marts are the tables built for analysis. They
+are built and tested by dbt, a tool that runs SQL files against a database in
+dependency order. A CSV export writes stored candles, or the daily figures
+built from them, to a file.
 
 The CSV export makes quick calculations on stored prices practical without a
 fresh download from the exchange. The warehouse is published for anyone who
@@ -63,15 +63,15 @@ the connection from `.env`.
    ```
 
 The first `run_ingest.py` run fetches every active product at every active
-timeframe. A product is a Coinbase trading pair such as BTC-USD. `run_setup.py`
-adds six products, all active, and four timeframes, of which only 1 hour is
-active. A run with no options therefore loads 1-hour candles for those six
-products. The API caps a request at 300 candles, so a year of hourly candles
-is about 30 requests per product. The first run for all six took about 70
-seconds on 2026-10-09, mart refresh included. Later runs resume from the last
-loaded candle of each product and timeframe, called the watermark, and need
-one request per product per day at 1 hour. The loader refreshes the marts
-when it finishes.
+timeframe. A product is a Coinbase trading pair such as BTC-USD.
+`run_setup.py` adds six products, all active, and five timeframes, of which 1
+hour and 1 day are active. A run with no options therefore loads 1-hour and
+1-day candles for those six products. The API caps a request at 300 candles,
+so a year of hourly candles is about 30 requests per product. The first run
+for all six took about 70 seconds on 2026-10-30, mart refresh included. Later
+runs resume from the last loaded candle of each product and timeframe, called
+the watermark, and need one request per product per day at each of those two
+timeframes. The loader refreshes the marts when it finishes.
 
 To keep finer candles too, switch their timeframe on and the next run
 backfills it:
@@ -137,7 +137,7 @@ Coinbase Exchange API (public, no key)
 +-------------------+
 | core              |  typed, deduplicated, constrained facts
 |  core.assets      |
-|  core.timeframes  |  1m, 5m, 15m, 1h, each switched on or off
+|  core.timeframes  |  1m, 5m, 15m, 1h, 1d, each switched on or off
 |  core.ohlcv       |  PK (asset_id, granularity_seconds, ts_utc), OHLC CHECKs
 +-------------------+
         |
@@ -153,13 +153,13 @@ Coinbase Exchange API (public, no key)
 
 Raw keeps every candle as it arrived and never updates a candle, so a bug
 downstream is recoverable without calling the API again. Core holds one row
-per candle, keyed by asset, timeframe, and start time, under row-level
-checks: the high is the highest of the four prices, the low is the lowest and
-above zero, and volume is not negative. The marts are rebuilt from core's
-1-hour series. The finer timeframes feed the export and a few of the queries.
-The loader's own record is two tables in raw: `ingest_runs`, one row per
-product and timeframe per load with its status and row counts, and
-`fetch_windows`, one row per request with how many candles came back.
+per candle, keyed by asset, timeframe, and start time, under row-level checks:
+the high is the highest of the four prices, the low is the lowest and above
+zero, and volume is not negative. The marts are rebuilt from core's 1-hour
+series. The other timeframes feed the export and a few of the queries. The
+loader's own record is two tables in raw: `ingest_runs`, one row per product
+and timeframe per load with its status and row counts, and `fetch_windows`,
+one row per request with how many candles came back.
 
 The marts are a dbt project in `dbt/`. Each mart is one SELECT statement in
 its own file under `dbt/models/marts/`, and each names the tables it reads,
@@ -187,10 +187,11 @@ type checker, and the test suite with no database. The other installs
 PostgreSQL 17 and runs `run_setup.py`, then loads the fixture
 `tests/fixtures/warehouse_sample.sql` in place of a call to Coinbase. That
 fixture is a dump of 45 days of hourly and two days of 15-minute candles for
-two products. The job then refreshes the marts and runs `run_verify.py` and
-both exports. Forty-five days is enough for the marts to fill in returns and
-30-day averages, so a mart that breaks a rule on those columns fails there
-before it reaches a loaded warehouse.
+two products, with 1-day candles built from the hourly ones. The job then
+refreshes the marts and runs `run_verify.py` and both exports. Forty-five
+days is enough for the marts to fill in returns and 30-day averages, so a
+mart that breaks a rule on those columns fails there before it reaches a
+loaded warehouse.
 
 In a database of its own, the same job then runs the loader's own tests in
 `tests/test_against_postgres.py`. Those tests load candles through the
@@ -210,15 +211,16 @@ when the values are unchanged, so replaying any window changes nothing unless
 the source changed. A dbt test holds the loader to this. It takes the rows the
 latest run updated and fails if any of them holds the same values an earlier
 run had already loaded. Each run also re-fetches the three hours before its
-watermark, in case Coinbase corrects a recent candle. On a daily run at 1
-hour or 15 minutes the overlap adds no request, since the day's candles and
-the overlap fit in one. At 5 minutes they come to 325 candles, past the
-300-candle cap, so the run makes a second request. The overlap adds four
-duplicate raw rows at 1 hour (the three hours and the watermark candle
-itself) and 37 at 5 minutes. Three hours is a guess at how late a correction
-might come. As of 2026-10-10, in 457 successful runs since 2026-07-07, one
-per product and timeframe per load, no later run had changed a candle in
-core, so the overlap has not yet caught one.
+watermark, in case Coinbase corrects a recent candle. On a daily run at 1 hour
+or 15 minutes the overlap adds no request, since the day's candles and the
+overlap fit in one. At 5 minutes they come to 325 candles, past the 300-candle
+cap, so the run makes a second request. The overlap adds four duplicate raw
+rows at 1 hour (the three hours and the watermark candle itself) and 37 at 5
+minutes. At 1 day the re-fetch begins at the midnight before the watermark,
+which adds two. Three hours is a guess at how late a correction might come. As
+of 2026-10-10, in 457 successful runs since 2026-07-07, one per product and
+timeframe per load, no later run had changed a candle in core, so the overlap
+has not yet caught one.
 
 **Gaps are judged against a record of what was asked for.** Coinbase leaves a
 candle out of its answer when nothing traded in that interval and when the
@@ -269,20 +271,40 @@ Coinbase leaves out any candle with no trades, and nothing in the answer says
 whether a missing minute was quiet or unrecorded. A 15-minute bar built from
 1-minute candles would treat every hole as quiet without saying so. The price
 of fetching separately is that the timeframes can disagree, and on Coinbase
-they do. Q21 in `sql/04_queries.sql` combines each finer series into hours
-and sets it against the 1-hour bars. Over the data loaded back to 2020, the
-5-minute series disagrees with the hourly bar on price in about one hour in
-five from April to December 2023. Both finer series disagree in stretches of
-2024 and 2025, mostly in the smaller coins. A one-off comparison on
-2026-10-09 put the differences at a median of 0.015 percent on the open and
-at most 1.8 percent on any price. Fetching sample hours again that day
-returned exactly the stored values, so the disagreement is in Coinbase's
-data.
+they do. Q21 in `sql/04_queries.sql` rolls each timeframe up to every coarser
+one it divides evenly and compares the result with the stored bars. It counts
+only complete buckets, those with every finer bar present. Over the data
+loaded back to 2020, prices differ in under 0.1 percent of those buckets
+outside 2023 to 2025. Comparing the pairs shows which series is the odd one in
+those years. In 2023 the 5-minute series differs from the 15-minute in 18.3
+percent of buckets and from the 1-hour in 18.9 percent. The 15-minute and
+1-hour differ from each other in 0.08 percent, so the 5-minute series is the
+odd one. In 2024 the 5-minute and 15-minute differ from each other in 0.02
+percent of buckets and from the 1-hour in 1.8 to 1.9 percent, which points at
+the 1-hour series. In 2025 those three timeframes all differ from one another,
+in 1.1 to 4.5 percent of buckets. The 1-minute series is off by default, so
+Q21 skips it until it is loaded. A one-off comparison on 2026-10-09 put the
+differences at a median of 0.015 percent on the open and at most 1.8 percent
+on any price. Fetching sample hours again that day returned exactly the stored
+values, so the disagreement is in Coinbase's data.
 
-**Daily bars are rolled up from hourly ones in SQL.** Both grains, hourly and
-daily, then come from one source, so a disagreement between them can only be
-a rollup bug, which is findable, and never a source discrepancy, which is
-not.
+**Daily bars are rolled up from the hourly series and compared with Coinbase's
+1-day candles.** Coinbase's 1-day candle cannot show a short day. On
+2026-05-08 Coinbase has 19 hourly candles for each of the six products, and
+its 1-day candle equals the rollup of those 19 and looks like any other day.
+The rollup counts its hours and marks a day with fewer than 24 as incomplete,
+so the marts use it and the 1-day series is stored for comparison. Building a
+bar from finer ones can hide a missing candle, which is why each timeframe is
+fetched on its own. Daily bars are the exception because missing hours are
+rare and the count shows them. As of 2026-10-30, under 0.1 percent of the
+hours across the 13,470 daily bars are missing. The same count on finer
+candles would mark too many bars incomplete. In the week of 2026-10-01, about
+a fifth of DOGE's 5-minute bars were missing at least one 1-minute candle. Q21
+compares the rollup with the 1-day series, and they match exactly on open,
+high, low, and close on 13,416 of the 13,431 complete daily bars from
+2020-01-02 to 2026-10-28. The other 15 are ADA, DOGE, and LINK bars, 14 of
+them in August 2024, when the comparison above points at the 1-hour series,
+and they differ by at most 0.69 percent on any price.
 
 **Incomplete days keep their row and lose their derived columns.** A day with
 fewer than 24 hourly candles appears in `marts.daily_ohlcv` with its candle
@@ -381,7 +403,7 @@ Every argument of every script, mirroring `--help`:
   product explicitly loads it even when `is_active` is false, and the override
   is logged.
 - `run_ingest.py --timeframes TIMEFRAME [TIMEFRAME ...]` names the timeframes
-  to load, from 1m, 5m, 15m, and 1h (default: every timeframe with
+  to load, from 1m, 5m, 15m, 1h, and 1d (default: every timeframe with
   `is_active` in `core.timeframes`). Naming a timeframe explicitly loads it
   even when `is_active` is false, and the override is logged.
 - `run_ingest.py --recheck-gaps` replaces the usual load, which runs forward
@@ -408,7 +430,7 @@ Every argument of every script, mirroring `--help`:
   time in UTC, open, high, low, close, and volume in units of the coin on
   each row.
 - `run_export.py prices --timeframe TIMEFRAME` picks that timeframe from 1m,
-  5m, 15m, and 1h (default 1h).
+  5m, 15m, 1h, and 1d (default 1h).
 - `run_export.py daily` writes the rows of `marts.tableau_daily_extract`, one
   per asset per day, with daily prices, returns, moving averages, 30-day
   volatility, and drawdown.

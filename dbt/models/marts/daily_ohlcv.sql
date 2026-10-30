@@ -52,12 +52,14 @@
 --
 -- This model
 -- ----------
--- Daily bars are derived from hourly rather than fetched separately so both
--- granularities come from one source; a discrepancy between them can then
--- only be a rollup bug, never a data-source mismatch. Every mart builds
--- from the 1-hour series alone. The finer timeframes in core.ohlcv are for
--- intraday questions and the CSV export, and Q21 in sql/04_queries.sql
--- compares them with the hourly bars.
+-- Daily bars are rolled up from the 1-hour series rather than read from
+-- the stored 1-day candles, because a rollup counts its hours and a fetched
+-- bar does not. On an outage day such as 2026-05-08, Coinbase's 1-day candle
+-- equals this rollup of 19 hours and looks like any other day, so the
+-- hours_present column here is the only record of the short day. Every mart
+-- builds from the 1-hour series alone. The other timeframes in core.ohlcv are
+-- for intraday questions, the CSV export, and Q21 in sql/04_queries.sql, which
+-- compares every timeframe with each coarser one, 1-hour with 1-day included.
 --
 -- open/close use ordered array_agg: aggregates cannot say "first row by
 -- time" directly, and this idiom avoids a second pass with window functions.
