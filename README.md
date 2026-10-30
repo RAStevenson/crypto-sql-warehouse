@@ -7,9 +7,9 @@ for one interval of time. The warehouse keeps candles for six assets at up to
 five intervals, called timeframes, from 1 minute to 1 day. The candles land in
 three schemas (named groups of tables), raw, core, and marts, described under
 the section "How it works". The marts are the tables built for analysis. They
-are built and tested by DBT, a tool that runs SQL files against a database in
-dependency order. A CSV export writes stored candles, or the daily figures
-built from them, to a file.
+are built and tested by DBT (data build tool), which runs SQL files against a
+database in dependency order. A CSV export writes stored candles, or the daily
+figures built from them, to a file.
 
 The CSV export makes quick calculations on stored prices practical without a
 fresh download from the exchange. The warehouse is published for anyone who
@@ -18,13 +18,13 @@ loader.
 
 ## Quick start
 
-Requires git, Python 3.11 or 3.12, and a PostgreSQL server to connect to,
-such as one from the postgresql.org installer or a Docker container. Verified
-on PostgreSQL 17.10 and Python 3.11. `run_setup.py` creates the database if
-it is missing, so the connecting user needs permission to create one, or the
-database is created first by hand. DBT (data build tool) installs with the
-other dependencies and needs no setup of its own, because the scripts hand it
-the connection from `.env`.
+Requires git, Python 3.11 or 3.12, and a PostgreSQL server to connect to, such
+as one from the postgresql.org installer or a Docker container. Verified on
+PostgreSQL 17.10 and Python 3.11. `run_setup.py` creates the database if it is
+missing, so the connecting user needs permission to create one, or the
+database is created first by hand. DBT installs with the other dependencies
+and needs no setup of its own, because the scripts hand it the connection from
+`.env`.
 
 1. Clone the repository and enter it:
 
