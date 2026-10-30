@@ -47,8 +47,12 @@ and needs no setup of its own, because the scripts hand it the connection from
    pip install -r requirements.txt
    ```
 
-4. Copy the example config (on Mac or Linux, `cp .env.example .env`), then
-   set `DATABASE_URL` in `.env` to your server:
+4. Copy the example config, then set `DATABASE_URL` in `.env` to your
+   server. The example URL names user postgres with password postgres on port
+   5432 of this machine, which is the postgresql.org installer's setup apart
+   from the password chosen at install. The scripts read the URL form only,
+   not the `host=... dbname=...` keyword form. On Windows the copy is (on Mac
+   or Linux, `cp .env.example .env`):
 
    ```
    copy .env.example .env
@@ -73,8 +77,8 @@ runs resume from the last loaded candle of each product and timeframe, called
 the watermark, and need one request per product per day at each of those two
 timeframes. The loader refreshes the marts when it finishes.
 
-To keep finer candles too, switch their timeframe on and the next run
-backfills it:
+To keep finer candles too, switch their timeframe on with any SQL client, such
+as psql or pgAdmin, and the next run backfills it:
 
 ```
 UPDATE core.timeframes SET is_active = true WHERE timeframe_code = '15m';
@@ -101,7 +105,7 @@ python scripts/run_verify.py                    # the DBT tests and the timezone
 python scripts/run_dbt.py run                   # refresh the marts only
 python scripts/run_dbt.py docs generate         # DBT's dependency map and column docs, under dbt/target/
 python scripts/run_add_asset.py XRP-USD --name Ripple   # register and backfill a new asset
-python scripts/run_export.py prices --products BTC-USD --timeframe 15m --start 2024-01-01
+python scripts/run_export.py prices --products BTC-USD --timeframe 1d   # every stored 1-day candle for BTC-USD
 python scripts/run_export.py daily --start 2025-01-01   # daily metrics, every active asset
 python scripts/run_setup.py --migrate           # bring a warehouse built on an older schema up to date
 pytest                                          # the test suite
@@ -276,16 +280,14 @@ one it divides evenly and compares the result with the stored candles, one
 coarser interval, or bucket, at a time. It counts only complete buckets, those
 with every finer candle present. Over the data loaded back to 2020, prices
 differ in under 0.1 percent of those buckets outside 2023 to 2025. Comparing
-the pairs shows which series disagree with the others. In 2023 the 5-minute
-series differs from the 15-minute in 18.3 percent of buckets and from the
-1-hour in 18.9 percent. The 15-minute, 1-hour, and 1-day series agree with one
-another in all but 0.08 percent, so the 5-minute series is the one that
-disagrees. In 2024 the series split in two. The 5-minute and 15-minute differ
-from each other in 0.02 percent of buckets, the 1-hour and 1-day differ on
-0.68 percent of days, and each of the first pair differs from each of the
-second in 1.25 to 1.86 percent. In 2025 the 1-hour and 1-day agree on every
-complete day, and the disagreement sits in the 5-minute and 15-minute, which
-differ from them in 3.3 to 4.9 percent of buckets. The warehouse holds no
+the pairs shows which series disagree with the others. Q21 prints the counts
+by pair and year. In 2023 the 5-minute series is the one that disagrees. It
+differs from the 15-minute, 1-hour, and 1-day series in 18 to 20 percent of
+buckets, and those three agree with one another in all but 0.08 percent. In
+2024 the series split in two, the 5-minute with the 15-minute and the 1-hour
+with the 1-day, and the two groups differ in 1.3 to 1.9 percent of buckets. In
+2025 the 1-hour and 1-day agree on every complete day, and the 5-minute and
+15-minute differ from them in 3.3 to 4.9 percent. The warehouse holds no
 1-minute candles, so Q21 skips that timeframe until they are loaded. A one-off
 comparison on 2026-10-09 put the differences at a median of 0.015 percent on
 the open and at most 1.8 percent on any price. Fetching sample hours again
@@ -298,18 +300,16 @@ from a day. On 2026-05-08 Coinbase has 19 hourly candles for each of the six
 products, and its 1-day candle equals the rollup of those 19 and looks like
 any other day. The rollup counts its hours and marks a day with fewer than 24
 as incomplete, so the marts use it and the 1-day series is stored for
-comparison. A bar built here from finer candles treats a missing candle as a
-quiet one unless the candles are counted, which is why the other timeframes
-are fetched on their own. Daily bars are the exception because missing hours
-are rare and the count shows them. As of 2026-10-30, under 0.1 percent of the
-hours across the 13,476 daily bars are missing. The same count on finer
-candles would mark too many bars incomplete. In the week of 2026-10-01, about
-a fifth of DOGE's 5-minute bars were missing at least one 1-minute candle. Q21
-compares the rollup with the 1-day series, and they match exactly on open,
-high, low, and close on 13,422 of the 13,437 complete daily bars from
-2020-01-02 to 2026-10-29. The other 15 are ADA, DOGE, and LINK bars, 14 of
-them in August 2024, and they differ by at most 0.69 percent on any price. The
-cause is unknown.
+comparison. Rolling daily bars up is the one place a bar is built from finer
+candles, because missing hours are rare and the count shows them. As of
+2026-10-30, under 0.1 percent of the hours across the 13,476 daily bars are
+missing. The same count on finer candles would mark too many bars incomplete.
+In the week of 2026-10-01, about a fifth of DOGE's 5-minute bars were missing
+at least one 1-minute candle. Q21 compares the rollup with the 1-day series,
+and they match exactly on open, high, low, and close on 13,422 of the 13,437
+complete daily bars from 2020-01-02 to 2026-10-29. The other 15 are ADA, DOGE,
+and LINK bars, 14 of them in August 2024, and they differ by at most 0.69
+percent on any price. The cause is unknown.
 
 **Incomplete days keep their row and lose their derived columns.** A day with
 fewer than 24 hourly candles appears in `marts.daily_ohlcv` with its candle
@@ -402,7 +402,9 @@ Every argument of every script, mirroring `--help`:
   (default 365). For a product and timeframe with no rows yet it is the depth
   of the first load. Passing it explicitly also makes it a floor on an
   existing resume point, so `--backfill-days 365` against a 90-day warehouse
-  extends it back to a year. Omitting it leaves the run purely incremental.
+  extends it back to a year. The run then re-fetches everything from that
+  floor forward, the 90 stored days included. Omitting it leaves the run
+  purely incremental.
 - `run_ingest.py --products PRODUCT [PRODUCT ...]` names the product codes to
   load (default: every asset with `is_active` in `core.assets`). Naming a
   product explicitly loads it even when `is_active` is false, and the override
