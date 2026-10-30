@@ -189,13 +189,11 @@ watermark.
 Every push to main runs two GitHub Actions jobs. One runs the linter, the
 type checker, and the test suite with no database. The other installs
 PostgreSQL 17 and runs `run_setup.py`, then loads the fixture
-`tests/fixtures/warehouse_sample.sql` in place of a call to Coinbase. That
-fixture is a dump of 45 days of hourly and two days of 15-minute candles for
-two products, with 1-day candles built from the hourly ones. The job then
-refreshes the marts and runs `run_verify.py` and both exports. Forty-five
-days is enough for the marts to fill in returns and 30-day averages, so a
-mart that breaks a rule on those columns fails there before it reaches a
-loaded warehouse.
+`tests/fixtures/warehouse_sample.sql` in place of a call to Coinbase. For
+two products, the fixture holds 45 days of hourly candles, two days of
+15-minute candles, and 1-day candles built from the hourly ones. Forty-five
+days fills the marts' 30-day columns. The job then refreshes the marts and
+runs `run_verify.py` and both exports.
 
 In a database of its own, the same job then runs the loader's own tests in
 `tests/test_against_postgres.py`. Those tests load candles through the
@@ -277,18 +275,12 @@ whether a missing minute was quiet or unrecorded. A 15-minute bar built from
 of fetching separately is that the timeframes can disagree, and on Coinbase
 they do. Q21 in `sql/04_queries.sql` rolls each timeframe up to every coarser
 one it divides evenly and compares the result with the stored candles, one
-coarser interval, or bucket, at a time. It counts only complete buckets, those
-with every finer candle present. Over the data loaded back to 2020, prices
-differ in under 0.1 percent of those buckets outside 2023 to 2025. Comparing
-the pairs shows which series disagree with the others. Q21 prints the counts
-by pair and year. In 2023 the 5-minute series is the one that disagrees. It
-differs from the 15-minute, 1-hour, and 1-day series in 18 to 20 percent of
-buckets, and those three agree with one another in all but 0.08 percent. In
-2024 the series split in two, the 5-minute with the 15-minute and the 1-hour
-with the 1-day, and the two groups differ in 1.3 to 1.9 percent of buckets. In
-2025 the 1-hour and 1-day agree on every complete day, and the 5-minute and
-15-minute differ from them in 3.3 to 4.9 percent. The warehouse holds no
-1-minute candles, so Q21 skips that timeframe until they are loaded. A one-off
+coarser interval, or bucket, at a time. It counts only the buckets where every
+finer candle is present. Over the data loaded back to 2020, prices differ in
+under 0.1 percent of those buckets outside 2023 to 2025. In those years the
+series split, in up to 20 percent of buckets. The 5-minute series differs from
+the rest in 2023, and the 5-minute and 15-minute from the 1-hour and 1-day in
+2024 and 2025. Q21's comment gives the figures by pair and year. A one-off
 comparison on 2026-10-09 put the differences at a median of 0.015 percent on
 the open and at most 1.8 percent on any price. Fetching sample hours again
 that day returned exactly the stored values, so the disagreement is in
@@ -303,17 +295,15 @@ as incomplete, so the marts use it and the 1-day series is stored for
 comparison. Rolling daily bars up is the one place a bar is built from finer
 candles, because missing hours are rare and the count shows them. As of
 2026-10-30, under 0.1 percent of the hours across the 13,476 daily bars are
-missing. The same count on finer candles would mark too many bars incomplete.
-In the week of 2026-10-01, about a fifth of DOGE's 5-minute bars were missing
-at least one 1-minute candle. Q21 compares the rollup with the 1-day series,
-and they match exactly on open, high, low, and close on 13,422 of the 13,437
-complete daily bars from 2020-01-02 to 2026-10-29. The other 15 are ADA, DOGE,
-and LINK bars, 14 of them in August 2024, and they differ by at most 0.69
-percent on any price. Fetching those days again on 2026-10-30 returned the
-stored values, hourly and 1-day alike, so the difference is in Coinbase's
-data. In 14 of the 15 it is confined to the open or the close, the prices of
-the first and last trades of the day, and in the other to the high and the
-close.
+missing. In one sampled week, about a fifth of DOGE's 5-minute bars lacked at
+least one 1-minute candle, so the same count there would mark too many bars
+incomplete. Q21 compares the rollup with the 1-day series, and they match
+exactly on open, high, low, and close on 13,422 of the 13,437 complete daily
+bars from 2020-01-02 to 2026-10-29. The other 15 differ by at most 0.69
+percent on any price, 14 of them in August 2024. Fetched again on 2026-10-30,
+their hourly and 1-day candles came back as stored, so the difference is in
+Coinbase's data. In 14 of the 15 it is confined to the open or the close, the
+prices of the first and last trades of the day.
 
 **Incomplete days keep their row and lose their derived columns.** A day with
 fewer than 24 hourly candles appears in `marts.daily_ohlcv` with its candle

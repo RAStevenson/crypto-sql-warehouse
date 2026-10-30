@@ -671,8 +671,9 @@ WHERE (core.ohlcv.open, core.ohlcv.high, core.ohlcv.low,
 -- Measured on the load back to 2020, prices differ in under 0.1 percent of
 -- complete buckets outside 2023 to 2025. Comparing the pairs shows which series
 -- disagree with the others. In 2023 the 5-minute series differs from the
--- 15-minute in 18.3 percent of buckets and from the 1-hour in 18.9 percent, and
--- the 15-minute, 1-hour, and 1-day series agree in all but 0.08 percent. In 2024
+-- 15-minute in 18.3 percent of buckets, from the 1-hour in 18.9, and from the
+-- 1-day in 19.9, and the 15-minute, 1-hour, and 1-day series agree in all but
+-- 0.08 percent. In 2024
 -- the series split in two. The 5-minute and 15-minute differ from each other in
 -- 0.02 percent of buckets, the 1-hour and 1-day differ on 0.68 percent of days,
 -- and each of the first pair differs from each of the second in 1.25 to 1.86
