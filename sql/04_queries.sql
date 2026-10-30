@@ -680,7 +680,7 @@ WHERE (core.ohlcv.open, core.ohlcv.high, core.ohlcv.low,
 -- 1-day candles fall in August of that year. In 2025 the 1-hour and 1-day agree
 -- on every complete day, and the 5-minute and 15-minute differ from them in 3.3
 -- to 4.9 percent of buckets. The smaller coins carry most of it (June 2023 at 5
--- minutes against 1 hour: LINK 425 of 720 hours, BTC 2).
+-- minutes against 1 hour: LINK 424 of 719 complete hours, BTC 2 of 720).
 --
 -- A one-off comparison on 2026-10-09 put the size of the differences at a
 -- median of 0.015 percent on the open and at most 1.8 percent on any price.

@@ -9,8 +9,10 @@
 # built some other way fails here before any mart is trusted.
 #
 # The freshness block on core.ohlcv is the rule `dbt source freshness`
-# applies. It measures how long ago the newest candle started, from ts_utc.
-# A daily load leaves that under a day. Past two days dbt warns, which means
+# applies. It measures how long ago the newest 1-hour candle started, from
+# ts_utc, because the marts read that series and any other series in the table
+# would hide it stopping. A daily load leaves that under a day. Past two days
+# dbt warns, which means
 # the last two loads brought in nothing new, and past four it reports an
 # error. The scheduled job runs the check after each load. The GitHub Actions
 # job does not, because the fixture it loads is as old as the day it was
@@ -145,6 +147,7 @@ sources:
         freshness:
           warn_after: {count: 48, period: hour}
           error_after: {count: 96, period: hour}
+          filter: granularity_seconds = 3600
         columns:
           - name: asset_id
             description: The asset, from core.assets.

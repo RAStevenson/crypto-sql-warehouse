@@ -508,5 +508,76 @@ def test_q21_compares_every_timeframe_with_each_coarser_one_it_divides(warehouse
     # The hourly load starts at 12:00 on the 7th, so that day is partial. Of the
     # two complete days, the 8th now equals its rollup and the 9th does not,
     # because the fake exchange prices each timeframe differently.
-    compared, complete, prices_differ, *_ = counts[("1h", "1d")]
+    compared, complete, prices_differ, volume_less, volume_more = counts[("1h", "1d")]
     assert (compared, complete, prices_differ) == (3, 2, 1)
+    # The volume counts leave the partial 7th out as well.
+    assert volume_less + volume_more == 1
+    assert counts[("15m", "1d")][:2] == [3, 2]
+    compared, complete, *_ = counts[("15m", "1h")]
+    assert compared == complete > 0
+
+    with warehouse.cursor() as cursor:
+        cursor.execute("SET TIME ZONE 'America/Chicago'")
+    warehouse.commit()
+    assert run_timeframe_comparison(warehouse) == counts
+
+
+def test_the_stopped_loading_test_allows_a_day_behind_and_fails_a_stopped_day_series(
+    warehouse, test_database_url
+):
+    coinbase = FakeCoinbase()
+    query(
+        warehouse,
+        "UPDATE core.assets SET is_active = (product_code = 'BTC-USD') RETURNING asset_id",
+    )
+    for timeframe in (HOUR, DAY):
+        candle_ingest.load_product(warehouse, coinbase, "BTC-USD", timeframe, 8)
+    stopped_loading_test = ["test", "--select", "active_series_stopped_loading"]
+
+    # The newest 1-day candle closes on the 8th, 60 hours before the newest
+    # hourly close at noon on the 10th. That is a daily run missed and one
+    # candle width, which the test allows.
+    keep_daily_candles_through(warehouse, datetime(2026, 3, 7, tzinfo=UTC))
+    assert dbt_project.run_dbt(stopped_loading_test, test_database_url) == 0
+
+    # One day more and the series has stopped.
+    keep_daily_candles_through(warehouse, datetime(2026, 3, 6, tzinfo=UTC))
+    assert dbt_project.run_dbt(stopped_loading_test, test_database_url) != 0
+
+
+def keep_daily_candles_through(connection, last_kept: datetime) -> None:
+    """Delete the 1-day candles newer than last_kept."""
+    query(
+        connection,
+        "DELETE FROM core.ohlcv WHERE granularity_seconds = 86400 AND ts_utc > %s RETURNING ts_utc",
+        (last_kept,),
+    )
+
+
+def test_the_daily_timeframe_migration_applies_alone_and_keeps_the_candles(
+    warehouse, test_database_url
+):
+    candle_ingest.load_product(warehouse, FakeCoinbase(), "BTC-USD", HOUR, 1)
+    hourly_before = core_rows(warehouse, "BTC-USD", 3600)
+    with warehouse.cursor() as cursor:
+        cursor.execute("DELETE FROM core.timeframes WHERE granularity_seconds = 86400")
+        cursor.execute(
+            "ALTER TABLE core.timeframes DROP CONSTRAINT timeframes_granularity_seconds_check"
+        )
+        cursor.execute(
+            "ALTER TABLE core.timeframes ADD CONSTRAINT timeframes_granularity_seconds_check "
+            "CHECK (granularity_seconds IN (60, 300, 900, 3600))"
+        )
+    warehouse.commit()
+    assert database_setup.pending_migrations(warehouse) == [
+        sql_file_runner.DAILY_TIMEFRAME_MIGRATION_FILE
+    ]
+    warehouse.commit()
+
+    assert database_setup.run_migrations(test_database_url) == 0
+
+    assert database_setup.pending_migrations(warehouse) == []
+    assert core_rows(warehouse, "BTC-USD", 3600) == hourly_before
+    assert query(
+        warehouse, "SELECT is_active FROM core.timeframes WHERE granularity_seconds = 86400"
+    ) == [(True,)]

@@ -1,19 +1,21 @@
 -- No active series has stopped loading.
 --
--- An active series (active asset at an active timeframe) whose newest
--- candle closed more than two days before the newest close of any active
--- series has stopped loading. Two days, because a daily schedule plus a load
--- of a single product can legitimately leave the others a day behind. The
--- comparison uses each candle's close, not its start, because each load stops
--- at the last closed bucket of its timeframe, so a healthy 1-day candle starts
--- nearly two days before the newest hourly one. The gap test cannot see this
--- case, because each series' expected buckets run only to its own last candle.
+-- An active series (active asset at an active timeframe) has stopped loading
+-- when its newest candle closed more than two days, plus one candle width,
+-- before the newest close of any active series. Two days, because a daily
+-- schedule plus a load of a single product can legitimately leave the others a
+-- day behind. The candle width, because each load stops at the last closed
+-- bucket of its timeframe, so a 1-day series can close up to a day before an
+-- hourly one loaded at the same moment. The gap test cannot see this case,
+-- because each series' expected buckets run only to its own last candle.
 --
 -- An active series that holds no candle at all is reported as well, such as
 -- an asset registered with run_add_asset.py --no-backfill and not yet
 -- loaded, or a timeframe switched on and never loaded. The query builds its
 -- list of series from the active assets and timeframes, not from
--- core.ohlcv, so an empty series cannot drop out of the comparison.
+-- core.ohlcv, so an empty series cannot drop out of the comparison. A product
+-- listed today is reported too until its first UTC day closes, because it has
+-- no 1-day candle to load yet.
 WITH active_series AS (
     SELECT a.asset_id, a.product_code, t.granularity_seconds, t.timeframe_code
     FROM {{ source('core', 'assets') }} a
@@ -25,7 +27,8 @@ newest AS (
         s.product_code,
         s.timeframe_code,
         max(o.ts_utc) AS last_ts,
-        max(o.ts_utc) + make_interval(secs => s.granularity_seconds) AS last_close
+        max(o.ts_utc) + make_interval(secs => s.granularity_seconds) AS last_close,
+        make_interval(secs => s.granularity_seconds) AS candle_width
     FROM active_series s
     LEFT JOIN {{ source('core', 'ohlcv') }} o
       ON o.asset_id = s.asset_id
@@ -38,7 +41,7 @@ SELECT
     last_ts AS newest_candle,
     'more than 48 hours behind the newest active series' AS reason
 FROM newest
-WHERE last_close < (SELECT max(last_close) FROM newest) - interval '48 hours'
+WHERE last_close + candle_width < (SELECT max(last_close) FROM newest) - interval '48 hours'
 UNION ALL
 SELECT
     product_code,
