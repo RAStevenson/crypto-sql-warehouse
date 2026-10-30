@@ -69,19 +69,21 @@ CREATE TABLE core.assets (
 -- timeframe.
 --
 -- granularity_seconds is the value the Coinbase candles endpoint takes and
--- the key the fact table carries. The CHECK lists the four the warehouse
--- supports. Coinbase also serves 6-hour and 1-day candles; daily bars are
--- built from hourly ones in the marts instead (see dbt/models/marts/), and
--- nothing here uses 6 hours.
+-- the key the fact table carries. The CHECK lists the five the warehouse
+-- supports. Coinbase also serves 6-hour candles, which nothing here uses.
 --
--- Only 1h is active in the seed, so a fresh clone's first load stays
+-- The marts build daily bars from the 1-hour series (see dbt/models/marts/).
+-- The stored 1-day candles exist to be compared with those bars, in Q21 of
+-- sql/04_queries.sql.
+--
+-- Only 1h and 1d are active in the seed, so a fresh clone's first load stays
 -- small. Activating another timeframe is one statement:
 --   UPDATE core.timeframes SET is_active = true WHERE timeframe_code = '15m';
 -- -----------------------------------------------------------------------------
 CREATE TABLE core.timeframes (
     timeframe_code      text PRIMARY KEY,              -- '15m'
     granularity_seconds integer NOT NULL UNIQUE
-                        CHECK (granularity_seconds IN (60, 300, 900, 3600)),
+                        CHECK (granularity_seconds IN (60, 300, 900, 3600, 86400)),
     is_active           boolean NOT NULL DEFAULT false
 );
 
@@ -90,7 +92,8 @@ VALUES
     ('1m',    60, false),
     ('5m',   300, false),
     ('15m',  900, false),
-    ('1h',  3600, true);
+    ('1h',  3600, true),
+    ('1d', 86400, true);
 
 -- -----------------------------------------------------------------------------
 -- raw.ingest_runs: one row per product and timeframe per run, covering every

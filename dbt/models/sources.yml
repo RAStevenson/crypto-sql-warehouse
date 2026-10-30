@@ -58,7 +58,7 @@ sources:
           - name: granularity_seconds
             description: The timeframe the run loaded, as the candle width in seconds.
           - name: window_start
-            description: Where the run started fetching. For a daily load this is three hours before the newest candle already loaded, or, for a series with no candles yet, the hour 365 days back. With --backfill-days N, N takes the place of 365, and a series that has candles starts at the hour N days back if that is earlier. For a --recheck-gaps run it is the first gap.
+            description: Where the run started fetching. For a daily load this is three hours before the newest candle already loaded, or, for a series with no candles yet, the hour 365 days back. With --backfill-days N, N takes the place of 365, and a series that has candles starts at the hour N days back if that is earlier. A 1-day series floors each of these to the UTC midnight before. For a --recheck-gaps run it is the first gap.
           - name: window_end
             description: The bucket the run stopped before. For a daily or backfill load it is the bucket still forming when the run started, and for a --recheck-gaps run it is the bucket after the last gap.
           - name: rows_fetched
@@ -126,19 +126,19 @@ sources:
           - name: added_at
             description: When the asset was registered.
       - name: timeframes
-        description: The four candle widths the warehouse supports, each switched on or off.
+        description: The five candle widths the warehouse supports, each switched on or off.
         columns:
           - name: timeframe_code
-            description: The short name, 1m, 5m, 15m, or 1h.
+            description: The short name, 1m, 5m, 15m, 1h, or 1d.
           - name: granularity_seconds
             description: The candle width in seconds, the value Coinbase takes and the fact table carries.
             data_tests:
               - accepted_values:
                   arguments:
-                    values: [60, 300, 900, 3600]
+                    values: [60, 300, 900, 3600, 86400]
                     quote: false
           - name: is_active
-            description: True while the loader should load this timeframe for every active asset. Only 1h starts out true.
+            description: True while the loader should load this timeframe for every active asset. Only 1h and 1d start out true.
       - name: ohlcv
         description: One row per asset per timeframe per bucket, UTC. The marts read only the 1-hour rows.
         loaded_at_field: ts_utc

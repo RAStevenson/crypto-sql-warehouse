@@ -44,6 +44,7 @@ pytestmark = pytest.mark.skipif(
 FIXED_NOW = datetime(2026, 3, 10, 12, 30, tzinfo=UTC)
 HOUR = Timeframe("1h", 3600)
 FIFTEEN_MINUTES = Timeframe("15m", 900)
+DAY = Timeframe("1d", 86400)
 OLD_SCHEMA_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "schema_before_timeframes.sql"
 
 
@@ -354,6 +355,7 @@ def test_migrations_bring_a_pre_timeframes_warehouse_up_to_date_and_keep_its_can
     assert database_setup.pending_migrations(warehouse) == [
         sql_file_runner.TIMEFRAMES_MIGRATION_FILE,
         sql_file_runner.FETCH_WINDOWS_MIGRATION_FILE,
+        sql_file_runner.DAILY_TIMEFRAME_MIGRATION_FILE,
     ]
     warehouse.commit()
 
@@ -366,6 +368,9 @@ def test_migrations_bring_a_pre_timeframes_warehouse_up_to_date_and_keep_its_can
         datetime(2026, 3, 1, 1, tzinfo=UTC),
     ]
     assert query(warehouse, "SELECT to_regclass('core.ohlcv_hourly') IS NULL") == [(True,)]
+    assert query(
+        warehouse, "SELECT is_active FROM core.timeframes WHERE timeframe_code = '1d'"
+    ) == [(True,)]
     assert query(warehouse, "SELECT count(*) FROM marts.daily_ohlcv") == [(1,)]
     assert database_setup.run_migrations(test_database_url) == 0
 
@@ -389,8 +394,9 @@ def test_loaded_candles_pass_every_dbt_test_and_a_day_after_a_short_day_has_no_r
         "RETURNING asset_id",
     )
     for product_code in ("BTC-USD", "ETH-USD"):
-        candle_ingest.load_product(warehouse, coinbase, product_code, HOUR, 8)
-        candle_ingest.load_product(warehouse, coinbase, product_code, HOUR, 8)
+        for timeframe in (HOUR, DAY):
+            candle_ingest.load_product(warehouse, coinbase, product_code, timeframe, 8)
+            candle_ingest.load_product(warehouse, coinbase, product_code, timeframe, 8)
 
     assert dbt_project.run_dbt(["run"], test_database_url) == 0
     assert dbt_project.run_dbt(["test"], test_database_url) == 0
@@ -421,3 +427,86 @@ def test_loaded_candles_pass_every_dbt_test_and_a_day_after_a_short_day_has_no_r
         )
     )
     assert eth_returns[short_date + timedelta(days=1)] is not None
+
+
+# --------------------------------------------------------------------------
+# The 1-day timeframe and the timeframe comparison
+# --------------------------------------------------------------------------
+def test_a_day_series_loads_whole_utc_days_and_stops_before_the_day_still_forming(warehouse):
+    coinbase = FakeCoinbase()
+
+    candle_ingest.load_product(warehouse, coinbase, "BTC-USD", DAY, 3)
+
+    assert sorted(core_rows(warehouse, "BTC-USD", 86400)) == [
+        datetime(2026, 3, 7, tzinfo=UTC),
+        datetime(2026, 3, 8, tzinfo=UTC),
+        datetime(2026, 3, 9, tzinfo=UTC),
+    ]
+    assert unrecorded_gaps(warehouse, "BTC-USD", 86400) == []
+
+    coinbase.requested_windows.clear()
+    candle_ingest.load_product(warehouse, coinbase, "BTC-USD", DAY, 3)
+
+    # The overlap of three hours floors to the midnight before the newest
+    # candle, so a repeat load asks for the last two days again and no more.
+    assert coinbase.requested_windows == [
+        (
+            "BTC-USD",
+            86400,
+            datetime(2026, 3, 8, tzinfo=UTC),
+            datetime(2026, 3, 9, tzinfo=UTC),
+        )
+    ]
+
+
+def run_timeframe_comparison(connection) -> dict:
+    """Run Q21 and map (finer, coarser) to its summed counts."""
+    queries = (REPO_ROOT / "sql" / "04_queries.sql").read_text(encoding="utf-8")
+    rows = query(connection, queries[queries.index("-- Q21 ") :])
+    counts: dict = {}
+    for finer, coarser, _year, *columns in rows:
+        totals = counts.setdefault((finer, coarser), [0] * len(columns))
+        counts[(finer, coarser)] = [
+            total + column for total, column in zip(totals, columns, strict=True)
+        ]
+    return counts
+
+
+def test_q21_compares_every_timeframe_with_each_coarser_one_it_divides(warehouse):
+    coinbase = FakeCoinbase()
+    for timeframe in (FIFTEEN_MINUTES, HOUR, DAY):
+        candle_ingest.load_product(warehouse, coinbase, "BTC-USD", timeframe, 3)
+    query(
+        warehouse,
+        """
+        WITH rollup AS (
+            SELECT asset_id,
+                   date_bin('1 day', ts_utc, TIMESTAMPTZ '2000-01-01 00:00:00+00') AS day,
+                   (array_agg(open ORDER BY ts_utc ASC))[1] AS open,
+                   max(high) AS high,
+                   min(low) AS low,
+                   (array_agg(close ORDER BY ts_utc DESC))[1] AS close,
+                   sum(volume) AS volume
+            FROM core.ohlcv
+            WHERE granularity_seconds = 3600
+            GROUP BY asset_id, day
+        )
+        UPDATE core.ohlcv o
+        SET open = r.open, high = r.high, low = r.low, close = r.close, volume = r.volume
+        FROM rollup r
+        WHERE o.asset_id = r.asset_id
+          AND o.granularity_seconds = 86400
+          AND o.ts_utc = r.day
+          AND o.ts_utc = '2026-03-08 00:00:00+00'
+        RETURNING o.ts_utc
+        """,
+    )
+
+    counts = run_timeframe_comparison(warehouse)
+
+    assert set(counts) == {("15m", "1h"), ("15m", "1d"), ("1h", "1d")}
+    # The hourly load starts at 12:00 on the 7th, so that day is partial. Of the
+    # two complete days, the 8th now equals its rollup and the 9th does not,
+    # because the fake exchange prices each timeframe differently.
+    compared, complete, prices_differ, *_ = counts[("1h", "1d")]
+    assert (compared, complete, prices_differ) == (3, 2, 1)

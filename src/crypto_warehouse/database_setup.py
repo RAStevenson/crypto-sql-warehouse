@@ -97,6 +97,17 @@ def needs_fetch_windows_migration(connection) -> bool:
         return bool(cursor.fetchone()[0])
 
 
+def needs_daily_timeframe_migration(connection) -> bool:
+    """Return True if core.timeframes has no 1-day row, which migration 003
+    adds. A warehouse still waiting on migration 001 needs it too, because
+    that migration seeds only the four older timeframes."""
+    if needs_timeframes_migration(connection):
+        return True
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT count(*) = 0 FROM core.timeframes WHERE granularity_seconds = 86400")
+        return bool(cursor.fetchone()[0])
+
+
 def pending_migrations(connection) -> list[str]:
     """Return the migration files in sql/migrations/ this warehouse still
     needs, in the order they must run."""
@@ -105,6 +116,8 @@ def pending_migrations(connection) -> list[str]:
         pending.append(sql_file_runner.TIMEFRAMES_MIGRATION_FILE)
     if needs_fetch_windows_migration(connection):
         pending.append(sql_file_runner.FETCH_WINDOWS_MIGRATION_FILE)
+    if needs_daily_timeframe_migration(connection):
+        pending.append(sql_file_runner.DAILY_TIMEFRAME_MIGRATION_FILE)
     return pending
 
 
@@ -171,6 +184,12 @@ def run_migrations(database_url: str) -> int:
             "runs loaded before raw.fetch_windows existed have no windows on record, so "
             "the dbt test gaps_without_a_recorded_request fails on their gaps until "
             "scripts/run_ingest.py --recheck-gaps runs"
+        )
+    if sql_file_runner.DAILY_TIMEFRAME_MIGRATION_FILE in pending:
+        logger.info(
+            "the 1-day timeframe is active and holds no candles, so the dbt test "
+            "active_series_stopped_loading fails until a load has run; "
+            "scripts/run_ingest.py --timeframes 1d --backfill-days N sets how far back"
         )
     return 0
 

@@ -9,6 +9,7 @@ import pytest
 from crypto_warehouse.fetch_windows import (
     HOURLY_GRANULARITY_SECONDS,
     MAX_CANDLES_PER_REQUEST,
+    SUPPORTED_GRANULARITY_SECONDS,
     bucket_count,
     floor_to_bucket,
     iter_windows,
@@ -18,8 +19,9 @@ from crypto_warehouse.fetch_windows import (
 )
 
 ONE_HOUR = timedelta(hours=1)
-BASE_HOUR = datetime(2026, 3, 14, 7, tzinfo=UTC)
-SUPPORTED_GRANULARITIES = [60, 300, 900, 3600]
+# UTC midnight, which is a bucket boundary at every supported timeframe.
+BASE_HOUR = datetime(2026, 3, 14, tzinfo=UTC)
+SUPPORTED_GRANULARITIES = list(SUPPORTED_GRANULARITY_SECONDS)
 
 # A session time zone with a half-hour offset, the case where flooring in
 # place and flooring in UTC give different instants.
@@ -156,7 +158,7 @@ def test_iter_windows_rejects_a_nonsense_cap():
 
 @pytest.mark.parametrize("granularity_seconds", [0, 30, 90, 420, 7200, 21600])
 def test_an_unsupported_granularity_is_rejected(granularity_seconds):
-    with pytest.raises(ValueError, match="divide an hour"):
+    with pytest.raises(ValueError, match="must be one of"):
         floor_to_bucket(BASE_HOUR, granularity_seconds)
 
 
@@ -181,6 +183,13 @@ def test_floor_to_bucket_truncates_to_the_bucket_start(granularity_seconds, expe
     assert floor_to_bucket(moment, granularity_seconds) == datetime(
         2026, 10, 3, 13, expected_minute, tzinfo=UTC
     )
+
+
+def test_floor_to_bucket_truncates_a_day_to_utc_midnight_from_any_session_zone():
+    # 02:00+05:30 on the 4th is 20:30 UTC on the 3rd, so the day is the 3rd.
+    moment = datetime(2026, 10, 4, 2, 0, tzinfo=HALF_HOUR_ZONE)
+
+    assert floor_to_bucket(moment, 86400) == datetime(2026, 10, 3, tzinfo=UTC)
 
 
 def test_iter_windows_from_a_half_hour_offset_start_tiles_on_the_utc_hour():

@@ -13,7 +13,7 @@
 -- the bug that made this necessary.
 --
 -- Timeframe note: core.ohlcv holds one series per asset per timeframe (1h
--- always, plus whichever of 1m, 5m and 15m core.timeframes has active).
+-- and 1d, plus whichever of 1m, 5m and 15m core.timeframes has active).
 -- Each series covers the same trades, so a query over core.ohlcv picks one
 -- timeframe with granularity_seconds. Summing volume across timeframes
 -- would count every trade once per series. The queries below use the 1-hour
@@ -33,8 +33,9 @@
 -- Technique: DISTINCT ON, Postgres's top-1-per-group. ORDER BY must lead
 -- with the DISTINCT ON columns; the trailing sort key decides which row of
 -- each group is kept, here the newest. ts_utc is unique within an (asset,
--- timeframe) series, so no tie is possible. The finer series run later than
--- the hourly one, because a load stops at the last closed bucket of each.
+-- timeframe) series, so no tie is possible. Each series ends at its own last
+-- closed bucket, so the finer series run later than the hourly one and the
+-- 1-day series earlier.
 SELECT DISTINCT ON (a.symbol, t.granularity_seconds)
     a.symbol,
     t.timeframe_code,
@@ -653,60 +654,93 @@ WHERE (core.ohlcv.open, core.ohlcv.high, core.ohlcv.low,
 
 -- Q21 --------------------------------------------------------------------
 -- How often do Coinbase's own timeframes disagree with each other?
--- Technique: aggregate one series up to the grain of another and join the
--- two. Each finer series is combined into hours (first open, highest high,
--- lowest low, last close, summed volume) and set against the stored 1-hour
--- bar for the same asset and hour. Only hours present in both series are
--- compared, and the first and last hour of a finer series can be partial.
+-- Technique: roll one series up to the grain of another and join the two.
+-- pairs lists every timeframe with each coarser one it divides evenly, so
+-- the query covers whatever series are loaded without naming any. Each finer
+-- series is combined into the coarser buckets (first open, highest high,
+-- lowest low, last close, summed volume). date_bin's origin is a UTC midnight,
+-- so the buckets line up with the coarser series in any session time zone.
 --
--- This started as a verify check that failed on any price difference. It
--- could not stay one, because the disagreement is in the source. Measured
--- 2026-10-09 over the load from 2020: prices agree in nearly every hour of
--- 2020 to 2022 and of 2026, but the 5-minute series disagrees with the
--- hourly bar in about one hour in five from April to December 2023, and both
--- the 5-minute and 15-minute series disagree in stretches of August and
--- September 2024 and of January to May 2025. The smaller coins carry most of
--- it (June 2023 at 5 minutes: LINK 425 of 720 hours, BTC 2). This query
--- counts the hours. A one-off comparison the same day put the size of the
--- differences at a median of 0.015 percent on the open and at most 1.8
--- percent on any price. Fetching sample hours again returned exactly the stored
--- values at every timeframe, so the stored data matches what Coinbase
--- serves and the disagreement is Coinbase's. A check that failed on it would
--- fail on every warehouse and could never be fixed by the operator.
+-- A bucket is compared when both series hold it, and it is complete when the
+-- finer series holds every one of its bars. The price and volume counts cover
+-- complete buckets only, because a partial bucket can differ for reasons that
+-- have nothing to do with the source, such as a day whose hourly history
+-- starts partway through. Coinbase leaves out any candle with no trades, so
+-- the finer the series, the fewer of its buckets are complete.
 --
--- Volume differs in the same stretches, in both directions, and elsewhere
--- in a few dozen hours a year, except in 2026, where the 5-minute bars carry
--- more volume than the hourly bar in about one hour in fifty. One hour also
--- exists in only one series: on 2023-03-04 at 17:00 Coinbase has an hourly
--- BTC bar but no 5-minute or 15-minute bars.
-WITH fine AS (
+-- Measured on the load back to 2020, prices differ in under 0.1 percent of
+-- complete buckets outside 2023 to 2025. Comparing the pairs shows which
+-- series is the odd one. In 2023 the 5-minute series differs from the 15-minute
+-- in 18.3 percent of buckets and from the 1-hour in 18.9 percent, while those
+-- two differ from each other in 0.08 percent. In 2024 the 5-minute and 15-minute
+-- differ from each other in 0.02 percent and from the 1-hour in 1.8 to 1.9
+-- percent, which points at the 1-hour series. Fourteen of the 15 complete daily
+-- bars that differ from Coinbase's 1-day candles fall in August of that year.
+-- In 2025 those three timeframes all differ from one another, in 1.1 to 4.5
+-- percent of buckets. The smaller coins carry most of it (June 2023 at 5 minutes
+-- against 1 hour: LINK 425 of 720 hours, BTC 2).
+--
+-- A one-off comparison on 2026-10-09 put the size of the differences at a
+-- median of 0.015 percent on the open and at most 1.8 percent on any price.
+-- Fetching sample hours again returned exactly the stored values at every
+-- timeframe, so the stored data matches what Coinbase serves and the
+-- disagreement is Coinbase's. This started as a verify check that failed on any
+-- price difference. It could not stay one, because a check that failed on it
+-- would fail on every warehouse and could never be fixed by the operator.
+--
+-- Volume differs in the same stretches, in both directions, and elsewhere in a
+-- few dozen buckets a year, except in 2026, where the 5-minute bars carry more
+-- volume than the hourly bar in about one hour in forty. One hour also exists in
+-- only one series: on 2023-03-04 at 17:00 Coinbase has an hourly BTC bar but no
+-- 5-minute or 15-minute bars. The marts do not read the 1-day series. Its pair
+-- with the 1-hour series compares the bars the marts roll up with Coinbase's own.
+WITH pairs AS (
     SELECT
-        asset_id,
-        granularity_seconds,
-        date_trunc('hour', ts_utc AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS hour_utc,
-        (array_agg(open  ORDER BY ts_utc ASC ))[1]  AS open,
-        max(high)                                   AS high,
-        min(low)                                    AS low,
-        (array_agg(close ORDER BY ts_utc DESC))[1]  AS close,
-        sum(volume)                                 AS volume
-    FROM core.ohlcv
-    WHERE granularity_seconds < 3600
-    GROUP BY asset_id, granularity_seconds, date_trunc('hour', ts_utc AT TIME ZONE 'UTC')
+        f.timeframe_code      AS finer_timeframe,
+        f.granularity_seconds AS finer_seconds,
+        c.timeframe_code      AS coarser_timeframe,
+        c.granularity_seconds AS coarser_seconds
+    FROM core.timeframes f
+    JOIN core.timeframes c
+      ON c.granularity_seconds > f.granularity_seconds
+     AND c.granularity_seconds % f.granularity_seconds = 0
+),
+rolled_up AS (
+    SELECT
+        p.finer_timeframe,
+        p.finer_seconds,
+        p.coarser_timeframe,
+        p.coarser_seconds,
+        o.asset_id,
+        date_bin(make_interval(secs => p.coarser_seconds), o.ts_utc,
+                 TIMESTAMPTZ '2000-01-01 00:00:00+00')          AS bucket,
+        (array_agg(o.open  ORDER BY o.ts_utc ASC ))[1]          AS open,
+        max(o.high)                                             AS high,
+        min(o.low)                                              AS low,
+        (array_agg(o.close ORDER BY o.ts_utc DESC))[1]          AS close,
+        sum(o.volume)                                           AS volume,
+        count(*) = p.coarser_seconds / p.finer_seconds          AS is_complete
+    FROM pairs p
+    JOIN core.ohlcv o ON o.granularity_seconds = p.finer_seconds
+    GROUP BY p.finer_timeframe, p.finer_seconds, p.coarser_timeframe, p.coarser_seconds,
+             o.asset_id, bucket
 )
 SELECT
-    t.timeframe_code,
-    extract(year FROM f.hour_utc AT TIME ZONE 'UTC')::int              AS year,
-    count(*)                                                           AS hours_compared,
-    count(*) FILTER (WHERE (f.open, f.high, f.low, f.close)
-                           IS DISTINCT FROM (h.open, h.high, h.low, h.close))
-                                                                       AS hours_prices_differ,
-    count(*) FILTER (WHERE f.volume < h.volume)                        AS hours_finer_volume_less,
-    count(*) FILTER (WHERE f.volume > h.volume)                        AS hours_finer_volume_more
-FROM fine f
-JOIN core.ohlcv h
-  ON h.asset_id = f.asset_id
- AND h.granularity_seconds = 3600
- AND h.ts_utc = f.hour_utc
-JOIN core.timeframes t ON t.granularity_seconds = f.granularity_seconds
-GROUP BY t.timeframe_code, t.granularity_seconds, year
-ORDER BY t.granularity_seconds, year;
+    r.finer_timeframe,
+    r.coarser_timeframe,
+    extract(year FROM r.bucket AT TIME ZONE 'UTC')::int                AS year,
+    count(*)                                                           AS buckets_compared,
+    count(*) FILTER (WHERE r.is_complete)                              AS buckets_complete,
+    count(*) FILTER (WHERE r.is_complete
+                       AND (r.open, r.high, r.low, r.close)
+                           IS DISTINCT FROM (c.open, c.high, c.low, c.close))
+                                                                       AS buckets_prices_differ,
+    count(*) FILTER (WHERE r.is_complete AND r.volume < c.volume)      AS buckets_finer_volume_less,
+    count(*) FILTER (WHERE r.is_complete AND r.volume > c.volume)      AS buckets_finer_volume_more
+FROM rolled_up r
+JOIN core.ohlcv c
+  ON c.asset_id = r.asset_id
+ AND c.granularity_seconds = r.coarser_seconds
+ AND c.ts_utc = r.bucket
+GROUP BY r.finer_timeframe, r.finer_seconds, r.coarser_timeframe, r.coarser_seconds, year
+ORDER BY r.finer_seconds, r.coarser_seconds, year;

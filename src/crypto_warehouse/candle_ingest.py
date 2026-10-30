@@ -54,7 +54,8 @@ USER_AGENT = "crypto-sql-warehouse (portfolio project)"
 
 # Re-fetch the trailing few hours on every run, at every timeframe: a
 # completed candle can be revised shortly after its bucket closes, and the
-# upsert leaves an unrevised row in core untouched.
+# upsert leaves an unrevised row in core untouched. At 1 day the start floors
+# to the midnight before, so the overlap is one whole candle.
 OVERLAP_HOURS = 3
 DEFAULT_BACKFILL_DAYS = 365
 REQUEST_PAUSE_SECONDS = 0.15  # public endpoint allows ~10 req/s; stay well under
@@ -68,8 +69,9 @@ REQUEST_PAUSE_SECONDS = 0.15  # public endpoint allows ~10 req/s; stay well unde
 # at 5 minutes a thin pair has many. Several hours missing in a row is what an
 # exchange outage looks like, and a fraction alone would not see it: six hours
 # is 2% of a 300-hour window. The gap line is a duration, so it means the same
-# outage at every timeframe. At 5 minutes and finer, three hours is more
-# buckets than 10 percent of a window, so there the fraction fires first. The
+# outage at every timeframe up to 1 hour, and at 1 day a single missing candle
+# reaches it. At 5 minutes and finer, three hours is more buckets than 10
+# percent of a window, so there the fraction fires first. The
 # MAX() watermark makes any hole permanent unless somebody notices it. Three
 # hours is a judgment line, not a measured bound.
 SHORT_WINDOW_TOLERANCE = 0.10
@@ -275,11 +277,13 @@ def find_resume_point(
 
     With no rows it is the current hour minus backfill_days, and with rows it
     is MAX(ts_utc) of the series minus the overlap, or the earlier of that and
-    the backfill point when extend_to_backfill_days is set.
+    the backfill point when extend_to_backfill_days is set. Each result is
+    floored to the series' own bucket.
     """
-    # Floored to the hour, which is a bucket boundary at every supported
-    # timeframe, so the window_start stored in the run record is one too and
-    # every timeframe of a backfill starts at the same instant.
+    # Floored to the hour, which is a bucket boundary at every timeframe up to
+    # 1 hour, so those timeframes of a backfill start at the same instant. The
+    # floor on each return puts a 1-day series on UTC midnight, so the
+    # window_start stored in the run record is a bucket at every timeframe.
     now_hour = floor_to_bucket(now_utc or datetime.now(UTC), HOURLY_GRANULARITY_SECONDS)
     backfill_floor = now_hour - timedelta(days=backfill_days)
 
@@ -294,13 +298,15 @@ def find_resume_point(
     )
     latest_timestamp = cursor.fetchone()[0]
     if latest_timestamp is None:
-        return backfill_floor
+        return floor_to_bucket(backfill_floor, granularity_seconds)
 
     resume_point = latest_timestamp.astimezone(UTC) - timedelta(hours=OVERLAP_HOURS)
     # extend_to_backfill_days is off unless the operator passes
     # --backfill-days. If it were always on, the default of 365 days would make
     # every ordinary incremental run re-fetch a full year.
-    return min(resume_point, backfill_floor) if extend_to_backfill_days else resume_point
+    if extend_to_backfill_days:
+        resume_point = min(resume_point, backfill_floor)
+    return floor_to_bucket(resume_point, granularity_seconds)
 
 
 def _mark_run_failed(connection, run_id: int) -> None:
