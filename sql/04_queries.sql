@@ -677,7 +677,9 @@ WHERE (core.ohlcv.open, core.ohlcv.high, core.ohlcv.low,
 -- 0.02 percent of buckets, the 1-hour and 1-day differ on 0.68 percent of days,
 -- and each of the first pair differs from each of the second in 1.25 to 1.86
 -- percent. Fourteen of the 15 complete daily bars that differ from Coinbase's
--- 1-day candles fall in August of that year. In 2025 the 1-hour and 1-day agree
+-- 1-day candles fall in August of that year; fetched again on 2026-10-30, the
+-- hourly and 1-day candles came back as stored, and 14 of the 15 differ only in
+-- the open or the close. In 2025 the 1-hour and 1-day agree
 -- on every complete day, and the 5-minute and 15-minute differ from them in 3.3
 -- to 4.9 percent of buckets. The smaller coins carry most of it (June 2023 at 5
 -- minutes against 1 hour: LINK 424 of 719 complete hours, BTC 2 of 720).

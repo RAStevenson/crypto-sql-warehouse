@@ -18,10 +18,10 @@ loader.
 
 ## Quick start
 
-Requires git, Python 3.11 or 3.12, and a PostgreSQL server to connect to, such
-as one from the postgresql.org installer or a Docker container. Verified on
-PostgreSQL 17.10 and Python 3.11. `run_setup.py` creates the database if it is
-missing, so the connecting user needs permission to create one, or the
+Requires git, Python 3.11 or later, and a PostgreSQL server to connect to,
+such as one from the postgresql.org installer or a Docker container. Verified
+on PostgreSQL 17.10 and Python 3.11. `run_setup.py` creates the database if it
+is missing, so the connecting user needs permission to create one, or the
 database is created first by hand. DBT installs with the other dependencies
 and needs no setup of its own, because the scripts hand it the connection from
 `.env`.
@@ -309,7 +309,11 @@ at least one 1-minute candle. Q21 compares the rollup with the 1-day series,
 and they match exactly on open, high, low, and close on 13,422 of the 13,437
 complete daily bars from 2020-01-02 to 2026-10-29. The other 15 are ADA, DOGE,
 and LINK bars, 14 of them in August 2024, and they differ by at most 0.69
-percent on any price. The cause is unknown.
+percent on any price. Fetching those days again on 2026-10-30 returned the
+stored values, hourly and 1-day alike, so the difference is in Coinbase's
+data. In 14 of the 15 it is confined to the open or the close, the prices of
+the first and last trades of the day, and in the other to the high and the
+close.
 
 **Incomplete days keep their row and lose their derived columns.** A day with
 fewer than 24 hourly candles appears in `marts.daily_ohlcv` with its candle
