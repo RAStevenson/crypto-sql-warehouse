@@ -19,7 +19,7 @@ WITH newest_raw AS (
     ORDER BY a.asset_id, ir.granularity_seconds, r.bucket_start, r.raw_id DESC
 )
 SELECT o.asset_id, o.granularity_seconds, o.ts_utc AS bucket_start,
-       'core row disagrees with the newest raw copy' AS reason
+       'core row disagrees with the newest raw copy; a load whose window covers the bucket promotes it' AS reason
 FROM {{ source('core', 'ohlcv') }} o
 JOIN newest_raw nr
   ON nr.asset_id = o.asset_id
