@@ -6,16 +6,15 @@ breaks one of its rules. A candle is the open, high, low, close, and volume
 for one interval of time. The warehouse keeps candles for six assets at up to
 four intervals, called timeframes, from 1 minute to 1 hour. The candles land
 in three schemas (named groups of tables), raw, core, and marts, described
-under How it works. The marts are the tables built for analysis. They are
-built and tested by dbt, a tool that runs SQL files against a database in
-dependency order. A CSV export writes stored candles, or the daily figures
-built from them, to a file.
+under the section "How it works". The marts are the tables built for
+analysis. They are built and tested by dbt, a tool that runs SQL files against
+a database in dependency order. A CSV export writes stored candles, or the
+daily figures built from them, to a file.
 
-It was built to learn how a warehouse is designed and kept correct, on market
-data already familiar from the author's own trading research. The CSV export
-makes quick calculations on stored prices practical without a fresh download
-from the exchange. The warehouse is published for anyone who wants hourly or
-finer crypto candles in a database or a CSV without writing a loader.
+The CSV export makes quick calculations on stored prices practical without a
+fresh download from the exchange. The warehouse is published for anyone who
+wants hourly or finer crypto candles in a database or a CSV without writing a
+loader.
 
 ## Quick start
 
@@ -23,9 +22,9 @@ Requires git, Python 3.11 or 3.12, and a PostgreSQL server to connect to,
 such as one from the postgresql.org installer or a Docker container. Verified
 on PostgreSQL 17.10 and Python 3.11. `run_setup.py` creates the database if
 it is missing, so the connecting user needs permission to create one, or the
-database is created first by hand. dbt installs with the other dependencies
-and needs no setup of its own, because the scripts hand it the connection
-from `.env`.
+database is created first by hand. DBT (data build tool) installs with the
+other dependencies and needs no setup of its own, because the scripts hand it
+the connection from `.env`.
 
 1. Clone the repository and enter it:
 
@@ -64,14 +63,15 @@ from `.env`.
    ```
 
 The first `run_ingest.py` run fetches every active product at every active
-timeframe. A product is a Coinbase trading pair such as BTC-USD. The six
-seeded products start out active, meaning a plain run loads them, and of the
-four timeframes only 1 hour does. The API caps a request at 300 candles, so a
-year of hourly candles is about 30 requests per product. The first run for
-all six took about 70 seconds on 2026-10-09, mart refresh included. Later
-runs resume from the last loaded candle of each product and timeframe, called
-the watermark, and need one request per product per day at 1 hour. The loader
-refreshes the marts when it finishes.
+timeframe. A product is a Coinbase trading pair such as BTC-USD. `run_setup.py`
+adds six products, all active, and four timeframes, of which only 1 hour is
+active. A run with no options therefore loads 1-hour candles for those six
+products. The API caps a request at 300 candles, so a year of hourly candles
+is about 30 requests per product. The first run for all six took about 70
+seconds on 2026-10-09, mart refresh included. Later runs resume from the last
+loaded candle of each product and timeframe, called the watermark, and need
+one request per product per day at 1 hour. The loader refreshes the marts
+when it finishes.
 
 To keep finer candles too, switch their timeframe on and the next run
 backfills it:
@@ -203,11 +203,11 @@ plain `pytest` needs no database and no network.
 
 ## Design decisions
 
-**A load run twice leaves the warehouse as one run would.** The loader writes
-core with an upsert, an insert that becomes an update when the row exists,
-keyed by asset, timeframe, and start time. The update is skipped when the
-values are unchanged, so replaying any window changes nothing unless the
-source changed. A dbt test holds the loader to this. It takes the rows the
+**The load is idempotent.** Running it twice leaves core as one run would. The
+loader writes core with an upsert, an insert that becomes an update when the
+row exists, keyed by asset, timeframe, and start time. The update is skipped
+when the values are unchanged, so replaying any window changes nothing unless
+the source changed. A dbt test holds the loader to this. It takes the rows the
 latest run updated and fails if any of them holds the same values an earlier
 run had already loaded. Each run also re-fetches the three hours before its
 watermark, in case Coinbase corrects a recent candle. On a daily run at 1
