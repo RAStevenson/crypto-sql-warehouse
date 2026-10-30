@@ -7,7 +7,7 @@ for one interval of time. The warehouse keeps candles for six assets at up to
 five intervals, called timeframes, from 1 minute to 1 day. The candles land in
 three schemas (named groups of tables), raw, core, and marts, described under
 the section "How it works". The marts are the tables built for analysis. They
-are built and tested by dbt, a tool that runs SQL files against a database in
+are built and tested by DBT, a tool that runs SQL files against a database in
 dependency order. A CSV export writes stored candles, or the daily figures
 built from them, to a file.
 
@@ -54,7 +54,7 @@ the connection from `.env`.
    copy .env.example .env
    ```
 
-5. Create the database and its three schemas, have dbt build the marts, load
+5. Create the database and its three schemas, have DBT build the marts, load
    a year of history, and refresh the marts:
 
    ```
@@ -97,9 +97,9 @@ Other entry points, with every argument listed under [Script
 arguments](#script-arguments) at the end:
 
 ```
-python scripts/run_verify.py                    # the dbt tests and the timezone check, nonzero exit on failure
+python scripts/run_verify.py                    # the DBT tests and the timezone check, nonzero exit on failure
 python scripts/run_dbt.py run                   # refresh the marts only
-python scripts/run_dbt.py docs generate         # dbt's dependency map and column docs, under dbt/target/
+python scripts/run_dbt.py docs generate         # DBT's dependency map and column docs, under dbt/target/
 python scripts/run_add_asset.py XRP-USD --name Ripple   # register and backfill a new asset
 python scripts/run_export.py prices --products BTC-USD --timeframe 15m --start 2024-01-01
 python scripts/run_export.py daily --start 2025-01-01   # daily metrics, every active asset
@@ -119,7 +119,7 @@ for a direct Tableau connection. No workbook is included in the repo.
 ## How it works
 
 Candles arrive from the Coinbase API, land in raw as they came, are promoted
-to core, and are rolled up into the marts, which dbt builds and tests.
+to core, and are rolled up into the marts, which DBT builds and tests.
 
 ```
 Coinbase Exchange API (public, no key)
@@ -143,7 +143,7 @@ Coinbase Exchange API (public, no key)
         |
         v  dbt run: REFRESH MATERIALIZED VIEW CONCURRENTLY, from the 1-hour series
 +-------------------+
-| marts             |  dbt models: daily rollups, returns, rolling volatility,
+| marts             |  DBT models: daily rollups, returns, rolling volatility,
 |  daily_ohlcv      |  drawdowns, pairwise correlations
 |  daily_metrics    |
 |  pairwise_correlations_90d  |
@@ -161,14 +161,14 @@ loader's own record is two tables in raw: `ingest_runs`, one row per product
 and timeframe per load with its status and row counts, and `fetch_windows`,
 one row per request with how many candles came back.
 
-The marts are a dbt project in `dbt/`. Each mart is one SELECT statement in
+The marts are a DBT project in `dbt/`. Each mart is one SELECT statement in
 its own file under `dbt/models/marts/`, and each names the tables it reads,
-so dbt knows to build `daily_ohlcv` before `daily_metrics`. All but one of
-the warehouse checks are dbt tests, either a column rule in a yml file, such
+so DBT knows to build `daily_ohlcv` before `daily_metrics`. All but one of
+the warehouse checks are DBT tests, either a column rule in a yml file, such
 as `not_null`, or a SELECT under `dbt/tests/` that returns the rows breaking
 a rule and passes when it returns nothing. `scripts/run_verify.py` runs them
-all and then the one check that is not a dbt test, and exits nonzero if
-anything fails. `scripts/run_dbt.py` passes any other dbt command through,
+all and then the one check that is not a DBT test, and exits nonzero if
+anything fails. `scripts/run_dbt.py` passes any other DBT command through,
 such as `docs generate`, which writes a dependency map with every column
 described under `dbt/target/`.
 
@@ -176,7 +176,7 @@ described under `dbt/target/`.
 author's machine. It has run at 12:10 UTC on 64 days from 2026-08-11 to
 2026-10-21. It was paused from 2026-10-06 to 2026-10-08, and five other days
 in that span had no run. The script loads, then runs `run_verify.py`, then
-dbt's freshness check, which warns when the newest candle is more than two
+DBT's freshness check, which warns when the newest candle is more than two
 days old and fails past four. All three append to one log, and the script
 exits with the first failure, so the task history shows it. A day the machine
 was off is made up in full by the next run, because every run resumes from
@@ -198,7 +198,7 @@ In a database of its own, the same job then runs the loader's own tests in
 loader's own functions from a stand-in for the Coinbase API and check what
 landed in raw, core, and `raw.fetch_windows`. They also check that a second
 load rewrites nothing, that the migrations upgrade an older warehouse without
-losing a candle, and that every dbt test passes on what the loader wrote.
+losing a candle, and that every DBT test passes on what the loader wrote.
 When `CRYPTO_WAREHOUSE_TEST_DATABASE_URL` is unset they are skipped, so a
 plain `pytest` needs no database and no network.
 
@@ -208,7 +208,7 @@ plain `pytest` needs no database and no network.
 loader writes core with an upsert, an insert that becomes an update when the
 row exists, keyed by asset, timeframe, and start time. The update is skipped
 when the values are unchanged, so replaying any window changes nothing unless
-the source changed. A dbt test holds the loader to this. It takes the rows the
+the source changed. A DBT test holds the loader to this. It takes the rows the
 latest run updated and fails if any of them holds the same values an earlier
 run had already loaded. Each run also re-fetches the three hours before its
 watermark, in case Coinbase corrects a recent candle. On a daily run at 1 hour
@@ -256,7 +256,7 @@ that no session setting can move. The regression check re-runs the daily
 rollup's defining query, read live from the catalog, once under
 America/Chicago and once under UTC, and fails if any row differs. It has to
 change the session timezone partway through, which a single SELECT cannot, so
-it is the one check that stays outside dbt, in `sql/05_verify.sql`.
+it is the one check that stays outside DBT, in `sql/05_verify.sql`.
 
 **Prices are exact from the API to the table.** Prices are stored as
 `numeric(20,8)` and volumes as `numeric(30,8)`. The API returns JSON numbers,
@@ -272,39 +272,44 @@ whether a missing minute was quiet or unrecorded. A 15-minute bar built from
 1-minute candles would treat every hole as quiet without saying so. The price
 of fetching separately is that the timeframes can disagree, and on Coinbase
 they do. Q21 in `sql/04_queries.sql` rolls each timeframe up to every coarser
-one it divides evenly and compares the result with the stored bars. It counts
-only complete buckets, those with every finer bar present. Over the data
-loaded back to 2020, prices differ in under 0.1 percent of those buckets
-outside 2023 to 2025. Comparing the pairs shows which series is the odd one in
-those years. In 2023 the 5-minute series differs from the 15-minute in 18.3
-percent of buckets and from the 1-hour in 18.9 percent. The 15-minute and
-1-hour differ from each other in 0.08 percent, so the 5-minute series is the
-odd one. In 2024 the 5-minute and 15-minute differ from each other in 0.02
-percent of buckets and from the 1-hour in 1.8 to 1.9 percent, which points at
-the 1-hour series. In 2025 those three timeframes all differ from one another,
-in 1.1 to 4.5 percent of buckets. The 1-minute series is off by default, so
-Q21 skips it until it is loaded. A one-off comparison on 2026-10-09 put the
-differences at a median of 0.015 percent on the open and at most 1.8 percent
-on any price. Fetching sample hours again that day returned exactly the stored
-values, so the disagreement is in Coinbase's data.
+one it divides evenly and compares the result with the stored candles, one
+coarser interval, or bucket, at a time. It counts only complete buckets, those
+with every finer candle present. Over the data loaded back to 2020, prices
+differ in under 0.1 percent of those buckets outside 2023 to 2025. Comparing
+the pairs shows which series disagree with the others. In 2023 the 5-minute
+series differs from the 15-minute in 18.3 percent of buckets and from the
+1-hour in 18.9 percent. The 15-minute, 1-hour, and 1-day series agree with one
+another in all but 0.08 percent, so the 5-minute series is the one that
+disagrees. In 2024 the series split in two. The 5-minute and 15-minute differ
+from each other in 0.02 percent of buckets, the 1-hour and 1-day differ on
+0.68 percent of days, and each of the first pair differs from each of the
+second in 1.25 to 1.86 percent. In 2025 the 1-hour and 1-day agree on every
+complete day, and the disagreement sits in the 5-minute and 15-minute, which
+differ from them in 3.3 to 4.9 percent of buckets. The warehouse holds no
+1-minute candles, so Q21 skips that timeframe until they are loaded. A one-off
+comparison on 2026-10-09 put the differences at a median of 0.015 percent on
+the open and at most 1.8 percent on any price. Fetching sample hours again
+that day returned exactly the stored values, so the disagreement is in
+Coinbase's data.
 
 **Daily bars are rolled up from the hourly series and compared with Coinbase's
-1-day candles.** Coinbase's 1-day candle cannot show a short day. On
-2026-05-08 Coinbase has 19 hourly candles for each of the six products, and
-its 1-day candle equals the rollup of those 19 and looks like any other day.
-The rollup counts its hours and marks a day with fewer than 24 as incomplete,
-so the marts use it and the 1-day series is stored for comparison. Building a
-bar from finer ones can hide a missing candle, which is why each timeframe is
-fetched on its own. Daily bars are the exception because missing hours are
-rare and the count shows them. As of 2026-10-30, under 0.1 percent of the
-hours across the 13,470 daily bars are missing. The same count on finer
+1-day candles.** Coinbase's 1-day candle cannot show that hours are missing
+from a day. On 2026-05-08 Coinbase has 19 hourly candles for each of the six
+products, and its 1-day candle equals the rollup of those 19 and looks like
+any other day. The rollup counts its hours and marks a day with fewer than 24
+as incomplete, so the marts use it and the 1-day series is stored for
+comparison. A bar built here from finer candles treats a missing candle as a
+quiet one unless the candles are counted, which is why the other timeframes
+are fetched on their own. Daily bars are the exception because missing hours
+are rare and the count shows them. As of 2026-10-30, under 0.1 percent of the
+hours across the 13,476 daily bars are missing. The same count on finer
 candles would mark too many bars incomplete. In the week of 2026-10-01, about
 a fifth of DOGE's 5-minute bars were missing at least one 1-minute candle. Q21
 compares the rollup with the 1-day series, and they match exactly on open,
-high, low, and close on 13,416 of the 13,431 complete daily bars from
-2020-01-02 to 2026-10-28. The other 15 are ADA, DOGE, and LINK bars, 14 of
-them in August 2024, when the comparison above points at the 1-hour series,
-and they differ by at most 0.69 percent on any price.
+high, low, and close on 13,422 of the 13,437 complete daily bars from
+2020-01-02 to 2026-10-29. The other 15 are ADA, DOGE, and LINK bars, 14 of
+them in August 2024, and they differ by at most 0.69 percent on any price. The
+cause is unknown.
 
 **Incomplete days keep their row and lose their derived columns.** A day with
 fewer than 24 hourly candles appears in `marts.daily_ohlcv` with its candle
@@ -322,9 +327,9 @@ first for BTC was 0.2076 against 0.4043 for its first full window.
 **Three marts are materialized views, refreshed without blocking a reader.**
 Three of the marts are materialized views, queries whose results PostgreSQL
 stores and recomputes on refresh. Each has a unique index so the refresh can
-run `CONCURRENTLY` and a connected Tableau session never blocks. dbt's
+run `CONCURRENTLY` and a connected Tableau session never blocks. DBT's
 PostgreSQL adapter refreshes without `CONCURRENTLY`, so the project overrides
-that one statement in `dbt/macros/`. dbt refreshes the three in dependency
+that one statement in `dbt/macros/`. DBT refreshes the three in dependency
 order, each in its own transaction, so a session can briefly see a refreshed
 `daily_ohlcv` beside a `daily_metrics` from the refresh before.
 
@@ -354,23 +359,23 @@ second exchange, so a suspicious print has something to be checked against.
 ## Layout
 
 ```
-scripts/run_setup.py          create the database, apply the DDL, and have dbt build the marts
+scripts/run_setup.py          create the database, apply the DDL, and have DBT build the marts
 scripts/run_ingest.py         incremental loader, safe to rerun; refreshes the marts
 scripts/run_add_asset.py      validate, register, and backfill a new asset
 scripts/run_export.py         write candles or daily metrics to a CSV file
 scripts/scheduled_ingest.cmd  the Task Scheduler entry point, logs to logs/
-scripts/run_verify.py         the dbt tests, then the timezone check; nonzero exit on failure
-scripts/run_dbt.py            any dbt command, with the connection set from .env
+scripts/run_verify.py         the DBT tests, then the timezone check; nonzero exit on failure
+scripts/run_dbt.py            any DBT command, with the connection set from .env
 src/crypto_warehouse/         the package the scripts import
-dbt/dbt_project.yml           the dbt project; profiles.yml beside it reads the connection from .env
-dbt/models/marts/             the marts, one dbt model each, with the design rationale in comments
+dbt/dbt_project.yml           the DBT project; profiles.yml beside it reads the connection from .env
+dbt/models/marts/             the marts, one DBT model each, with the design rationale in comments
 dbt/models/marts/marts.yml    every mart column described, with its tests
-dbt/models/sources.yml        the raw and core tables dbt reads, every column described, with their tests and the freshness rule
+dbt/models/sources.yml        the raw and core tables DBT reads, every column described, with their tests and the freshness rule
 dbt/tests/                    the warehouse checks, one SELECT each, returning the rows that break a rule
 dbt/macros/                   the concurrent-refresh override
 sql/01_schema.sql             schema DDL with design rationale in comments
 sql/04_queries.sql            annotated analytical queries, each standalone
-sql/05_verify.sql             the timezone check, the one assertion that is not a dbt test
+sql/05_verify.sql             the timezone check, the one assertion that is not a DBT test
 sql/migrations/               in-place upgrades for a warehouse built earlier
 tests/                        the test suite; all but test_against_postgres.py need no database
 tests/fixtures/               a small loaded warehouse for the GitHub Actions job, and an older schema for the migration test
@@ -384,7 +389,7 @@ Every argument of every script, mirroring `--help`:
 
 - `run_setup.py --reset` drops the raw, core, and marts schemas before
   applying the DDL. It deletes all stored data.
-- `run_setup.py --rebuild-marts` drops the marts schema and has dbt build it
+- `run_setup.py --rebuild-marts` drops the marts schema and has DBT build it
   again from `dbt/models/marts/`. Use it to apply a changed mart definition to
   a warehouse that already holds data. Raw and core keep their data. It cannot
   be combined with `--reset`.
@@ -443,9 +448,9 @@ Every argument of every script, mirroring `--help`:
   (default: a name built from what the export holds, under `exports/`, which
   git ignores).
 - `run_dbt.py DBT_COMMAND` passes everything after the script's own options
-  to dbt as given, with the connection set from `DATABASE_URL`, so
+  to DBT as given, with the connection set from `DATABASE_URL`, so
   `run_dbt.py test`, `run_dbt.py run --select daily_ohlcv`, and
-  `run_dbt.py docs generate` all work. It is for the dbt commands the other
+  `run_dbt.py docs generate` all work. It is for the DBT commands the other
   scripts do not run for you.
 - Every Python script accepts `--verbose` for debug-level logging, and
   `run_verify.py` takes no other arguments.

@@ -669,16 +669,18 @@ WHERE (core.ohlcv.open, core.ohlcv.high, core.ohlcv.low,
 -- the finer the series, the fewer of its buckets are complete.
 --
 -- Measured on the load back to 2020, prices differ in under 0.1 percent of
--- complete buckets outside 2023 to 2025. Comparing the pairs shows which
--- series is the odd one. In 2023 the 5-minute series differs from the 15-minute
--- in 18.3 percent of buckets and from the 1-hour in 18.9 percent, while those
--- two differ from each other in 0.08 percent. In 2024 the 5-minute and 15-minute
--- differ from each other in 0.02 percent and from the 1-hour in 1.8 to 1.9
--- percent, which points at the 1-hour series. Fourteen of the 15 complete daily
--- bars that differ from Coinbase's 1-day candles fall in August of that year.
--- In 2025 those three timeframes all differ from one another, in 1.1 to 4.5
--- percent of buckets. The smaller coins carry most of it (June 2023 at 5 minutes
--- against 1 hour: LINK 425 of 720 hours, BTC 2).
+-- complete buckets outside 2023 to 2025. Comparing the pairs shows which series
+-- disagree with the others. In 2023 the 5-minute series differs from the
+-- 15-minute in 18.3 percent of buckets and from the 1-hour in 18.9 percent, and
+-- the 15-minute, 1-hour, and 1-day series agree in all but 0.08 percent. In 2024
+-- the series split in two. The 5-minute and 15-minute differ from each other in
+-- 0.02 percent of buckets, the 1-hour and 1-day differ on 0.68 percent of days,
+-- and each of the first pair differs from each of the second in 1.25 to 1.86
+-- percent. Fourteen of the 15 complete daily bars that differ from Coinbase's
+-- 1-day candles fall in August of that year. In 2025 the 1-hour and 1-day agree
+-- on every complete day, and the 5-minute and 15-minute differ from them in 3.3
+-- to 4.9 percent of buckets. The smaller coins carry most of it (June 2023 at 5
+-- minutes against 1 hour: LINK 425 of 720 hours, BTC 2).
 --
 -- A one-off comparison on 2026-10-09 put the size of the differences at a
 -- median of 0.015 percent on the open and at most 1.8 percent on any price.
