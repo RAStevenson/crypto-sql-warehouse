@@ -176,11 +176,11 @@ described under `dbt/target/`.
 author's machine. It has run at 12:10 UTC on 64 days from 2026-08-11 to
 2026-10-21. It was paused from 2026-10-06 to 2026-10-08, and five other days
 in that span had no run. The script loads, then runs `run_verify.py`, then
-DBT's freshness check, which warns when the newest candle is more than two
-days old and fails past four. All three append to one log, and the script
+DBT's freshness check, which warns when the newest 1-hour candle is more than
+two days old and fails past four. All three append to one log, and the script
 exits with the first failure, so the task history shows it. A day the machine
-was off is made up in full by the next run, because every run resumes from
-the watermark.
+was off is made up in full by the next run, because every run resumes from the
+watermark.
 
 Every push to main runs two GitHub Actions jobs. One runs the linter, the
 type checker, and the test suite with no database. The other installs

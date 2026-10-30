@@ -133,6 +133,31 @@ def test_find_resume_point_floor_does_not_skip_a_stale_watermark():
     assert fetch_start == latest_timestamp - timedelta(hours=OVERLAP_HOURS)
 
 
+def day_series_resume_point(latest_timestamp, *, extend_to_backfill_days=False):
+    cursor = StubCursor([(latest_timestamp,)])
+    return find_resume_point(
+        cursor,
+        "BTC-USD",
+        86400,
+        30,
+        extend_to_backfill_days=extend_to_backfill_days,
+        now_utc=NOW,
+    )
+
+
+def test_find_resume_point_puts_a_day_series_on_utc_midnight():
+    midnight_30_days_back = (NOW_HOUR - timedelta(days=30)).replace(hour=0)
+    latest_timestamp = datetime(2026, 8, 2, tzinfo=UTC)
+
+    assert day_series_resume_point(None) == midnight_30_days_back
+    # Three hours before the newest candle is 21:00 the day before it.
+    assert day_series_resume_point(latest_timestamp) == latest_timestamp - timedelta(days=1)
+    assert (
+        day_series_resume_point(latest_timestamp, extend_to_backfill_days=True)
+        == midnight_30_days_back
+    )
+
+
 def test_find_resume_point_queries_the_named_series():
     cursor = StubCursor([(None,)])
 
@@ -378,6 +403,20 @@ def test_fetch_into_raw_does_not_count_a_window_missing_two_isolated_hours_of_30
     assert short_windows == 0
     assert rows_fetched == 298
     assert [record for record in caplog.records if record.levelname == "WARNING"] == []
+
+
+def test_fetch_into_raw_flags_a_single_missing_day_at_one_day(monkeypatch, raw_writes):
+    # One day of 30 is under the three the 10 percent rule needs, so only the
+    # gap line can flag this window, and one candle is already past three hours.
+    one_day = timedelta(days=1)
+    candles = [flat_candle(WINDOW_START + index * one_day) for index in range(30) if index != 10]
+    serve_candles(monkeypatch, candles)
+
+    _, short_windows = candle_ingest._fetch_into_raw(
+        FakeConnection(), None, "BTC-USD", 86400, 42, WINDOW_START, WINDOW_START + 30 * one_day
+    )
+
+    assert short_windows == 1
 
 
 @pytest.mark.parametrize(("missing_in_a_row", "expected_short"), [(11, 0), (12, 1)])
