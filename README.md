@@ -16,7 +16,7 @@ fresh download from the exchange. The warehouse is published for anyone who
 wants hourly or finer crypto candles in a database or a CSV without writing a
 loader.
 
-## Quick start
+## Setup and run
 
 Requires git, Python 3.11 or later, and a PostgreSQL server to connect to,
 such as one from the postgresql.org installer or a Docker container. Verified
@@ -335,7 +335,7 @@ routine cleanup for nothing. Loading 1-minute candles too would add about 19
 million rows, and a year of them is about 1,750 requests per product, so the
 1-minute timeframe is supported but off until someone needs it.
 
-## Limitations and what comes next
+## Limitations
 
 Every price comes from one exchange in one quote currency, so there is no
 second exchange to check a suspicious print against. The correlation mart is
@@ -350,7 +350,7 @@ Next would be a data-quality report built from `raw.ingest_runs`,
 short API response but nothing summarizes them. After that would come a
 second exchange, so a suspicious print has something to be checked against.
 
-## Layout
+## Repo layout
 
 ```
 scripts/run_setup.py          create the database, apply the DDL, and have DBT build the marts
