@@ -55,7 +55,7 @@ def test_connection_environment_defaults_the_port_and_decodes_the_password(monke
 
 def test_connection_environment_takes_pguser_before_the_os_user(monkeypatch):
     monkeypatch.setenv("PGUSER", "loader")
-    monkeypatch.setattr(dbt_project.getpass, "getuser", lambda: "robert")
+    monkeypatch.setattr(dbt_project.getpass, "getuser", lambda: "analyst")
 
     environment = connection_environment("postgresql://localhost/crypto")
 
@@ -84,11 +84,11 @@ def test_connection_environment_passes_sslmode_on_to_dbt():
 
 def test_connection_environment_falls_back_to_the_os_user_like_psycopg2(monkeypatch):
     monkeypatch.delenv("PGUSER", raising=False)
-    monkeypatch.setattr(dbt_project.getpass, "getuser", lambda: "robert")
+    monkeypatch.setattr(dbt_project.getpass, "getuser", lambda: "analyst")
 
     environment = connection_environment("postgresql://localhost/crypto")
 
-    assert environment[f"{ENVIRONMENT_PREFIX}USER"] == "robert"
+    assert environment[f"{ENVIRONMENT_PREFIX}USER"] == "analyst"
     assert environment[f"{ENVIRONMENT_PREFIX}PASSWORD"] == ""
 
 
