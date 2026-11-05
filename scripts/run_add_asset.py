@@ -100,8 +100,7 @@ def main() -> None:
         except (requests.RequestException, RuntimeError, CandlePayloadError):
             logger.error("%s: the Coinbase probe failed", product_code, exc_info=True)
             logger.error(
-                "%s was not registered and nothing was written; check the product code "
-                "and rerun",
+                "%s was not registered and nothing was written; check the product code and rerun",
                 product_code,
             )
             sys.exit(2)

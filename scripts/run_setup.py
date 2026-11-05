@@ -71,9 +71,7 @@ def main() -> None:
 
     configure_logging(args.verbose)
     try:
-        sys.exit(
-            run_setup(reset=args.reset, marts_only=args.rebuild_marts, migrate=args.migrate)
-        )
+        sys.exit(run_setup(reset=args.reset, marts_only=args.rebuild_marts, migrate=args.migrate))
     except (OperatorError, FileNotFoundError) as error:
         logger.error("%s", error)
         sys.exit(2)

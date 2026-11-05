@@ -61,7 +61,9 @@ def fake_dbt(monkeypatch, connection, exit_code=0):
 def run_marts_only(monkeypatch, *, database=True, schema=True, dbt_exit_code=0):
     connection = FakeConnection()
     fake_dbt(monkeypatch, connection, dbt_exit_code)
-    monkeypatch.setattr(database_setup.database_connection, "load_database_url", lambda: "postgresql://x/y")
+    monkeypatch.setattr(
+        database_setup.database_connection, "load_database_url", lambda: "postgresql://x/y"
+    )
     monkeypatch.setattr(
         database_setup.database_connection,
         "connect",
@@ -122,7 +124,9 @@ def test_marts_only_refuses_when_the_database_is_missing_and_does_not_create_it(
 def run_migrate(monkeypatch, *, database=True, schema=True, pending=None):
     connection = FakeConnection()
     fake_dbt(monkeypatch, connection)
-    monkeypatch.setattr(database_setup.database_connection, "load_database_url", lambda: "postgresql://x/y")
+    monkeypatch.setattr(
+        database_setup.database_connection, "load_database_url", lambda: "postgresql://x/y"
+    )
     monkeypatch.setattr(
         database_setup.database_connection,
         "connect",

@@ -447,8 +447,11 @@ def test_fetch_into_raw_logs_empty_windows_before_the_first_candle_once(
 ):
     # A deep backfill of a product listed later: the first two windows come
     # back empty, the third holds the first candles.
-    answers = [[], [], [flat_candle(WINDOW_START + 600 * ONE_HOUR + index * ONE_HOUR)
-                        for index in range(300)]]
+    answers = [
+        [],
+        [],
+        [flat_candle(WINDOW_START + 600 * ONE_HOUR + index * ONE_HOUR) for index in range(300)],
+    ]
 
     def fake_fetch_window(session, product_code, window_start, window_end, granularity_seconds):
         return answers.pop(0)

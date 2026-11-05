@@ -48,13 +48,9 @@ def sql_path(name: str) -> Path:
     path = SQL_DIR / name
     if not path.is_file():
         available = (
-            sorted(sql_file.name for sql_file in SQL_DIR.glob("*.sql"))
-            if SQL_DIR.is_dir()
-            else []
+            sorted(sql_file.name for sql_file in SQL_DIR.glob("*.sql")) if SQL_DIR.is_dir() else []
         )
-        raise FileNotFoundError(
-            f"{path} not found. sql/ currently holds: {available or 'nothing'}"
-        )
+        raise FileNotFoundError(f"{path} not found. sql/ currently holds: {available or 'nothing'}")
     return path
 
 

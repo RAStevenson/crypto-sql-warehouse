@@ -206,9 +206,7 @@ def fetch_window(
                 # Without it every price would round-trip through a binary
                 # double before psycopg2 ever saw it, and 9999999999.99999999
                 # would land in the warehouse as 10000000000.0.
-                return parse_candles(
-                    response.json(parse_float=decimal.Decimal), product_code
-                )
+                return parse_candles(response.json(parse_float=decimal.Decimal), product_code)
 
             last_error = requests.HTTPError(
                 f"HTTP {response.status_code} from {url}", response=response

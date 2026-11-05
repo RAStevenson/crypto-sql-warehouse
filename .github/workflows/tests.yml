@@ -24,6 +24,7 @@ jobs:
       # and the rest of the suite needs no database and no network. Of the
       # tests that run here, the one that runs dbt only parses the project.
       - run: ruff check src scripts tests
+      - run: ruff format --check src scripts tests
       - run: pyright
       - run: python -m pytest tests -q
 

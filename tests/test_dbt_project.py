@@ -150,7 +150,8 @@ def test_the_tableau_extract_is_a_plain_view():
 def test_the_models_read_sources_and_refs_never_bare_table_names():
     for path in sorted(MODELS_DIR.glob("*.sql")):
         body = "\n".join(
-            line for line in path.read_text(encoding="utf-8").splitlines()
+            line
+            for line in path.read_text(encoding="utf-8").splitlines()
             if not line.lstrip().startswith("--")
         )
         assert not re.search(r"\b(core|raw|marts)\.\w+", body), path.name

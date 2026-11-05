@@ -105,14 +105,16 @@ def main() -> None:
     backfill_days = args.backfill_days if args.backfill_days is not None else DEFAULT_BACKFILL_DAYS
 
     try:
-        sys.exit(run_ingest(
-            products=args.products,
-            timeframes=args.timeframes,
-            backfill_days=backfill_days,
-            extend_to_backfill_days=args.backfill_days is not None,
-            refresh=not args.no_refresh_marts,
-            recheck=args.recheck_gaps,
-        ))
+        sys.exit(
+            run_ingest(
+                products=args.products,
+                timeframes=args.timeframes,
+                backfill_days=backfill_days,
+                extend_to_backfill_days=args.backfill_days is not None,
+                refresh=not args.no_refresh_marts,
+                recheck=args.recheck_gaps,
+            )
+        )
     except (OperatorError, FileNotFoundError) as error:
         logger.error("%s", error)
         sys.exit(2)
