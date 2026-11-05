@@ -1,20 +1,15 @@
 # crypto-sql-warehouse
 
 This is a PostgreSQL warehouse of crypto market data, loaded daily from the
-public Coinbase Exchange API. A set of checks fails when the loaded data
-breaks one of its rules. A candle is the open, high, low, close, and volume
-for one interval of time. The warehouse keeps candles for six assets at up to
-five intervals, called timeframes, from 1 minute to 1 day. The candles land in
-three schemas (named groups of tables), raw, core, and marts, described under
-the section "How it works". The marts are the tables built for analysis. They
-are built and tested by DBT (data build tool), which runs SQL files against a
-database in dependency order. A CSV export writes stored candles, or the daily
-figures built from them, to a file.
+public Coinbase Exchange API. A candle is the open, high, low, close, and
+volume for one interval of time. The warehouse keeps candles for six assets at
+up to five intervals, called timeframes, from 1 minute to 1 day.
 
-The CSV export makes quick calculations on stored prices practical without a
-fresh download from the exchange. The warehouse is published for anyone who
-wants hourly or finer crypto candles in a database or a CSV without writing a
-loader.
+Candles land in three schemas (named groups of tables): raw as they arrived,
+core deduplicated and checked, and marts for analysis. DBT (data build tool)
+builds the marts and tests the loaded data against stated rules. A CSV export
+writes stored candles or daily figures to a file. The warehouse is for anyone
+who wants hourly or finer crypto candles without writing a loader.
 
 ## Setup and run
 
